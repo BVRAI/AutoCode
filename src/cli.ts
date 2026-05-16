@@ -4,7 +4,10 @@ import { Command } from 'commander';
 import { ConsoleRenderer } from './repl/ConsoleRenderer.js';
 import { TerminalMode } from './repl/TerminalMode.js';
 import { StubAgent } from './agent/StubAgent.js';
+import { LiveAgent } from './agent/LiveAgent.js';
 import { newSessionId, type SessionContext } from './session/SessionContext.js';
+import { TranscriptStore } from './session/TranscriptStore.js';
+import { AuthResolver } from './auth/AuthResolver.js';
 import { dataDir, projectRootDefault, sessionsDir } from './util/paths.js';
 import { join } from 'node:path';
 
@@ -32,9 +35,21 @@ program
     };
 
     const renderer = new ConsoleRenderer();
-    const agent = new StubAgent(renderer);
+    const store = new TranscriptStore(ctx);
+    store.appendTranscript({ role: 'system', text: `session started for ${root}` });
+
+    const auth = new AuthResolver().resolve(ctx.model.provider);
+    const agent =
+      auth.kind === 'missing'
+        ? (renderer.warn(
+            `no credentials for ${ctx.model.provider} — set ANTHROPIC_API_KEY or AUTOMAX_PROXY_TOKEN. Running in stub mode.`,
+          ),
+          new StubAgent(renderer, store))
+        : new LiveAgent(renderer, store);
+
     const repl = new TerminalMode(ctx, renderer, agent);
     const code = await repl.run();
+    store.appendTranscript({ role: 'system', text: 'session ended' });
     process.exit(code);
   });
 
