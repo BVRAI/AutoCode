@@ -1,0 +1,56 @@
+{
+  "name": "@automax/autocode",
+  "version": "0.1.0-dev",
+  "description": "Terminal-resident agentic coding CLI. Open source. Bundled by Automax.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "autocode": "./dist/cli.js"
+  },
+  "main": "./dist/cli.js",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/cli.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --ext .ts",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "picocolors": "^1.1.1",
+    "undici": "^7.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "eslint": "^9.18.0",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.20.0",
+    "vitest": "^3.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/automax/autocode.git"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "cli",
+    "coding",
+    "claude",
+    "openai",
+    "terminal"
+  ]
+}
