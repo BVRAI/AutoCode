@@ -20,10 +20,24 @@ autocode
 
 ## Auth
 
-`autocode` runs in one of two modes:
+`autocode` runs in one of two modes (auto-detected):
 
-- **Standalone (BYOK)** — set `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY` / `GOOGLE_API_KEY` / `XAI_API_KEY`) in your environment, or run `autocode auth` to write `~/.autocode/config.json`.
-- **Automax-managed** — if `AUTOMAX_PROXY_TOKEN` is set (Automax sets this when it launches `autocode` for you), traffic routes through `https://automax-proxy.fly.dev` and your Firebase identity authenticates the call. No keys needed.
+- **Standalone (BYOK)** — set one of `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `OPENAI_API_KEY`, or `OPENROUTER_API_KEY` in your environment (or in a `.env` file in the cwd), or write it to `~/.autocode/config.json`.
+- **Automax-managed** — if `AUTOMAX_PROXY_TOKEN` is set (Automax sets this when it launches `autocode` for you), traffic routes through `https://automax-proxy.fly.dev` and your Firebase identity authenticates the call. No keys needed. The proxy URL can be overridden with `AUTOMAX_PROXY_URL` (intended for self-hosted forks; the default URL is Automax-specific and unavailable to non-Automax subscribers).
+
+A `.env` file in the directory you launch `autocode` from is loaded on startup. Existing env vars always win, so you can override a `.env` value by exporting it explicitly.
+
+## Providers + defaults
+
+| `--provider` | Default model | Env var (BYOK) |
+| --- | --- | --- |
+| `anthropic` (default) | `claude-opus-4-7` | `ANTHROPIC_API_KEY` |
+| `xai` | `grok-code-fast-1` | `XAI_API_KEY` |
+| `openai` | `gpt-5.1` | `OPENAI_API_KEY` |
+| `openrouter` | `anthropic/claude-opus-4-7` | `OPENROUTER_API_KEY` |
+| `google` | _(deferred — different API shape)_ | _(n/a)_ |
+
+Override the model with `--model <name>` or `/model <provider> <name>` inside the REPL.
 
 ## Local commands
 

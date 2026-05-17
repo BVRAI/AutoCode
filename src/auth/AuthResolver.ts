@@ -5,7 +5,7 @@ export type AuthMode =
   | { kind: 'byok'; apiKey: string }
   | { kind: 'missing'; provider: string };
 
-const AUTOMAX_PROXY_BASE = 'https://automax-proxy.fly.dev';
+const DEFAULT_AUTOMAX_PROXY_URL = 'https://automax-proxy.fly.dev';
 
 export class AuthResolver {
   constructor(private readonly config = new ConfigStore()) {}
@@ -13,10 +13,11 @@ export class AuthResolver {
   resolve(provider: string): AuthMode {
     const proxyToken = process.env.AUTOMAX_PROXY_TOKEN;
     if (proxyToken && proxyToken.length > 0) {
+      const base = process.env.AUTOMAX_PROXY_URL ?? DEFAULT_AUTOMAX_PROXY_URL;
       return {
         kind: 'automax',
         token: proxyToken,
-        baseOverride: `${AUTOMAX_PROXY_BASE}/v1/${provider}`,
+        baseOverride: `${base.replace(/\/$/, '')}/v1/${provider}`,
       };
     }
     const key = this.config.getApiKey(provider as 'anthropic');
