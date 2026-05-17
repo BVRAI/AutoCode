@@ -65,7 +65,7 @@ export class AgentLoop {
       const textParts = response.content.filter((b) => b.type === 'text');
       for (const t of textParts) {
         if (t.type === 'text' && t.text.trim().length > 0) {
-          this.deps.renderer.info(t.text);
+          this.deps.renderer.assistant(t.text);
           this.deps.store.appendTranscript({ role: 'assistant', text: t.text });
         }
       }

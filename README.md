@@ -15,8 +15,24 @@ There are already excellent agentic coding CLIs — Claude Code, Codex CLI, Gemi
 
 ```sh
 npm i -g @automax/autocode
-autocode
+autocode      # or: acv1
 ```
+
+Both `autocode` and `acv1` are installed. They run the same binary; `acv1` (short for "AutoCode v1") is the short-and-pinned form so future major versions can ship alongside as `acv2`, `acv3`, etc.
+
+## Install from source (dev)
+
+```sh
+git clone https://github.com/gregpalin/autocode.git
+cd autocode
+npm install
+npm run build
+npm link        # adds `autocode` and `acv1` to your PATH
+cd ~            # or any other project
+acv1            # launches the REPL against the current directory
+```
+
+To uninstall later: `npm unlink -g @automax/autocode`.
 
 ## Auth
 

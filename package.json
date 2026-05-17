@@ -5,7 +5,8 @@
   "license": "MIT",
   "type": "module",
   "bin": {
-    "autocode": "./dist/cli.js"
+    "autocode": "./dist/cli.js",
+    "acv1": "./dist/cli.js"
   },
   "main": "./dist/cli.js",
   "files": [

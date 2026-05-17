@@ -16,11 +16,26 @@ export class ConsoleRenderer {
   }
 
   prompt(): string {
-    return pc.cyan('autocode> ');
+    return pc.cyan('=> ');
   }
 
   info(text: string): void {
     process.stdout.write(text + '\n');
+  }
+
+  assistant(text: string): void {
+    const lines = text.split(/\r?\n/);
+    let first = true;
+    for (const line of lines) {
+      if (first) {
+        if (line.trim().length === 0) continue;
+        process.stdout.write(`${pc.magenta('ac:')} ${line}\n`);
+        first = false;
+      } else {
+        process.stdout.write(`    ${line}\n`);
+      }
+    }
+    process.stdout.write('\n');
   }
 
   dim(text: string): void {
