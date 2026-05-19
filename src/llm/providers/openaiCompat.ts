@@ -7,8 +7,10 @@ import type {
   CompletionResponse,
   ContentBlock,
   Message,
+  StreamEvent,
   ToolUseBlock,
 } from '../types.js';
+import { parseSseStream } from '../sse.js';
 
 export interface OpenAiToolCall {
   id: string;
@@ -168,4 +170,103 @@ function normalizeStopReason(raw: string | null): CompletionResponse['stopReason
     default:
       return 'end_turn';
   }
+}
+
+// Stream OpenAI-compatible chat-completions SSE. Each chunk's delta may contain
+// either text content or partial tool_call entries (function name + arguments
+// arrive incrementally; arguments is a JSON string built up across chunks).
+export async function* streamOpenAiCompat(
+  res: Response,
+  model: string,
+): AsyncIterable<StreamEvent> {
+  // Accumulators for the final message_stop event.
+  const finalContent: ContentBlock[] = [];
+  let textBuf = '';
+  let stopReason: CompletionResponse['stopReason'] = 'end_turn';
+  const usage: CompletionResponse['usage'] = { inputTokens: 0, outputTokens: 0 };
+
+  // Track in-flight tool calls by index (OpenAI numbers them).
+  type Pending = { id: string; name: string; args: string; emittedStart: boolean };
+  const pending = new Map<number, Pending>();
+
+  for await (const evt of parseSseStream(res.body)) {
+    if (evt.data === '[DONE]') break;
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(evt.data) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    const choices = parsed.choices as Array<{
+      index?: number;
+      finish_reason?: string | null;
+      delta?: {
+        content?: string | null;
+        tool_calls?: Array<{
+          index?: number;
+          id?: string;
+          function?: { name?: string; arguments?: string };
+        }>;
+      };
+    }> | undefined;
+    if (choices && choices.length > 0) {
+      const choice = choices[0]!;
+      const delta = choice.delta;
+      if (delta?.content && delta.content.length > 0) {
+        textBuf += delta.content;
+        yield { type: 'text_delta', text: delta.content };
+      }
+      if (delta?.tool_calls) {
+        for (const tc of delta.tool_calls) {
+          const idx = tc.index ?? 0;
+          let p = pending.get(idx);
+          if (!p) {
+            p = { id: tc.id ?? `call_${idx}`, name: tc.function?.name ?? '', args: '', emittedStart: false };
+            pending.set(idx, p);
+          }
+          if (!p.emittedStart && p.name.length > 0) {
+            yield { type: 'tool_use_start', id: p.id, name: p.name };
+            p.emittedStart = true;
+          } else if (tc.function?.name && p.name.length === 0) {
+            p.name = tc.function.name;
+            yield { type: 'tool_use_start', id: p.id, name: p.name };
+            p.emittedStart = true;
+          }
+          if (tc.function?.arguments) {
+            p.args += tc.function.arguments;
+            yield { type: 'tool_use_delta', argsJsonChunk: tc.function.arguments };
+          }
+        }
+      }
+      if (choice.finish_reason) {
+        stopReason = normalizeStopReason(choice.finish_reason);
+      }
+    }
+    const u = parsed.usage as { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } } | undefined;
+    if (u) {
+      if (u.prompt_tokens !== undefined) usage.inputTokens = u.prompt_tokens;
+      if (u.completion_tokens !== undefined) usage.outputTokens = u.completion_tokens;
+      if (u.prompt_tokens_details?.cached_tokens !== undefined) {
+        usage.cacheReadTokens = u.prompt_tokens_details.cached_tokens;
+      }
+    }
+  }
+
+  // Finalize tool_uses into content blocks.
+  if (textBuf.length > 0) finalContent.push({ type: 'text', text: textBuf });
+  for (const [, p] of pending) {
+    let input: Record<string, unknown> = {};
+    try {
+      input = p.args.length > 0 ? (JSON.parse(p.args) as Record<string, unknown>) : {};
+    } catch {
+      input = { _raw: p.args };
+    }
+    finalContent.push({ type: 'tool_use', id: p.id, name: p.name, input });
+    yield { type: 'tool_use_stop' };
+  }
+
+  yield {
+    type: 'message_stop',
+    response: { model, stopReason, content: finalContent, usage },
+  };
 }

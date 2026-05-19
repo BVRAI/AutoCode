@@ -5,7 +5,13 @@ export type LocalCommandName =
   | 'model'
   | 'stop'
   | 'exit'
-  | 'init';
+  | 'init'
+  | 'clear'
+  | 'compact'
+  | 'cost'
+  | 'diff'
+  | 'auth'
+  | 'plan';
 
 export interface LocalCommand {
   kind: 'local';
@@ -32,6 +38,12 @@ const KNOWN: ReadonlySet<LocalCommandName> = new Set([
   'stop',
   'exit',
   'init',
+  'clear',
+  'compact',
+  'cost',
+  'diff',
+  'auth',
+  'plan',
 ]);
 
 export function parse(line: string): ParsedInput {

@@ -29,7 +29,10 @@
     "clean": "rimraf dist"
   },
   "dependencies": {
+    "cli-highlight": "^2.1.11",
     "commander": "^12.1.0",
+    "marked": "^15.0.12",
+    "marked-terminal": "^7.3.0",
     "picocolors": "^1.1.1",
     "tinyglobby": "^0.2.16",
     "undici": "^7.5.0"

@@ -25,7 +25,8 @@ program
   .option('-p, --project-root <path>', 'project root (defaults to cwd)')
   .option('--provider <name>', 'LLM provider (anthropic|xai|openai|openrouter)', process.env.AUTOMAX_PROVIDER ?? 'xai')
   .option('--model <name>', 'model id (defaults per provider)', process.env.AUTOMAX_MODEL)
-  .action(async (opts: { projectRoot?: string; provider: string; model?: string }) => {
+  .option('--plan-mode', 'require approval before file edits and shell commands', false)
+  .action(async (opts: { projectRoot?: string; provider: string; model?: string; planMode?: boolean }) => {
     const sessionId = newSessionId();
     const root = opts.projectRoot ? opts.projectRoot : projectRootDefault();
     const model = opts.model ?? defaultModelFor(opts.provider);
@@ -37,6 +38,7 @@ program
       sessionDir: join(sessionsDir(), sessionId),
       model: { provider: opts.provider, model },
       startedAt: new Date().toISOString(),
+      planMode: Boolean(opts.planMode),
     };
 
     const renderer = new ConsoleRenderer();

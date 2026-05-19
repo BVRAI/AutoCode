@@ -4,8 +4,10 @@ import type {
   ContentBlock,
   LlmProvider,
   Message,
+  StreamEvent,
 } from '../types.js';
 import type { AuthMode } from '../../auth/AuthResolver.js';
+import { parseSseStream } from '../sse.js';
 
 const DEFAULT_BASE = 'https://api.anthropic.com/v1';
 const API_VERSION = '2023-06-01';
@@ -69,6 +71,143 @@ export class AnthropicProvider implements LlmProvider {
     }
     const json = (await res.json()) as AnthropicResponse;
     return fromAnthropicResponse(json);
+  }
+
+  async *completeStream(req: CompletionRequest): AsyncIterable<StreamEvent> {
+    if (this.auth.kind === 'missing') {
+      throw new Error('anthropic credentials missing — set ANTHROPIC_API_KEY or AUTOMAX_PROXY_TOKEN');
+    }
+    const base = this.auth.kind === 'automax' ? this.auth.baseOverride : DEFAULT_BASE;
+    const url = `${base}/messages`;
+
+    const body = {
+      model: req.model,
+      max_tokens: req.maxTokens ?? 8192,
+      temperature: req.temperature ?? 1.0,
+      stream: true,
+      system: [{ type: 'text', text: req.system, cache_control: { type: 'ephemeral' } }],
+      tools: req.tools.map((t, idx) => ({
+        name: t.name,
+        description: t.description,
+        input_schema: t.inputSchema,
+        ...(idx === req.tools.length - 1 ? { cache_control: { type: 'ephemeral' } } : {}),
+      })),
+      messages: req.messages.map(toAnthropicMessage),
+    };
+
+    const headers: Record<string, string> = {
+      'content-type': 'application/json',
+      'anthropic-version': API_VERSION,
+      'accept': 'text/event-stream',
+    };
+    if (this.auth.kind === 'byok') headers['x-api-key'] = this.auth.apiKey;
+    else if (this.auth.kind === 'automax') headers['authorization'] = `Bearer ${this.auth.token}`;
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: req.signal,
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`anthropic ${res.status}: ${text.slice(0, 500)}`);
+    }
+
+    // Accumulate full response as we go, for the final message_stop event.
+    const content: ContentBlock[] = [];
+    let stopReason: CompletionResponse['stopReason'] = 'end_turn';
+    const usage: CompletionResponse['usage'] = {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    };
+    let currentToolJson = '';
+    let currentToolId: string | undefined;
+    let currentToolName: string | undefined;
+    let currentTextIdx: number | null = null;
+
+    for await (const evt of parseSseStream(res.body)) {
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(evt.data) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      switch (evt.event) {
+        case 'message_start': {
+          const m = parsed.message as { usage?: { input_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } } | undefined;
+          if (m?.usage) {
+            usage.inputTokens = m.usage.input_tokens ?? 0;
+            usage.cacheReadTokens = m.usage.cache_read_input_tokens ?? 0;
+            usage.cacheWriteTokens = m.usage.cache_creation_input_tokens ?? 0;
+          }
+          break;
+        }
+        case 'content_block_start': {
+          const block = parsed.content_block as { type: string; id?: string; name?: string; text?: string } | undefined;
+          if (block?.type === 'text') {
+            content.push({ type: 'text', text: '' });
+            currentTextIdx = content.length - 1;
+          } else if (block?.type === 'tool_use') {
+            currentToolId = block.id;
+            currentToolName = block.name;
+            currentToolJson = '';
+            yield { type: 'tool_use_start', id: block.id ?? '', name: block.name ?? '' };
+          }
+          break;
+        }
+        case 'content_block_delta': {
+          const delta = parsed.delta as { type: string; text?: string; partial_json?: string } | undefined;
+          if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
+            if (currentTextIdx !== null) {
+              const blk = content[currentTextIdx];
+              if (blk && blk.type === 'text') blk.text += delta.text;
+            }
+            yield { type: 'text_delta', text: delta.text };
+          } else if (delta?.type === 'input_json_delta' && typeof delta.partial_json === 'string') {
+            currentToolJson += delta.partial_json;
+            yield { type: 'tool_use_delta', argsJsonChunk: delta.partial_json };
+          }
+          break;
+        }
+        case 'content_block_stop': {
+          if (currentToolId !== undefined && currentToolName !== undefined) {
+            let input: Record<string, unknown> = {};
+            try {
+              input = currentToolJson.length > 0 ? (JSON.parse(currentToolJson) as Record<string, unknown>) : {};
+            } catch {
+              input = { _raw: currentToolJson };
+            }
+            content.push({ type: 'tool_use', id: currentToolId, name: currentToolName, input });
+            yield { type: 'tool_use_stop' };
+            currentToolId = undefined;
+            currentToolName = undefined;
+            currentToolJson = '';
+          }
+          currentTextIdx = null;
+          break;
+        }
+        case 'message_delta': {
+          const delta = parsed.delta as { stop_reason?: string } | undefined;
+          const u = parsed.usage as { output_tokens?: number } | undefined;
+          if (u?.output_tokens !== undefined) usage.outputTokens = u.output_tokens;
+          if (delta?.stop_reason) stopReason = normalizeStopReason(delta.stop_reason);
+          break;
+        }
+        case 'message_stop':
+          // Final event; we'll emit our own below.
+          break;
+        default:
+          break;
+      }
+    }
+
+    yield {
+      type: 'message_stop',
+      response: { model: req.model, stopReason, content, usage },
+    };
   }
 }
 

@@ -59,4 +59,12 @@ export interface CompletionResponse {
 export interface LlmProvider {
   readonly name: string;
   complete(req: CompletionRequest): Promise<CompletionResponse>;
+  completeStream?(req: CompletionRequest): AsyncIterable<StreamEvent>;
 }
+
+export type StreamEvent =
+  | { type: 'text_delta'; text: string }
+  | { type: 'tool_use_start'; id: string; name: string }
+  | { type: 'tool_use_delta'; argsJsonChunk: string }
+  | { type: 'tool_use_stop' }
+  | { type: 'message_stop'; response: CompletionResponse };

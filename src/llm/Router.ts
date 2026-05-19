@@ -1,4 +1,4 @@
-import type { CompletionRequest, CompletionResponse, LlmProvider } from './types.js';
+import type { CompletionRequest, CompletionResponse, LlmProvider, StreamEvent } from './types.js';
 import { AnthropicProvider } from './providers/AnthropicProvider.js';
 import { XaiProvider } from './providers/XaiProvider.js';
 import { OpenAIProvider } from './providers/OpenAIProvider.js';
@@ -28,6 +28,14 @@ export class LlmRouter {
       }
     }
     throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  }
+
+  async *completeStream(provider: ProviderName, req: CompletionRequest): AsyncIterable<StreamEvent> {
+    const p = this.providerFor(provider);
+    if (!p.completeStream) {
+      throw new Error(`provider ${provider} does not support streaming`);
+    }
+    yield* p.completeStream(req);
   }
 
   private providerFor(name: ProviderName): LlmProvider {

@@ -10,7 +10,7 @@ import { ToolRegistry } from './ToolRegistry.js';
 import { LlmRouter } from '../llm/Router.js';
 
 export class LiveAgent implements AgentHandler {
-  private readonly loop: AgentLoop;
+  readonly loop: AgentLoop;
 
   constructor(
     private readonly renderer: ConsoleRenderer,
@@ -35,6 +35,18 @@ export class LiveAgent implements AgentHandler {
 
   stop(): void {
     this.loop.cancel();
+  }
+
+  clearConversation(): number {
+    return this.loop.clearConversation();
+  }
+
+  compactConversation(): { before: number; after: number } {
+    return this.loop.compactConversation();
+  }
+
+  cumulativeUsage(): ReturnType<AgentLoop['cumulativeUsage']> {
+    return this.loop.cumulativeUsage();
   }
 }
 

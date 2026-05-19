@@ -10,6 +10,7 @@ export interface SessionContext {
   sessionDir: string;
   model: ModelConfig;
   startedAt: string;
+  planMode: boolean;
 }
 
 export function newSessionId(now: Date = new Date()): string {

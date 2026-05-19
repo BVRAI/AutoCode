@@ -3,7 +3,7 @@ import type { AgentHandler } from '../repl/TerminalMode.js';
 import type { ConsoleRenderer } from '../repl/ConsoleRenderer.js';
 import type { TranscriptStore } from '../session/TranscriptStore.js';
 
-// Placeholder until Phase 5 wires the LLM router.
+// Placeholder until the LLM router is wired (i.e., when no credentials are present).
 export class StubAgent implements AgentHandler {
   constructor(
     private readonly renderer: ConsoleRenderer,
@@ -21,5 +21,17 @@ export class StubAgent implements AgentHandler {
 
   stop(): void {
     // no-op for stub
+  }
+
+  clearConversation(): number {
+    return 0;
+  }
+
+  compactConversation(): { before: number; after: number } {
+    return { before: 0, after: 0 };
+  }
+
+  cumulativeUsage(): { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number } {
+    return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
   }
 }
