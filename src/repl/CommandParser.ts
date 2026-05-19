@@ -11,7 +11,8 @@ export type LocalCommandName =
   | 'cost'
   | 'diff'
   | 'auth'
-  | 'plan';
+  | 'plan'
+  | 'mcp';
 
 export interface LocalCommand {
   kind: 'local';
@@ -44,6 +45,7 @@ const KNOWN: ReadonlySet<LocalCommandName> = new Set([
   'diff',
   'auth',
   'plan',
+  'mcp',
 ]);
 
 export function parse(line: string): ParsedInput {

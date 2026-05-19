@@ -29,6 +29,7 @@
     "clean": "rimraf dist"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "cli-highlight": "^2.1.11",
     "commander": "^12.1.0",
     "marked": "^15.0.12",

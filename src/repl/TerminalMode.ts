@@ -16,6 +16,8 @@ export interface AgentHandler {
   clearConversation(): number;
   compactConversation(): { before: number; after: number };
   cumulativeUsage(): { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
+  mcpStatus?(): Array<{ name: string; connected: boolean; toolCount: number; error?: string }>;
+  mcpTools?(): string[];
 }
 
 export class TerminalMode {
@@ -88,7 +90,8 @@ export class TerminalMode {
       | 'cost'
       | 'diff'
       | 'auth'
-      | 'plan',
+      | 'plan'
+      | 'mcp',
     args: string[],
   ): Promise<void> {
     switch (name) {
@@ -133,6 +136,25 @@ export class TerminalMode {
       case 'plan':
         this.handlePlan(args);
         return;
+      case 'mcp':
+        this.handleMcp();
+        return;
+    }
+  }
+
+  private handleMcp(): void {
+    const status = this.agent.mcpStatus?.() ?? [];
+    if (status.length === 0) {
+      this.renderer.dim('(no MCP servers configured — add mcpServers to ~/.autocode/config.json)');
+      return;
+    }
+    for (const s of status) {
+      const tag = s.connected ? `${s.toolCount} tools` : `failed: ${s.error}`;
+      this.renderer.info(`${s.connected ? '✓' : '✗'} ${s.name} — ${tag}`);
+    }
+    const tools = this.agent.mcpTools?.() ?? [];
+    if (tools.length > 0) {
+      this.renderer.dim(`  tools: ${tools.join(', ')}`);
     }
   }
 
@@ -151,6 +173,7 @@ export class TerminalMode {
       '/diff                          Show uncommitted git changes',
       '/auth                          Configure an API key',
       '/plan [on|off]                 Toggle approval-before-edit mode',
+      '/mcp                           List configured MCP servers and their tools',
       '/stop                          Cancel current task',
       '/exit                          Close autocode',
     ];

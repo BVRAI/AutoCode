@@ -2,6 +2,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { configDir } from '../util/paths.js';
 
+export interface McpServerConfig {
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+}
+
 export interface AutocodeConfig {
   defaultProvider?: string;
   defaultModel?: string;
@@ -13,6 +19,9 @@ export interface AutocodeConfig {
     openrouter?: string;
     brave?: string;
   };
+  // Map of arbitrary server name → spawn config. Same shape as Claude Code's
+  // mcpServers entry, so users can paste configs across tools.
+  mcpServers?: Record<string, McpServerConfig>;
 }
 
 export class ConfigStore {

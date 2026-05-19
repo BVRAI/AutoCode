@@ -8,6 +8,7 @@ import { LiveAgent } from './agent/LiveAgent.js';
 import { newSessionId, type SessionContext } from './session/SessionContext.js';
 import { TranscriptStore } from './session/TranscriptStore.js';
 import { AuthResolver } from './auth/AuthResolver.js';
+import { ConfigStore } from './auth/ConfigStore.js';
 import { dataDir, projectRootDefault, sessionsDir } from './util/paths.js';
 import { loadDotEnv } from './util/dotenv.js';
 import { join } from 'node:path';
@@ -57,8 +58,25 @@ program
           new StubAgent(renderer, store))
         : new LiveAgent(renderer, store);
 
+    // Initialize MCP servers if any are configured. Fail soft.
+    if (agent instanceof LiveAgent) {
+      try {
+        const config = new ConfigStore().load();
+        await agent.initializeMcp(config.mcpServers);
+      } catch (e) {
+        renderer.warn(`mcp init failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+
     const repl = new TerminalMode(ctx, renderer, agent);
     const code = await repl.run();
+    if (agent instanceof LiveAgent) {
+      try {
+        await agent.shutdown();
+      } catch {
+        /* ignore */
+      }
+    }
     store.appendTranscript({ role: 'system', text: 'session ended' });
     process.exit(code);
   });

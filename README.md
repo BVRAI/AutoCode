@@ -55,6 +55,30 @@ A `.env` file in the directory you launch `autocode` from is loaded on startup. 
 
 Override the model with `--model <name>` or `/model <provider> <name>` inside the REPL.
 
+## MCP servers
+
+autocode supports the [Model Context Protocol](https://modelcontextprotocol.io). Configure servers in `~/.autocode/config.json`:
+
+```json
+{
+  "apiKeys": { "xai": "xai-..." },
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/project"]
+    },
+    "git": {
+      "command": "uvx",
+      "args": ["mcp-server-git", "--repository", "/path/to/repo"]
+    }
+  }
+}
+```
+
+On launch, autocode connects to each server, discovers its tools, and exposes them to the LLM as `mcp__<server>__<tool>`. A 5-second timeout per server keeps a misconfigured one from blocking startup; failed servers print a warning and are skipped. Use `/mcp` inside the REPL to see what's connected.
+
+The config shape matches Claude Code's — you can copy/paste server entries between tools.
+
 ## Local commands
 
 Inside the `autocode>` prompt:

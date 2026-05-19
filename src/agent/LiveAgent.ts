@@ -9,9 +9,13 @@ import { AgentLoop } from './AgentLoop.js';
 import { ToolRegistry } from './ToolRegistry.js';
 import { LlmRouter } from '../llm/Router.js';
 import { SubagentRunner } from './SubagentRunner.js';
+import { McpClientManager } from '../mcp/McpClientManager.js';
+import { McpTool } from '../mcp/McpTool.js';
 
 export class LiveAgent implements AgentHandler {
   readonly loop: AgentLoop;
+  readonly registry: ToolRegistry;
+  readonly mcp: McpClientManager;
 
   constructor(
     private readonly renderer: ConsoleRenderer,
@@ -19,14 +23,39 @@ export class LiveAgent implements AgentHandler {
   ) {
     const router = new LlmRouter();
     const runner = new SubagentRunner(router, store);
+    this.registry = new ToolRegistry();
+    this.mcp = new McpClientManager();
     this.loop = new AgentLoop({
       renderer: this.renderer,
       store,
       router,
-      registry: new ToolRegistry(),
+      registry: this.registry,
       confirm: (prompt) => askYesNo(prompt),
       subagentFactory: (input) => runner.run(input),
     });
+  }
+
+  // Connect to configured MCP servers and register their tools.
+  async initializeMcp(mcpServers: Record<string, import('../auth/ConfigStore.js').McpServerConfig> | undefined): Promise<void> {
+    if (!mcpServers || Object.keys(mcpServers).length === 0) return;
+    await this.mcp.connectAll(mcpServers);
+    for (const discovered of this.mcp.discoveredTools()) {
+      this.registry.register(new McpTool(this.mcp, discovered));
+    }
+    const status = this.mcp.status();
+    const connected = status.filter((s) => s.connected);
+    const failed = status.filter((s) => !s.connected);
+    if (connected.length > 0) {
+      const tot = connected.reduce((n, s) => n + s.toolCount, 0);
+      this.renderer.dim(`mcp: ${connected.length} server${connected.length === 1 ? '' : 's'} connected (${tot} tools)`);
+    }
+    for (const f of failed) {
+      this.renderer.warn(`mcp: ${f.name} failed — ${f.error}`);
+    }
+  }
+
+  async shutdown(): Promise<void> {
+    await this.mcp.closeAll();
   }
 
   async submit(text: string, ctx: SessionContext): Promise<void> {
@@ -51,6 +80,14 @@ export class LiveAgent implements AgentHandler {
 
   cumulativeUsage(): ReturnType<AgentLoop['cumulativeUsage']> {
     return this.loop.cumulativeUsage();
+  }
+
+  mcpStatus(): ReturnType<McpClientManager['status']> {
+    return this.mcp.status();
+  }
+
+  mcpTools(): string[] {
+    return this.mcp.discoveredTools().map((d) => `mcp__${d.serverName}__${d.toolName}`);
   }
 }
 
