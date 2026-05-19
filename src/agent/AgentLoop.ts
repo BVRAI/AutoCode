@@ -6,9 +6,12 @@ import type { ContentBlock, Message } from '../llm/types.js';
 import { LlmRouter, type ProviderName } from '../llm/Router.js';
 import { ToolRegistry } from './ToolRegistry.js';
 import { buildSystemPrompt } from './PromptBuilder.js';
+import { currentTodos } from '../tools/todoWrite.js';
 
 const MAX_ITERATIONS = 32;
-const LOOP_DETECT_WINDOW = 3;
+const LOOP_DETECT_WINDOW = 10;
+const LOOP_DETECT_THRESHOLD = 3; // Same (tool, args-hash) ≥ this many times in window → intervene.
+const MAX_RETRIES_PER_TOOL = 3;  // Same tool failing repeatedly → intervene.
 
 export interface AgentDeps {
   renderer: ConsoleRenderer;
@@ -37,10 +40,22 @@ export class AgentLoop {
       session: ctx,
       confirm: this.deps.confirm,
     };
-    const recentToolCalls: string[] = [];
+
+    // Sliding-window loop detection — pattern from research:
+    // OpenClaw uses a window of ~10 with normalized arg hashing and threshold 3.
+    const recentToolSigs: string[] = [];
+    // Per-tool consecutive-failure counter — separate from total iteration cap.
+    const consecutiveFailures = new Map<string, number>();
+
+    // Cumulative usage for the status line at end of turn.
+    let totalIn = 0;
+    let totalOut = 0;
+    let totalCacheRead = 0;
+    let totalCacheWrite = 0;
 
     for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
       if (this.cancelled) {
+        this.deps.renderer.spinner.stop();
         this.deps.renderer.dim('(cancelled)');
         this.conversation.push({
           role: 'user',
@@ -50,15 +65,26 @@ export class AgentLoop {
       }
       this.deps.store.touch(userText.slice(0, 80));
 
-      const response = await this.deps.router.complete(
-        ctx.model.provider as ProviderName,
-        {
-          model: ctx.model.model,
-          system: buildSystemPrompt(ctx),
-          messages: this.conversation,
-          tools: this.deps.registry.schemas(),
-        },
-      );
+      this.deps.renderer.spinner.start('thinking');
+      let response;
+      try {
+        response = await this.deps.router.complete(
+          ctx.model.provider as ProviderName,
+          {
+            model: ctx.model.model,
+            system: buildSystemPrompt(ctx),
+            messages: this.conversation,
+            tools: this.deps.registry.schemas(),
+          },
+        );
+      } finally {
+        this.deps.renderer.spinner.stop();
+      }
+
+      totalIn += response.usage.inputTokens;
+      totalOut += response.usage.outputTokens;
+      totalCacheRead += response.usage.cacheReadTokens ?? 0;
+      totalCacheWrite += response.usage.cacheWriteTokens ?? 0;
 
       this.conversation.push({ role: 'assistant', content: response.content });
 
@@ -72,6 +98,7 @@ export class AgentLoop {
 
       const toolUses = response.content.filter((b) => b.type === 'tool_use');
       if (toolUses.length === 0 || response.stopReason === 'end_turn') {
+        this.emitStatusLine(totalIn, totalOut, totalCacheRead, totalCacheWrite, ctx);
         this.deps.store.touch(null);
         return;
       }
@@ -80,13 +107,22 @@ export class AgentLoop {
       for (const tu of toolUses) {
         if (tu.type !== 'tool_use') continue;
         const sig = `${tu.name}:${stableStringify(tu.input)}`;
-        recentToolCalls.push(sig);
-        if (recentToolCalls.length > LOOP_DETECT_WINDOW) recentToolCalls.shift();
+        recentToolSigs.push(sig);
+        if (recentToolSigs.length > LOOP_DETECT_WINDOW) recentToolSigs.shift();
 
-        this.deps.renderer.dim(`→ ${tu.name} ${truncate(JSON.stringify(tu.input), 200)}`);
+        this.deps.renderer.spinner.start(`${tu.name}`);
         const t0 = Date.now();
         const result = await this.deps.registry.execute(tu.name, tu.input, toolExecCtx);
         const dt = Date.now() - t0;
+        this.deps.renderer.spinner.stop();
+
+        // Track per-tool consecutive failures.
+        if (result.isError) {
+          consecutiveFailures.set(tu.name, (consecutiveFailures.get(tu.name) ?? 0) + 1);
+        } else {
+          consecutiveFailures.set(tu.name, 0);
+        }
+
         this.deps.store.appendToolLog({
           tool: tu.name,
           arguments: tu.input,
@@ -95,7 +131,13 @@ export class AgentLoop {
           summary: result.summary,
           error: result.isError ? result.content.slice(0, 500) : undefined,
         });
-        this.deps.renderer.dim(`  ${result.summary}`);
+        this.deps.renderer.dim(`→ ${tu.name}  ${result.summary}  (${dt}ms)`);
+
+        // Render diff if this was an edit/write tool that produced before/after.
+        const md = result.metadata as { before?: string; after?: string; path?: string } | undefined;
+        if (!result.isError && md && typeof md.before === 'string' && typeof md.after === 'string') {
+          this.deps.renderer.diff(md.path ?? tu.name, md.before, md.after);
+        }
 
         toolResults.push({
           type: 'tool_result',
@@ -105,36 +147,90 @@ export class AgentLoop {
         });
       }
 
-      if (
-        recentToolCalls.length === LOOP_DETECT_WINDOW &&
-        recentToolCalls.every((s) => s === recentToolCalls[0])
-      ) {
+      // Loop detection — sliding window with arg-hash normalization (pattern
+      // from OpenClaw): if any signature occurs ≥ threshold times in the
+      // recent window, push a reflection message instead of letting the model
+      // continue thrashing.
+      const loopOffender = detectLoop(recentToolSigs, LOOP_DETECT_THRESHOLD);
+      if (loopOffender) {
         toolResults.push({
           type: 'tool_result',
           toolUseId: 'loop-detected',
           content:
-            'You have called the same tool with the same arguments 3 times. Stop and reflect: ' +
-            'either the previous calls already gave you the information you need, or the approach is wrong. ' +
-            'Summarize what you have learned so far and propose a different next step.',
+            `You have called \`${loopOffender}\` with the same (or very similar) arguments ${LOOP_DETECT_THRESHOLD}+ times recently. ` +
+            `Stop and reflect: the previous calls likely already gave you the information you need, or the approach is wrong. ` +
+            `Summarize what you have learned and propose a different next step. Do not call this tool with these arguments again.`,
           isError: true,
         });
+        recentToolSigs.length = 0;
+      }
+
+      // Per-tool retry cap — stop the agent if a single tool fails repeatedly.
+      for (const [tool, count] of consecutiveFailures.entries()) {
+        if (count >= MAX_RETRIES_PER_TOOL) {
+          toolResults.push({
+            type: 'tool_result',
+            toolUseId: 'retry-cap',
+            content:
+              `\`${tool}\` has failed ${count} times in a row. Stop retrying. Summarize what went wrong and ask the user for guidance, or try a fundamentally different approach.`,
+            isError: true,
+          });
+          consecutiveFailures.set(tool, 0);
+        }
       }
 
       this.conversation.push({ role: 'user', content: toolResults });
     }
 
     this.deps.renderer.warn(`(stopped after ${MAX_ITERATIONS} iterations)`);
+    this.emitStatusLine(totalIn, totalOut, totalCacheRead, totalCacheWrite, ctx);
     this.deps.store.touch(null);
+  }
+
+  private emitStatusLine(
+    inT: number,
+    outT: number,
+    cacheRead: number,
+    cacheWrite: number,
+    ctx: SessionContext,
+  ): void {
+    const cacheTotal = cacheRead + cacheWrite;
+    const cachePct = inT > 0 ? Math.round((cacheRead / Math.max(1, inT)) * 100) : 0;
+    const todos = currentTodos(ctx.sessionId);
+    const done = todos.filter((t) => t.status === 'completed').length;
+    const parts = [`in: ${inT}`, `out: ${outT}`];
+    if (cacheTotal > 0) parts.push(`cache: ${cachePct}%`);
+    if (todos.length > 0) parts.push(`${done}/${todos.length} todos`);
+    this.deps.renderer.status(`(${parts.join(' · ')})`);
   }
 }
 
-function truncate(s: string, max: number): string {
-  return s.length <= max ? s : s.slice(0, max) + '…';
+function detectLoop(window: string[], threshold: number): string | null {
+  const counts = new Map<string, number>();
+  for (const s of window) {
+    counts.set(s, (counts.get(s) ?? 0) + 1);
+  }
+  for (const [sig, n] of counts.entries()) {
+    if (n >= threshold) {
+      // Return just the tool name portion of the signature for the reflection message.
+      const colon = sig.indexOf(':');
+      return colon >= 0 ? sig.slice(0, colon) : sig;
+    }
+  }
+  return null;
 }
 
 function stableStringify(o: unknown): string {
   try {
-    return JSON.stringify(o, Object.keys((o as Record<string, unknown>) ?? {}).sort());
+    if (o === null || typeof o !== 'object') return JSON.stringify(o);
+    const keys = Object.keys(o as Record<string, unknown>).sort();
+    const norm: Record<string, unknown> = {};
+    for (const k of keys) {
+      const v = (o as Record<string, unknown>)[k];
+      // Normalize whitespace in string args so trivial reformatting doesn't escape loop detection.
+      norm[k] = typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : v;
+    }
+    return JSON.stringify(norm);
   } catch {
     return String(o);
   }

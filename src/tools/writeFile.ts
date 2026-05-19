@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { resolveInsideRoot, toRelative } from '../util/pathSafety.js';
 import {
@@ -49,12 +49,22 @@ export class WriteFileTool implements Tool {
         isError: true,
       };
     }
+    const before = exists ? safeRead(target) : '';
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, content, 'utf8');
+    const rel = toRelative(ctx.session.projectRoot, target);
     return {
-      summary: `${exists ? 'overwrote' : 'created'} ${toRelative(ctx.session.projectRoot, target)} (${content.length} bytes)`,
+      summary: `${exists ? 'overwrote' : 'created'} ${rel} (${content.length} bytes)`,
       content: `OK`,
-      metadata: { bytes: content.length, mode, existed: exists },
+      metadata: { bytes: content.length, mode, existed: exists, before, after: content, path: rel },
     };
+  }
+}
+
+function safeRead(path: string): string {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return '';
   }
 }

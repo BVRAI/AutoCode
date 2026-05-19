@@ -67,10 +67,11 @@ export class EditFileTool implements Tool {
       ? original.split(oldText).join(newText)
       : original.replace(oldText, newText);
     writeFileSync(target, updated, 'utf8');
+    const rel = toRelative(ctx.session.projectRoot, target);
     return {
-      summary: `edited ${toRelative(ctx.session.projectRoot, target)} (${replaceAll ? count + ' replacements' : '1 replacement'})`,
+      summary: `edited ${rel} (${replaceAll ? count + ' replacements' : '1 replacement'})`,
       content: `OK: ${oldText.length} → ${newText.length} chars, ${count} replacement(s)`,
-      metadata: { replacements: count, replaceAll },
+      metadata: { replacements: count, replaceAll, before: original, after: updated, path: rel },
     };
   }
 }
