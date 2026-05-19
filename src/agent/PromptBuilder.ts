@@ -53,6 +53,7 @@ You have these tools (the exact schemas are provided separately). Pick the small
 - \`todo_write\` — maintain a checklist of subtasks
 - \`web_fetch\` — fetch a URL's contents
 - \`web_search\` — search the web
+- \`task\` — delegate a focused research question to an Explore subagent (read-only). Use this when a question would otherwise require many file reads or greps — the subagent gathers the info and returns one summary, keeping your context clean. Don't use it for single-file lookups or anything that requires editing.
 
 # Output rules
 - Do not paste large file contents back to the user — they already saw them in the read_file output.

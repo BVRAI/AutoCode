@@ -8,6 +8,7 @@ import type { SessionContext } from '../session/SessionContext.js';
 import { AgentLoop } from './AgentLoop.js';
 import { ToolRegistry } from './ToolRegistry.js';
 import { LlmRouter } from '../llm/Router.js';
+import { SubagentRunner } from './SubagentRunner.js';
 
 export class LiveAgent implements AgentHandler {
   readonly loop: AgentLoop;
@@ -16,12 +17,15 @@ export class LiveAgent implements AgentHandler {
     private readonly renderer: ConsoleRenderer,
     store: TranscriptStore,
   ) {
+    const router = new LlmRouter();
+    const runner = new SubagentRunner(router, store);
     this.loop = new AgentLoop({
       renderer: this.renderer,
       store,
-      router: new LlmRouter(),
+      router,
       registry: new ToolRegistry(),
       confirm: (prompt) => askYesNo(prompt),
+      subagentFactory: (input) => runner.run(input),
     });
   }
 

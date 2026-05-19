@@ -1,4 +1,4 @@
-import type { Tool, ToolExecutionContext, ToolResult } from '../tools/types.js';
+import type { Tool, ToolExecutionContext, ToolResult, SubagentType } from '../tools/types.js';
 import type { ToolSchema } from '../llm/types.js';
 
 import { ListDirectoryTool } from '../tools/listDirectory.js';
@@ -11,6 +11,7 @@ import { GrepTool } from '../tools/grep.js';
 import { TodoWriteTool } from '../tools/todoWrite.js';
 import { WebFetchTool } from '../tools/webFetch.js';
 import { WebSearchTool } from '../tools/webSearch.js';
+import { TaskTool } from '../tools/task.js';
 
 export class ToolRegistry {
   private readonly tools = new Map<string, Tool>();
@@ -26,6 +27,27 @@ export class ToolRegistry {
     this.register(new TodoWriteTool());
     this.register(new WebFetchTool());
     this.register(new WebSearchTool());
+    this.register(new TaskTool());
+  }
+
+  // Factory for constrained subagent registries. Returns a registry that
+  // includes ONLY the read-only research tools — no edit/write/shell, no
+  // task tool (so subagents can't spawn further subagents).
+  static forSubagent(type: SubagentType): ToolRegistry {
+    const r = new ToolRegistry();
+    // Clear the default full set and re-register a constrained subset.
+    r.tools.clear();
+    switch (type) {
+      case 'Explore':
+        r.register(new ListDirectoryTool());
+        r.register(new ReadFileTool());
+        r.register(new GlobTool());
+        r.register(new GrepTool());
+        r.register(new WebFetchTool());
+        r.register(new WebSearchTool());
+        break;
+    }
+    return r;
   }
 
   register(tool: Tool): void {

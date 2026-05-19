@@ -10,6 +10,7 @@ import { currentTodos } from '../tools/todoWrite.js';
 import { renderUnifiedDiff } from '../util/diff.js';
 import { estimateCost, formatUsd } from '../util/pricing.js';
 import { requestApproval } from '../repl/ApprovalPrompt.js';
+import type { SubagentFactory } from '../tools/types.js';
 
 const MAX_ITERATIONS = 32;
 const LOOP_DETECT_WINDOW = 10;
@@ -25,6 +26,10 @@ export interface AgentDeps {
   router: LlmRouter;
   registry: ToolRegistry;
   confirm: (prompt: string) => Promise<boolean>;
+  // Optional — when present, the `task` tool will use this to spawn
+  // subagents. AgentLoop wraps it to also fold subagent usage into the
+  // parent's cumulative counters and to display a spinner.
+  subagentFactory?: SubagentFactory;
 }
 
 export class AgentLoop {
@@ -84,6 +89,23 @@ export class AgentLoop {
     const toolExecCtx: ToolExecutionContext = {
       session: ctx,
       confirm: this.deps.confirm,
+      depth: 0,
+      subagentFactory: this.deps.subagentFactory
+        ? async (input) => {
+            this.deps.renderer.spinner.start(`task: ${input.description}`);
+            try {
+              const result = await this.deps.subagentFactory!(input);
+              // Fold subagent usage into parent cumulative counters.
+              this.cumIn += result.usage.inputTokens;
+              this.cumOut += result.usage.outputTokens;
+              this.cumCacheRead += result.usage.cacheReadTokens ?? 0;
+              this.cumCacheWrite += result.usage.cacheWriteTokens ?? 0;
+              return result;
+            } finally {
+              this.deps.renderer.spinner.stop();
+            }
+          }
+        : undefined,
     };
 
     const recentToolSigs: string[] = [];

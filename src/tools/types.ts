@@ -1,10 +1,35 @@
 import type { SessionContext } from '../session/SessionContext.js';
 
+// Function passed in via ToolExecutionContext so the `task` tool can delegate
+// to a subagent without importing AgentLoop/SubagentRunner directly. Kept as
+// a structural type to avoid circular module deps.
+export type SubagentType = 'Explore';
+export type SubagentFactory = (input: {
+  type: SubagentType;
+  prompt: string;
+  description: string;
+  parentDepth: number;
+  parent: SessionContext;
+}) => Promise<{
+  text: string;
+  usage: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number };
+  iterations: number;
+  error?: string;
+}>;
+
 export interface ToolExecutionContext {
   session: SessionContext;
   // Returns true when the user agrees, false otherwise. Implementations may
   // throw if no interactive UI is attached.
   confirm?: (prompt: string) => Promise<boolean>;
+  // Nesting depth — 0 in the main agent, 1+ inside subagents. The `task`
+  // tool refuses to spawn when depth > 0 to prevent recursion.
+  depth?: number;
+  // Factory the `task` tool invokes. Set by AgentLoop on the main agent's
+  // ToolExecutionContext; intentionally absent inside subagents so the
+  // task tool isn't usable there (defense in depth alongside the registry
+  // not registering `task` for Explore).
+  subagentFactory?: SubagentFactory;
 }
 
 export type JsonSchema = {
