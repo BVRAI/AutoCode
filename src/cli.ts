@@ -23,7 +23,7 @@ program
 
 program
   .option('-p, --project-root <path>', 'project root (defaults to cwd)')
-  .option('--provider <name>', 'LLM provider (anthropic|xai|openai|openrouter)', process.env.AUTOMAX_PROVIDER ?? 'anthropic')
+  .option('--provider <name>', 'LLM provider (anthropic|xai|openai|openrouter)', process.env.AUTOMAX_PROVIDER ?? 'xai')
   .option('--model <name>', 'model id (defaults per provider)', process.env.AUTOMAX_MODEL)
   .action(async (opts: { projectRoot?: string; provider: string; model?: string }) => {
     const sessionId = newSessionId();
