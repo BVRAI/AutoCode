@@ -62,14 +62,26 @@ You have these tools (the exact schemas are provided separately). Pick the small
 # When the user gives a vague request
 Make a reasonable interpretation and act on it. Use \`todo_write\` to make your plan visible. If the request really cannot be acted on without more information, ask one focused question — don't ask three at once.`);
 
-  if (instructions) {
-    sections.push(
-      `\n# Project-specific instructions (from ${instructions.fileName})
+  // Append loaded project-instruction files in priority order. Layered: each
+  // file gets its own section; later sections override earlier ones on conflict.
+  for (const inst of instructions) {
+    if (inst.isAuthoritative) {
+      sections.push(
+        `\n# Authoritative overrides (from ${inst.fileName})
 
-The following instructions come from \`${instructions.fileName}\` at the project root. Treat them as authoritative for this project — they override the generic guidance above when they conflict.
+The following instructions take precedence over any earlier project instructions when they conflict — treat them as authoritative for this session. They are typically injected by the host process (Automax) to apply deployment-specific constraints.
 
-${instructions.content}`,
-    );
+${inst.content}`,
+      );
+    } else {
+      sections.push(
+        `\n# Project instructions (from ${inst.fileName})
+
+The following come from \`${inst.fileName}\` at the project root. Treat them as authoritative for this project — they override the generic guidance above when they conflict.
+
+${inst.content}`,
+      );
+    }
   }
 
   return sections.join('\n');

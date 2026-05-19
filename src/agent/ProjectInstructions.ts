@@ -1,13 +1,27 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
-// Cross-tool industry convention as of 2026 — AGENTS.md is read natively by
-// Claude Code, OpenAI Codex CLI, Gemini CLI, Cursor, Aider, GitHub Copilot,
-// Devin, Windsurf, and Amazon Q. See https://agents.md/. We also accept
-// AUTOCODE.md (autocode-specific override) and CLAUDE.md (Anthropic's name)
-// for compatibility with mixed-tool repos.
-const CANDIDATES = ['AUTOCODE.md', 'AGENTS.md', 'CLAUDE.md'] as const;
-const MAX_BYTES = 20_000;
+// Project-instruction files in priority order (lowest → highest).
+// All present files are loaded and concatenated in this order in the system
+// prompt — the highest-priority file appears last so its rules win conflicts.
+//
+// - AGENTS.md   — cross-tool industry convention (Claude Code, Codex, Gemini,
+//                 Cursor, Aider, Copilot, Devin, Windsurf all read it).
+//                 See https://agents.md/.
+// - CLAUDE.md   — older Anthropic-specific name; some repos still use it.
+// - AUTOCODE.md — autocode-specific project instructions (the file users
+//                 hand-edit or create via /init).
+// - master.md   — AUTHORITATIVE OVERRIDES. Intended for Automax-bundled
+//                 deployments where the host process needs to inject runtime
+//                 constraints that beat the project's own rules.
+const CANDIDATES = [
+  { name: 'AGENTS.md', priorityLabel: 'cross-tool agent instructions' },
+  { name: 'CLAUDE.md', priorityLabel: 'Claude project instructions' },
+  { name: 'AUTOCODE.md', priorityLabel: 'autocode project instructions' },
+  { name: 'master.md', priorityLabel: 'authoritative overrides' },
+] as const;
+
+const TOTAL_BYTE_CAP = 40_000;
 
 export interface ProjectInstructions {
   fileName: string;
@@ -15,11 +29,18 @@ export interface ProjectInstructions {
   content: string;
   truncated: boolean;
   bytes: number;
+  priorityLabel: string;
+  isAuthoritative: boolean;
 }
 
-export function loadProjectInstructions(root: string): ProjectInstructions | null {
-  for (const name of CANDIDATES) {
-    const path = join(root, name);
+// Returns ALL project-instruction files that exist at the project root, in
+// priority order (lowest → highest). master.md is flagged isAuthoritative so
+// the prompt builder can frame it explicitly.
+export function loadProjectInstructions(root: string): ProjectInstructions[] {
+  const out: ProjectInstructions[] = [];
+  let totalBytes = 0;
+  for (const cand of CANDIDATES) {
+    const path = join(root, cand.name);
     if (!existsSync(path)) continue;
     let stat;
     try {
@@ -34,15 +55,20 @@ export function loadProjectInstructions(root: string): ProjectInstructions | nul
     } catch {
       continue;
     }
-    const truncated = raw.length > MAX_BYTES;
-    const content = truncated ? raw.slice(0, MAX_BYTES) + '\n[…truncated]' : raw;
-    return {
-      fileName: name,
+    const remaining = Math.max(0, TOTAL_BYTE_CAP - totalBytes);
+    const truncated = raw.length > remaining;
+    const content = truncated ? raw.slice(0, remaining) + '\n[…truncated]' : raw;
+    totalBytes += content.length;
+    out.push({
+      fileName: cand.name,
       path,
       content,
       truncated,
       bytes: stat.size,
-    };
+      priorityLabel: cand.priorityLabel,
+      isAuthoritative: cand.name === 'master.md',
+    });
+    if (totalBytes >= TOTAL_BYTE_CAP) break;
   }
-  return null;
+  return out;
 }

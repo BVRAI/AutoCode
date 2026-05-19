@@ -5,6 +5,7 @@ import { existsSync, statSync } from 'node:fs';
 import type { SessionContext } from '../session/SessionContext.js';
 import { ConsoleRenderer } from './ConsoleRenderer.js';
 import { parse, type ParsedInput } from './CommandParser.js';
+import { runInit } from './InitCommand.js';
 
 export interface AgentHandler {
   submit(text: string, ctx: SessionContext): Promise<void>;
@@ -68,7 +69,7 @@ export class TerminalMode {
   }
 
   private async handleLocal(
-    name: 'help' | 'status' | 'cwd' | 'model' | 'stop' | 'exit',
+    name: 'help' | 'status' | 'cwd' | 'model' | 'stop' | 'exit' | 'init',
     args: string[],
   ): Promise<void> {
     switch (name) {
@@ -92,6 +93,9 @@ export class TerminalMode {
         this.exiting = true;
         this.rl.close();
         return;
+      case 'init':
+        await runInit(this.ctx.projectRoot, this.renderer);
+        return;
     }
   }
 
@@ -103,6 +107,7 @@ export class TerminalMode {
       '/cwd <path>                    Change project root',
       '/model                         Show current model',
       '/model <provider> <name>       Switch provider/model',
+      '/init                          Scaffold an AUTOCODE.md for this project',
       '/stop                          Cancel current task',
       '/exit                          Close autocode',
     ];

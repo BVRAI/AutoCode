@@ -4,7 +4,8 @@ export type LocalCommandName =
   | 'cwd'
   | 'model'
   | 'stop'
-  | 'exit';
+  | 'exit'
+  | 'init';
 
 export interface LocalCommand {
   kind: 'local';
@@ -30,6 +31,7 @@ const KNOWN: ReadonlySet<LocalCommandName> = new Set([
   'model',
   'stop',
   'exit',
+  'init',
 ]);
 
 export function parse(line: string): ParsedInput {

@@ -20,12 +20,11 @@ export class ConsoleRenderer {
       `${pc.dim('project:')} ${ctx.projectRoot}${projLine ? ' · ' + pc.cyan(projLine) : ''}`,
       `${pc.dim('model:  ')} ${ctx.model.provider} / ${ctx.model.model}`,
     ];
-    if (instructions) {
-      lines.push(
-        pc.dim(
-          `loaded ${instructions.fileName} (${instructions.bytes} bytes${instructions.truncated ? ', truncated' : ''})`,
-        ),
+    if (instructions.length > 0) {
+      const names = instructions.map((inst) =>
+        inst.isAuthoritative ? pc.yellow(`⚠ ${inst.fileName}`) : inst.fileName,
       );
+      lines.push(pc.dim(`loaded ${names.join(', ')}`));
     }
     lines.push('');
     lines.push(pc.dim('Type /help for commands. Plain text is sent to the agent.'));

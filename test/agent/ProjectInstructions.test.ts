@@ -13,37 +13,66 @@ describe('loadProjectInstructions', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('returns null when no instruction file exists', () => {
-    expect(loadProjectInstructions(dir)).toBeNull();
+  it('returns an empty array when no instruction file exists', () => {
+    expect(loadProjectInstructions(dir)).toEqual([]);
   });
 
-  it('finds AUTOCODE.md first (highest priority)', () => {
-    writeFileSync(join(dir, 'AUTOCODE.md'), 'use 2-space indent');
-    writeFileSync(join(dir, 'AGENTS.md'), 'use tabs');
-    writeFileSync(join(dir, 'CLAUDE.md'), 'use 4-space indent');
+  it('loads a single AGENTS.md when only it exists', () => {
+    writeFileSync(join(dir, 'AGENTS.md'), 'shared rules');
     const r = loadProjectInstructions(dir);
-    expect(r?.fileName).toBe('AUTOCODE.md');
-    expect(r?.content).toContain('2-space');
+    expect(r).toHaveLength(1);
+    expect(r[0]!.fileName).toBe('AGENTS.md');
+    expect(r[0]!.isAuthoritative).toBe(false);
   });
 
-  it('falls back to AGENTS.md when AUTOCODE.md is missing', () => {
+  it('loads AUTOCODE.md alone when it is the only file', () => {
+    writeFileSync(join(dir, 'AUTOCODE.md'), 'autocode rules');
+    const r = loadProjectInstructions(dir);
+    expect(r).toHaveLength(1);
+    expect(r[0]!.fileName).toBe('AUTOCODE.md');
+  });
+
+  it('layers all four files in priority order (lowest first)', () => {
     writeFileSync(join(dir, 'AGENTS.md'), 'agents content');
-    const r = loadProjectInstructions(dir);
-    expect(r?.fileName).toBe('AGENTS.md');
-  });
-
-  it('falls back to CLAUDE.md when AGENTS.md is also missing', () => {
     writeFileSync(join(dir, 'CLAUDE.md'), 'claude content');
+    writeFileSync(join(dir, 'AUTOCODE.md'), 'autocode content');
+    writeFileSync(join(dir, 'master.md'), 'master content');
     const r = loadProjectInstructions(dir);
-    expect(r?.fileName).toBe('CLAUDE.md');
+    expect(r.map((i) => i.fileName)).toEqual([
+      'AGENTS.md',
+      'CLAUDE.md',
+      'AUTOCODE.md',
+      'master.md',
+    ]);
+    // master.md is last (highest priority) and flagged authoritative.
+    expect(r[r.length - 1]!.isAuthoritative).toBe(true);
+    expect(r[0]!.isAuthoritative).toBe(false);
   });
 
-  it('truncates content above the 20KB cap', () => {
-    const big = 'x'.repeat(30_000);
-    writeFileSync(join(dir, 'AGENTS.md'), big);
+  it('marks only master.md as authoritative', () => {
+    writeFileSync(join(dir, 'AUTOCODE.md'), 'autocode');
+    writeFileSync(join(dir, 'master.md'), 'master');
     const r = loadProjectInstructions(dir);
-    expect(r?.truncated).toBe(true);
-    expect(r?.content.length).toBeLessThanOrEqual(20_000 + 50);
-    expect(r?.content).toMatch(/truncated/);
+    expect(r.find((i) => i.fileName === 'AUTOCODE.md')?.isAuthoritative).toBe(false);
+    expect(r.find((i) => i.fileName === 'master.md')?.isAuthoritative).toBe(true);
+  });
+
+  it('applies a total byte cap across all files', () => {
+    // Write three files totaling ~60 KB — should be truncated to ~40 KB total.
+    writeFileSync(join(dir, 'AGENTS.md'), 'x'.repeat(25_000));
+    writeFileSync(join(dir, 'AUTOCODE.md'), 'y'.repeat(25_000));
+    writeFileSync(join(dir, 'master.md'), 'z'.repeat(25_000));
+    const r = loadProjectInstructions(dir);
+    const totalContent = r.reduce((s, i) => s + i.content.length, 0);
+    // Allow a small slop for the truncation marker.
+    expect(totalContent).toBeLessThanOrEqual(40_000 + 200);
+    expect(r.some((i) => i.truncated)).toBe(true);
+  });
+
+  it('skips files that do not exist', () => {
+    writeFileSync(join(dir, 'AUTOCODE.md'), 'only one');
+    const r = loadProjectInstructions(dir);
+    expect(r).toHaveLength(1);
+    expect(r[0]!.fileName).toBe('AUTOCODE.md');
   });
 });
