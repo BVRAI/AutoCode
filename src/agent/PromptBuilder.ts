@@ -2,6 +2,7 @@ import { platform, release } from 'node:os';
 import type { SessionContext } from '../session/SessionContext.js';
 import { detectProjectContext, formatContextLine } from './ProjectContext.js';
 import { loadProjectInstructions } from './ProjectInstructions.js';
+import { getRepoMap } from './RepoMap.js';
 
 export function buildSystemPrompt(ctx: SessionContext): string {
   const os = `${platform()} ${release()}`;
@@ -66,6 +67,18 @@ You have these tools (the exact schemas are provided separately). Pick the small
 
 # When the user gives a vague request
 Make a reasonable interpretation and act on it. Use \`todo_write\` to make your plan visible. If the request really cannot be acted on without more information, ask one focused question — don't ask three at once.`);
+
+  // Repository map — a digest of files + top-level symbols for navigation.
+  const repoMap = getRepoMap(ctx.projectRoot);
+  if (repoMap) {
+    sections.push(
+      `\n# Repository map
+
+A digest of the project's files and their top-level symbols. Use it to navigate the codebase efficiently instead of listing/reading blindly. It is built once at session start and may be slightly stale — confirm with \`read_file\`/\`glob\` before relying on specifics.
+
+${repoMap}`,
+    );
+  }
 
   // Append loaded project-instruction files in priority order. Layered: each
   // file gets its own section; later sections override earlier ones on conflict.

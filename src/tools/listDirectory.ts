@@ -11,7 +11,7 @@ import {
   type ToolResult,
 } from './types.js';
 
-const NOISE_DIRS = new Set([
+export const NOISE_DIRS = new Set([
   'node_modules',
   '.git',
   '.svn',

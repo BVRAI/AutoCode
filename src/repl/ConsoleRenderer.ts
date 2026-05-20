@@ -7,6 +7,7 @@ import { Spinner } from './Spinner.js';
 import { renderUnifiedDiff } from '../util/diff.js';
 import { renderMarkdown, looksLikeMarkdown } from './MarkdownRenderer.js';
 import { countWrappedRows } from './wrap.js';
+import { getRepoMap } from '../agent/RepoMap.js';
 
 export class ConsoleRenderer {
   readonly spinner = new Spinner();
@@ -31,6 +32,11 @@ export class ConsoleRenderer {
         inst.isAuthoritative ? pc.yellow(`⚠ ${inst.fileName}`) : inst.fileName,
       );
       lines.push(pc.dim(`loaded ${names.join(', ')}`));
+    }
+    const repoMap = getRepoMap(ctx.projectRoot);
+    if (repoMap) {
+      const n = repoMap.split('\n').filter((l) => l.length > 0 && !l.startsWith('…')).length;
+      lines.push(pc.dim(`repo map: ${n} file${n === 1 ? '' : 's'} indexed`));
     }
     lines.push('');
     lines.push(pc.dim('Type /help for commands. Plain text is sent to the agent.'));
