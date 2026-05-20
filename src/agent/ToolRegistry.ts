@@ -5,6 +5,7 @@ import { ListDirectoryTool } from '../tools/listDirectory.js';
 import { ReadFileTool } from '../tools/readFile.js';
 import { EditFileTool } from '../tools/editFile.js';
 import { WriteFileTool } from '../tools/writeFile.js';
+import { CreateDirectoryTool } from '../tools/createDirectory.js';
 import { RunShellTool } from '../tools/runShell.js';
 import { GlobTool } from '../tools/glob.js';
 import { GrepTool } from '../tools/grep.js';
@@ -21,6 +22,7 @@ export class ToolRegistry {
     this.register(new ReadFileTool());
     this.register(new EditFileTool());
     this.register(new WriteFileTool());
+    this.register(new CreateDirectoryTool());
     this.register(new RunShellTool());
     this.register(new GlobTool());
     this.register(new GrepTool());
