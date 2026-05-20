@@ -6,7 +6,8 @@ import { existsSync, statSync } from 'node:fs';
 import { nextMode, type SessionContext, type AgentMode } from '../session/SessionContext.js';
 import type { CumulativeUsage } from '../session/TranscriptStore.js';
 import type { TrashItem } from '../session/CheckpointStore.js';
-import type { Message } from '../llm/types.js';
+import type { Message, ContentBlock } from '../llm/types.js';
+import { buildAgentInput } from '../util/imageInput.js';
 import { ConsoleRenderer } from './ConsoleRenderer.js';
 import { parse, type ParsedInput } from './CommandParser.js';
 import { runInit } from './InitCommand.js';
@@ -14,7 +15,7 @@ import { runAuth } from './AuthCommand.js';
 import { estimateCost, formatUsd } from '../util/pricing.js';
 
 export interface AgentHandler {
-  submit(text: string, ctx: SessionContext): Promise<void>;
+  submit(input: string | ContentBlock[], ctx: SessionContext): Promise<void>;
   stop(): void;
   clearConversation(): number;
   compactConversation(ctx: SessionContext): Promise<{ before: number; after: number; summarized: boolean }>;
@@ -112,9 +113,12 @@ export class TerminalMode {
     switch (parsed.kind) {
       case 'empty':
         return;
-      case 'agent':
-        await this.agent.submit(parsed.text, this.ctx);
+      case 'agent': {
+        const { input, missing } = buildAgentInput(parsed.text, this.ctx.projectRoot);
+        for (const ref of missing) this.renderer.warn(`(could not read image: ${ref})`);
+        await this.agent.submit(input, this.ctx);
         return;
+      }
       case 'local':
         return this.handleLocal(parsed.name, parsed.args);
     }

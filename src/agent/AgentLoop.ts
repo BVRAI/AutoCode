@@ -149,11 +149,12 @@ export class AgentLoop {
     return text;
   }
 
-  async submit(userText: string, ctx: SessionContext): Promise<void> {
+  async submit(input: string | ContentBlock[], ctx: SessionContext): Promise<void> {
     this.cancelled = false;
     this.deps.checkpoints?.beginTurn();
+    const userText = typeof input === 'string' ? input : textOf(input);
     this.deps.store.appendTranscript({ role: 'user', text: userText });
-    this.conversation.push({ role: 'user', content: userText });
+    this.conversation.push({ role: 'user', content: input });
 
     const toolExecCtx: ToolExecutionContext = {
       session: ctx,
@@ -440,6 +441,13 @@ export function findCompactionCut(conversation: Message[], keepPairs: number): n
     }
   }
   return 0;
+}
+
+function textOf(blocks: ContentBlock[]): string {
+  return blocks
+    .filter((b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text')
+    .map((b) => b.text)
+    .join('\n');
 }
 
 function renderForSummary(m: Message): string {

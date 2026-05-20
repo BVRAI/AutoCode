@@ -68,9 +68,12 @@ export class LiveAgent implements AgentHandler {
     await this.mcp.closeAll();
   }
 
-  async submit(text: string, ctx: SessionContext): Promise<void> {
+  async submit(
+    input: string | import('../llm/types.js').ContentBlock[],
+    ctx: SessionContext,
+  ): Promise<void> {
     try {
-      await this.loop.submit(text, ctx);
+      await this.loop.submit(input, ctx);
     } catch (e) {
       this.renderer.error(e instanceof Error ? e.message : String(e));
     }

@@ -211,7 +211,7 @@ export class AnthropicProvider implements LlmProvider {
   }
 }
 
-function toAnthropicMessage(m: Message): { role: 'user' | 'assistant'; content: unknown } {
+export function toAnthropicMessage(m: Message): { role: 'user' | 'assistant'; content: unknown } {
   if (m.role === 'system') {
     throw new Error('system messages should be passed via req.system, not in messages array');
   }
@@ -230,6 +230,11 @@ function toAnthropicMessage(m: Message): { role: 'user' | 'assistant'; content: 
           tool_use_id: b.toolUseId,
           content: b.content,
           ...(b.isError ? { is_error: true } : {}),
+        };
+      case 'image':
+        return {
+          type: 'image',
+          source: { type: 'base64', media_type: b.mediaType, data: b.data },
         };
     }
   });

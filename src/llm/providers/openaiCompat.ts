@@ -18,9 +18,13 @@ export interface OpenAiToolCall {
   function: { name: string; arguments: string };
 }
 
+export type OpenAiContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
 export interface OpenAiMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string | null;
+  content: string | null | OpenAiContentPart[];
   tool_calls?: OpenAiToolCall[];
   tool_call_id?: string;
   name?: string;
@@ -108,12 +112,15 @@ function toOpenAiMessages(m: Message): OpenAiMessage[] {
     }
     return [out];
   }
-  // role === 'user': may contain text blocks and/or tool_result blocks
+  // role === 'user': may contain text, image, and/or tool_result blocks
   const results: OpenAiMessage[] = [];
   const textParts: string[] = [];
+  const imageParts: OpenAiContentPart[] = [];
   for (const b of m.content) {
     if (b.type === 'text') textParts.push(b.text);
-    else if (b.type === 'tool_result') {
+    else if (b.type === 'image') {
+      imageParts.push({ type: 'image_url', image_url: { url: `data:${b.mediaType};base64,${b.data}` } });
+    } else if (b.type === 'tool_result') {
       results.push({
         role: 'tool',
         content: b.content,
@@ -121,7 +128,13 @@ function toOpenAiMessages(m: Message): OpenAiMessage[] {
       });
     }
   }
-  if (textParts.length > 0) {
+  if (imageParts.length > 0) {
+    // OpenAI multimodal: content becomes an array of text + image parts.
+    const parts: OpenAiContentPart[] = [];
+    if (textParts.length > 0) parts.push({ type: 'text', text: textParts.join('\n') });
+    parts.push(...imageParts);
+    results.unshift({ role: 'user', content: parts });
+  } else if (textParts.length > 0) {
     results.unshift({ role: 'user', content: textParts.join('\n') });
   }
   return results;

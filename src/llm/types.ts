@@ -21,7 +21,13 @@ export interface ToolResultBlock {
   isError?: boolean;
 }
 
-export type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock;
+export interface ImageBlock {
+  type: 'image';
+  mediaType: string; // e.g. 'image/png'
+  data: string; // base64-encoded image bytes
+}
+
+export type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock | ImageBlock;
 
 export interface Message {
   role: MessageRole;

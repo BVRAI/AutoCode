@@ -10,7 +10,11 @@ export class StubAgent implements AgentHandler {
     private readonly store: TranscriptStore,
   ) {}
 
-  async submit(text: string, _ctx: SessionContext): Promise<void> {
+  async submit(
+    input: string | import('../llm/types.js').ContentBlock[],
+    _ctx: SessionContext,
+  ): Promise<void> {
+    const text = typeof input === 'string' ? input : '[message with attachments]';
     this.store.appendTranscript({ role: 'user', text });
     this.renderer.dim(`(no LLM wired yet — would have sent: "${text}")`);
     this.store.appendTranscript({
