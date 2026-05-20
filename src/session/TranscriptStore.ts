@@ -1,6 +1,23 @@
-import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SessionContext } from './SessionContext.js';
+import type { Message } from '../llm/types.js';
+
+export interface CumulativeUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}
+
+const CONVERSATION_VERSION = 1;
+
+interface ConversationFile {
+  version: number;
+  updatedAt: string;
+  messages: Message[];
+  usage: CumulativeUsage;
+}
 
 export type TranscriptRole = 'user' | 'assistant' | 'system' | 'tool';
 
@@ -37,12 +54,14 @@ export class TranscriptStore {
   private readonly transcriptPath: string;
   private readonly toolLogPath: string;
   private readonly statePath: string;
+  private readonly conversationPath: string;
 
   constructor(private readonly ctx: SessionContext) {
     mkdirSync(ctx.sessionDir, { recursive: true });
     this.transcriptPath = join(ctx.sessionDir, 'transcript.jsonl');
     this.toolLogPath = join(ctx.sessionDir, 'tool_log.jsonl');
     this.statePath = join(ctx.sessionDir, 'state.json');
+    this.conversationPath = join(ctx.sessionDir, 'conversation.json');
     this.writeState({
       sessionId: ctx.sessionId,
       projectRoot: ctx.projectRoot,
@@ -82,11 +101,42 @@ export class TranscriptStore {
     });
   }
 
-  paths(): { transcript: string; toolLog: string; state: string } {
+  // Full-fidelity conversation snapshot for session resume. Unlike
+  // transcript.jsonl (text-only), this keeps tool_use/tool_result blocks so
+  // a resumed session sees exactly what the agent saw. Overwritten each turn.
+  saveConversation(messages: Message[], usage: CumulativeUsage): void {
+    const file: ConversationFile = {
+      version: CONVERSATION_VERSION,
+      updatedAt: new Date().toISOString(),
+      messages,
+      usage,
+    };
+    writeFileSync(this.conversationPath, JSON.stringify(file, null, 2), 'utf8');
+  }
+
+  loadConversation(): { messages: Message[]; usage: CumulativeUsage } | null {
+    if (!existsSync(this.conversationPath)) return null;
+    try {
+      const file = JSON.parse(readFileSync(this.conversationPath, 'utf8')) as ConversationFile;
+      if (file.version !== CONVERSATION_VERSION || !Array.isArray(file.messages)) return null;
+      const usage: CumulativeUsage = {
+        inputTokens: file.usage?.inputTokens ?? 0,
+        outputTokens: file.usage?.outputTokens ?? 0,
+        cacheReadTokens: file.usage?.cacheReadTokens ?? 0,
+        cacheWriteTokens: file.usage?.cacheWriteTokens ?? 0,
+      };
+      return { messages: file.messages, usage };
+    } catch {
+      return null;
+    }
+  }
+
+  paths(): { transcript: string; toolLog: string; state: string; conversation: string } {
     return {
       transcript: this.transcriptPath,
       toolLog: this.toolLogPath,
       state: this.statePath,
+      conversation: this.conversationPath,
     };
   }
 }

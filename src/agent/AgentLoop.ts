@@ -1,5 +1,5 @@
 import type { ConsoleRenderer } from '../repl/ConsoleRenderer.js';
-import type { TranscriptStore } from '../session/TranscriptStore.js';
+import type { TranscriptStore, CumulativeUsage } from '../session/TranscriptStore.js';
 import type { SessionContext } from '../session/SessionContext.js';
 import type { ToolExecutionContext } from '../tools/types.js';
 import type { ContentBlock, Message, StreamEvent } from '../llm/types.js';
@@ -61,6 +61,21 @@ export class AgentLoop {
     return n;
   }
 
+  // Restore a prior session's conversation + token counters (session resume).
+  loadState(state: { messages: Message[]; usage: CumulativeUsage }): void {
+    this.conversation.length = 0;
+    this.conversation.push(...state.messages);
+    this.cumIn = state.usage.inputTokens;
+    this.cumOut = state.usage.outputTokens;
+    this.cumCacheRead = state.usage.cacheReadTokens;
+    this.cumCacheWrite = state.usage.cacheWriteTokens;
+  }
+
+  // Snapshot the conversation to disk so a later process can resume it.
+  private persist(): void {
+    this.deps.store.saveConversation(this.conversation, this.cumulativeUsage());
+  }
+
   // Cheap "compaction": keep the last N user/assistant pairs. LLM-driven
   // summarization is the v0.2 plan.
   compactConversation(keepPairs = 4): { before: number; after: number } {
@@ -116,6 +131,7 @@ export class AgentLoop {
     let totalCacheRead = 0;
     let totalCacheWrite = 0;
 
+    try {
     for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
       if (this.cancelled) {
         this.deps.renderer.spinner.stop();
@@ -282,6 +298,11 @@ export class AgentLoop {
     this.deps.renderer.warn(`(stopped after ${MAX_ITERATIONS} iterations)`);
     this.emitStatusLine(totalIn, totalOut, totalCacheRead, totalCacheWrite, ctx);
     this.deps.store.touch(null);
+    } finally {
+      // Persist the conversation after every turn — natural end, iteration
+      // cap, cancel, or exception — so the session is always resumable.
+      this.persist();
+    }
   }
 
   private emitStatusLine(

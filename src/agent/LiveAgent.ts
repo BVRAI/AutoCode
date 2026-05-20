@@ -20,17 +20,22 @@ export class LiveAgent implements AgentHandler {
   constructor(
     private readonly renderer: ConsoleRenderer,
     store: TranscriptStore,
+    opts?: { headless?: boolean },
   ) {
     const router = new LlmRouter();
     const runner = new SubagentRunner(router, store);
     this.registry = new ToolRegistry();
     this.mcp = new McpClientManager();
+    // Headless runs have no interactive user — auto-decline confirm-gated
+    // commands and plan-mode edits rather than blocking on stdin. Routine
+    // allow-classified work (file/dir creation, edits) still runs freely.
+    const confirm = opts?.headless ? async () => false : (prompt: string) => askYesNo(prompt);
     this.loop = new AgentLoop({
       renderer: this.renderer,
       store,
       router,
       registry: this.registry,
-      confirm: (prompt) => askYesNo(prompt),
+      confirm,
       subagentFactory: (input) => runner.run(input),
     });
   }
@@ -72,6 +77,10 @@ export class LiveAgent implements AgentHandler {
 
   clearConversation(): number {
     return this.loop.clearConversation();
+  }
+
+  loadState(state: Parameters<AgentLoop['loadState']>[0]): void {
+    this.loop.loadState(state);
   }
 
   compactConversation(): { before: number; after: number } {

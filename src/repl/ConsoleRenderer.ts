@@ -6,12 +6,12 @@ import { printBanner } from './Banner.js';
 import { Spinner } from './Spinner.js';
 import { renderUnifiedDiff } from '../util/diff.js';
 import { renderMarkdown, looksLikeMarkdown } from './MarkdownRenderer.js';
+import { countWrappedRows } from './wrap.js';
 
 export class ConsoleRenderer {
   readonly spinner = new Spinner();
   private streaming = false;
   private streamBuffer = '';
-  private streamLineCount = 0;
   private readonly canRedraw = Boolean(process.stdout.isTTY);
 
   printHeader(ctx: SessionContext): void {
@@ -79,7 +79,6 @@ export class ConsoleRenderer {
   beginAssistantStream(): void {
     this.streaming = true;
     this.streamBuffer = '';
-    this.streamLineCount = 0;
     process.stdout.write(pc.magenta('ac: '));
   }
 
@@ -89,10 +88,6 @@ export class ConsoleRenderer {
     }
     process.stdout.write(text);
     this.streamBuffer += text;
-    // Track lines for the redraw-with-markdown step.
-    for (const ch of text) {
-      if (ch === '\n') this.streamLineCount += 1;
-    }
   }
 
   endAssistantStream(): void {
@@ -101,14 +96,16 @@ export class ConsoleRenderer {
     // Ensure we end on a newline.
     if (!this.streamBuffer.endsWith('\n')) {
       process.stdout.write('\n');
-      this.streamLineCount += 1;
     }
     // Final markdown redraw if it's worth it and we're on a TTY.
     if (this.canRedraw && looksLikeMarkdown(this.streamBuffer)) {
       const rendered = renderMarkdown(this.streamBuffer);
-      // Move cursor up over the streamed lines (including the "ac: " line)
-      // and erase, then reprint with markdown formatting.
-      const linesToErase = this.streamLineCount + 1; // +1 for the partially-filled first line
+      // Move cursor up over the streamed text and erase, then reprint with
+      // markdown formatting. Count *physical* rows (accounting for line
+      // wrapping) — counting only newlines undershoots when lines wrap and
+      // leaves the raw stream visible above the re-render.
+      const cols = process.stdout.columns || 80;
+      const linesToErase = countWrappedRows(this.streamBuffer, cols, 4); // 4 = "ac: " prefix
       process.stdout.write(`\x1b[${linesToErase}A\r\x1b[J`);
       // Reprint with ac: prefix, indenting continuation lines.
       const lines = rendered.split('\n');
@@ -125,7 +122,6 @@ export class ConsoleRenderer {
     }
     process.stdout.write('\n');
     this.streamBuffer = '';
-    this.streamLineCount = 0;
   }
 
   // Render a colored inline unified diff. Truncates extremely long diffs.

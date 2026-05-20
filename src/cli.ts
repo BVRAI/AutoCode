@@ -3,14 +3,17 @@ import { Command } from 'commander';
 
 import { ConsoleRenderer } from './repl/ConsoleRenderer.js';
 import { TerminalMode } from './repl/TerminalMode.js';
+import { runHeadless } from './repl/HeadlessMode.js';
 import { StubAgent } from './agent/StubAgent.js';
 import { LiveAgent } from './agent/LiveAgent.js';
 import { newSessionId, type SessionContext } from './session/SessionContext.js';
-import { TranscriptStore } from './session/TranscriptStore.js';
+import { TranscriptStore, type SessionState } from './session/TranscriptStore.js';
+import { findLatestSession, loadSessionMeta } from './session/SessionResume.js';
 import { AuthResolver } from './auth/AuthResolver.js';
 import { ConfigStore } from './auth/ConfigStore.js';
 import { dataDir, projectRootDefault, sessionsDir } from './util/paths.js';
 import { loadDotEnv } from './util/dotenv.js';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 // Load .env from cwd before commander reads env-var defaults below.
@@ -23,21 +26,57 @@ program
   .version('0.1.0-dev');
 
 program
-  .option('-p, --project-root <path>', 'project root (defaults to cwd)')
+  .option('--project-root <path>', 'project root (defaults to cwd)')
   .option('--provider <name>', 'LLM provider (anthropic|xai|openai|openrouter)', process.env.AUTOMAX_PROVIDER ?? 'xai')
   .option('--model <name>', 'model id (defaults per provider)', process.env.AUTOMAX_MODEL)
   .option('--plan-mode', 'require approval before file edits and shell commands', false)
-  .action(async (opts: { projectRoot?: string; provider: string; model?: string; planMode?: boolean }) => {
-    const sessionId = newSessionId();
-    const root = opts.projectRoot ? opts.projectRoot : projectRootDefault();
-    const model = opts.model ?? defaultModelFor(opts.provider);
+  .option('-p, --print <prompt>', 'run a single task non-interactively and exit')
+  .option('--resume <sessionId>', 'resume a specific prior session')
+  .option('-c, --continue', 'resume the most recent prior session', false)
+  .action(
+    async (opts: {
+      projectRoot?: string;
+      provider: string;
+      model?: string;
+      planMode?: boolean;
+      print?: string;
+      resume?: string;
+      continue?: boolean;
+    }) => {
+    // Resolve a resume target before building the session context. A session
+    // is resumable only if it has both state.json and conversation.json.
+    let resumedMeta: SessionState | null = null;
+    let resumeRequested = '';
+    if (typeof opts.resume === 'string' || opts.continue === true) {
+      resumeRequested = typeof opts.resume === 'string' ? opts.resume : '(most recent)';
+      const targetId =
+        typeof opts.resume === 'string' ? opts.resume : findLatestSession(sessionsDir());
+      if (targetId) {
+        const dir = join(sessionsDir(), targetId);
+        const meta = loadSessionMeta(dir);
+        if (meta && existsSync(join(dir, 'conversation.json'))) {
+          resumedMeta = meta;
+        }
+      }
+    }
+
+    const sessionId = resumedMeta ? resumedMeta.sessionId : newSessionId();
+    const root = opts.projectRoot
+      ? opts.projectRoot
+      : (resumedMeta?.projectRoot ?? projectRootDefault());
+    // On resume, provider + model come from the saved session (/model can
+    // still switch mid-session). Otherwise, from flags.
+    const provider = resumedMeta ? resumedMeta.provider : opts.provider;
+    const model = resumedMeta
+      ? resumedMeta.model
+      : (opts.model ?? defaultModelFor(opts.provider));
 
     const ctx: SessionContext = {
       sessionId,
       projectRoot: root,
       dataDir: dataDir(),
       sessionDir: join(sessionsDir(), sessionId),
-      model: { provider: opts.provider, model },
+      model: { provider, model },
       startedAt: new Date().toISOString(),
       planMode: Boolean(opts.planMode),
     };
@@ -48,7 +87,14 @@ program
     if (dotenvResult.loaded > 0) {
       renderer.dim(`(loaded ${dotenvResult.loaded} var${dotenvResult.loaded === 1 ? '' : 's'} from .env)`);
     }
+    if (resumeRequested && !resumedMeta) {
+      renderer.warn(`(no resumable session for ${resumeRequested} — starting fresh)`);
+    }
 
+    const headless = typeof opts.print === 'string';
+    if (headless) {
+      renderer.dim(`session ${ctx.sessionId} · ${ctx.sessionDir}`);
+    }
     const auth = new AuthResolver().resolve(ctx.model.provider);
     const agent =
       auth.kind === 'missing'
@@ -56,7 +102,7 @@ program
             `no credentials for ${ctx.model.provider} — set ${envKeyFor(ctx.model.provider)} or AUTOMAX_PROXY_TOKEN. Running in stub mode.`,
           ),
           new StubAgent(renderer, store))
-        : new LiveAgent(renderer, store);
+        : new LiveAgent(renderer, store, { headless });
 
     // Initialize MCP servers if any are configured. Fail soft.
     if (agent instanceof LiveAgent) {
@@ -68,8 +114,20 @@ program
       }
     }
 
-    const repl = new TerminalMode(ctx, renderer, agent);
-    const code = await repl.run();
+    // Restore the prior conversation + token counters before the first turn.
+    if (resumedMeta && agent instanceof LiveAgent) {
+      const loaded = store.loadConversation();
+      if (loaded) {
+        agent.loadState(loaded);
+        renderer.dim(`(resumed session ${ctx.sessionId} — ${loaded.messages.length} messages)`);
+      } else {
+        renderer.warn(`(could not load conversation for ${ctx.sessionId} — starting fresh)`);
+      }
+    }
+
+    const code = headless
+      ? await runHeadless(agent, renderer, ctx, opts.print as string)
+      : await new TerminalMode(ctx, renderer, agent).run();
     if (agent instanceof LiveAgent) {
       try {
         await agent.shutdown();

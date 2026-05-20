@@ -4,6 +4,8 @@ import { resolve } from 'node:path';
 import { existsSync, statSync } from 'node:fs';
 
 import type { SessionContext } from '../session/SessionContext.js';
+import type { CumulativeUsage } from '../session/TranscriptStore.js';
+import type { Message } from '../llm/types.js';
 import { ConsoleRenderer } from './ConsoleRenderer.js';
 import { parse, type ParsedInput } from './CommandParser.js';
 import { runInit } from './InitCommand.js';
@@ -16,6 +18,7 @@ export interface AgentHandler {
   clearConversation(): number;
   compactConversation(): { before: number; after: number };
   cumulativeUsage(): { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
+  loadState?(state: { messages: Message[]; usage: CumulativeUsage }): void;
   mcpStatus?(): Array<{ name: string; connected: boolean; toolCount: number; error?: string }>;
   mcpTools?(): string[];
 }
