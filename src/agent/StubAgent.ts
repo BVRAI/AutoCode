@@ -27,8 +27,8 @@ export class StubAgent implements AgentHandler {
     return 0;
   }
 
-  compactConversation(): { before: number; after: number } {
-    return { before: 0, after: 0 };
+  async compactConversation(): Promise<{ before: number; after: number; summarized: boolean }> {
+    return { before: 0, after: 0, summarized: false };
   }
 
   cumulativeUsage(): { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number } {

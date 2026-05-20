@@ -11,6 +11,7 @@ import { currentTodos } from '../tools/todoWrite.js';
 import { renderUnifiedDiff } from '../util/diff.js';
 import { estimateCost, formatUsd } from '../util/pricing.js';
 import { requestApproval } from '../repl/ApprovalPrompt.js';
+import { shouldAutoCompact } from '../util/contextWindow.js';
 import type { SubagentFactory } from '../tools/types.js';
 
 const MAX_ITERATIONS = 32;
@@ -59,6 +60,9 @@ export class AgentLoop {
   private cumOut = 0;
   private cumCacheRead = 0;
   private cumCacheWrite = 0;
+  // Input-token count of the most recent LLM call ≈ current context size;
+  // drives auto-compaction.
+  private lastInputTokens = 0;
 
   constructor(private readonly deps: AgentDeps) {}
 
@@ -96,24 +100,53 @@ export class AgentLoop {
     this.deps.store.saveConversation(this.conversation, this.cumulativeUsage());
   }
 
-  // Cheap "compaction": keep the last N user/assistant pairs. LLM-driven
-  // summarization is the v0.2 plan.
-  compactConversation(keepPairs = 4): { before: number; after: number } {
+  // Compact the conversation: summarize older turns with the LLM and keep
+  // the last few verbatim. Falls back to plain truncation if the summary
+  // call fails. Used by /compact and by auto-compaction.
+  async compactConversation(
+    ctx: SessionContext,
+    keepPairs = 4,
+  ): Promise<{ before: number; after: number; summarized: boolean }> {
     const before = this.conversation.length;
-    // Find last keepPairs user messages, slice from there.
-    let userSeen = 0;
-    let cutIdx = 0;
-    for (let i = this.conversation.length - 1; i >= 0; i--) {
-      if (this.conversation[i]!.role === 'user') {
-        userSeen += 1;
-        if (userSeen === keepPairs) {
-          cutIdx = i;
-          break;
-        }
-      }
+    const cut = findCompactionCut(this.conversation, keepPairs);
+    if (cut <= 0) return { before, after: before, summarized: false };
+
+    const older = this.conversation.slice(0, cut);
+    const kept = this.conversation.slice(cut);
+    let summary: string | null = null;
+    try {
+      summary = await this.summarizeMessages(older, ctx);
+    } catch {
+      summary = null; // fall back to plain truncation
     }
-    if (cutIdx > 0) this.conversation.splice(0, cutIdx);
-    return { before, after: this.conversation.length };
+    this.conversation.length = 0;
+    if (summary) {
+      this.conversation.push({ role: 'user', content: `[Summary of earlier conversation]\n${summary}` });
+    }
+    this.conversation.push(...kept);
+    return { before, after: this.conversation.length, summarized: summary !== null };
+  }
+
+  private async summarizeMessages(messages: Message[], ctx: SessionContext): Promise<string> {
+    const transcript = messages.map(renderForSummary).join('\n\n');
+    const resp = await this.deps.router.complete(ctx.model.provider as ProviderName, {
+      model: ctx.model.model,
+      system:
+        'You compress coding-assistant conversations. Produce a concise but complete summary that ' +
+        'preserves: what the user asked for, key decisions, files created or modified, important ' +
+        'findings, and any unfinished work. Use compact bullet points.',
+      messages: [{ role: 'user', content: `Summarize this conversation excerpt:\n\n${transcript}` }],
+      tools: [],
+    });
+    this.cumIn += resp.usage.inputTokens;
+    this.cumOut += resp.usage.outputTokens;
+    const text = resp.content
+      .filter((b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text')
+      .map((b) => b.text)
+      .join('\n')
+      .trim();
+    if (!text) throw new Error('empty summary');
+    return text;
   }
 
   async submit(userText: string, ctx: SessionContext): Promise<void> {
@@ -160,6 +193,12 @@ export class AgentLoop {
         this.deps.renderer.dim('(cancelled)');
         this.conversation.push({ role: 'user', content: '[user cancelled the task]' });
         return;
+      }
+      // Auto-compact before the call if the live context is getting large.
+      if (shouldAutoCompact(this.lastInputTokens, ctx.model.provider, ctx.model.model)) {
+        this.deps.renderer.dim('  (auto-compacting — conversation context is getting large)');
+        await this.compactConversation(ctx);
+        this.lastInputTokens = 0;
       }
       this.deps.store.touch(userText.slice(0, 80));
 
@@ -212,6 +251,7 @@ export class AgentLoop {
       this.cumOut += response.usage.outputTokens;
       this.cumCacheRead += response.usage.cacheReadTokens ?? 0;
       this.cumCacheWrite += response.usage.cacheWriteTokens ?? 0;
+      this.lastInputTokens = response.usage.inputTokens;
 
       this.conversation.push({ role: 'assistant', content: response.content });
 
@@ -385,6 +425,32 @@ function formatToolPreview(toolName: string, input: Record<string, unknown>): st
     return `delete (to trash): ${list.join(', ')}`;
   }
   return JSON.stringify(input, null, 2);
+}
+
+// The index before which messages should be summarized during compaction:
+// everything before the `keepPairs`-th most recent real user turn (a
+// string-content user message). Returns 0 when there is nothing to compact.
+export function findCompactionCut(conversation: Message[], keepPairs: number): number {
+  let userSeen = 0;
+  for (let i = conversation.length - 1; i >= 0; i--) {
+    const m = conversation[i]!;
+    if (m.role === 'user' && typeof m.content === 'string') {
+      userSeen += 1;
+      if (userSeen === keepPairs) return i;
+    }
+  }
+  return 0;
+}
+
+function renderForSummary(m: Message): string {
+  if (typeof m.content === 'string') return `${m.role}: ${m.content}`;
+  const parts: string[] = [];
+  for (const b of m.content) {
+    if (b.type === 'text') parts.push(b.text);
+    else if (b.type === 'tool_use') parts.push(`[tool_use ${b.name} ${JSON.stringify(b.input).slice(0, 200)}]`);
+    else if (b.type === 'tool_result') parts.push(`[tool_result ${b.content.slice(0, 200)}]`);
+  }
+  return `${m.role}: ${parts.join(' ')}`;
 }
 
 function detectLoop(window: string[], threshold: number): string | null {

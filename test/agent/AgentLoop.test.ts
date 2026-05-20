@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { AgentLoop, gateFor, type AgentDeps } from '../../src/agent/AgentLoop.js';
+import { AgentLoop, gateFor, findCompactionCut, type AgentDeps } from '../../src/agent/AgentLoop.js';
 import type { Message } from '../../src/llm/types.js';
 
 // loadState / cumulativeUsage / clearConversation touch only the conversation
@@ -79,5 +79,35 @@ describe('AgentLoop.loadState extra', () => {
     });
     expect(loop.clearConversation()).toBe(2);
     expect(loop.cumulativeUsage().inputTokens).toBe(99);
+  });
+});
+
+describe('findCompactionCut', () => {
+  it('returns 0 when there are fewer user turns than keepPairs', () => {
+    const convo = [
+      { role: 'user', content: 'one' },
+      { role: 'assistant', content: [{ type: 'text', text: 'ok' }] },
+    ];
+    expect(findCompactionCut(convo as never, 4)).toBe(0);
+  });
+
+  it('cuts before the keepPairs-th most recent user turn', () => {
+    const convo = [
+      { role: 'user', content: 't1' },
+      { role: 'assistant', content: [{ type: 'text', text: 'a1' }] },
+      { role: 'user', content: 't2' },
+      { role: 'assistant', content: [{ type: 'text', text: 'a2' }] },
+      { role: 'user', content: 't3' },
+    ];
+    expect(findCompactionCut(convo as never, 2)).toBe(2);
+  });
+
+  it('ignores tool-result user messages as turn boundaries', () => {
+    const convo = [
+      { role: 'user', content: 'real-turn' },
+      { role: 'user', content: [{ type: 'tool_result', toolUseId: 'x', content: 'r' }] },
+      { role: 'user', content: 'real-turn-2' },
+    ];
+    expect(findCompactionCut(convo as never, 1)).toBe(2);
   });
 });

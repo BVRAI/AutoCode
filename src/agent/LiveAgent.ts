@@ -88,8 +88,8 @@ export class LiveAgent implements AgentHandler {
     this.loop.loadState(state);
   }
 
-  compactConversation(): { before: number; after: number } {
-    return this.loop.compactConversation();
+  compactConversation(ctx: SessionContext): ReturnType<AgentLoop['compactConversation']> {
+    return this.loop.compactConversation(ctx);
   }
 
   cumulativeUsage(): ReturnType<AgentLoop['cumulativeUsage']> {

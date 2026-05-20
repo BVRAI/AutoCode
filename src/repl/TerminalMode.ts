@@ -17,7 +17,7 @@ export interface AgentHandler {
   submit(text: string, ctx: SessionContext): Promise<void>;
   stop(): void;
   clearConversation(): number;
-  compactConversation(): { before: number; after: number };
+  compactConversation(ctx: SessionContext): Promise<{ before: number; after: number; summarized: boolean }>;
   cumulativeUsage(): { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
   loadState?(state: { messages: Message[]; usage: CumulativeUsage }): void;
   undo?(): { turn: number; restored: number } | null;
@@ -169,8 +169,7 @@ export class TerminalMode {
         this.handleClear();
         return;
       case 'compact':
-        this.handleCompact();
-        return;
+        return this.handleCompact();
       case 'cost':
         this.handleCost();
         return;
@@ -314,12 +313,14 @@ export class TerminalMode {
     this.renderer.dim(`(cleared ${n} message${n === 1 ? '' : 's'} from conversation history)`);
   }
 
-  private handleCompact(): void {
-    const { before, after } = this.agent.compactConversation();
+  private async handleCompact(): Promise<void> {
+    const { before, after, summarized } = await this.agent.compactConversation(this.ctx);
     if (before === after) {
       this.renderer.dim('(nothing to compact)');
     } else {
-      this.renderer.dim(`(compacted ${before} → ${after} messages)`);
+      this.renderer.dim(
+        `(compacted ${before} → ${after} messages${summarized ? ', summarized' : ', truncated'})`,
+      );
     }
   }
 
