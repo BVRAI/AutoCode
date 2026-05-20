@@ -66,6 +66,7 @@ export class EditFileTool implements Tool {
     const updated = replaceAll
       ? original.split(oldText).join(newText)
       : original.replace(oldText, newText);
+    ctx.checkpoint?.snapshotBeforeWrite(target);
     writeFileSync(target, updated, 'utf8');
     const rel = toRelative(ctx.session.projectRoot, target);
     return {

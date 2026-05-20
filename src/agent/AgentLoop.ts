@@ -1,6 +1,7 @@
 import type { ConsoleRenderer } from '../repl/ConsoleRenderer.js';
 import type { TranscriptStore, CumulativeUsage } from '../session/TranscriptStore.js';
 import type { SessionContext, AgentMode } from '../session/SessionContext.js';
+import type { CheckpointStore } from '../session/CheckpointStore.js';
 import type { ToolExecutionContext } from '../tools/types.js';
 import type { ContentBlock, Message, StreamEvent } from '../llm/types.js';
 import { LlmRouter, type ProviderName } from '../llm/Router.js';
@@ -18,7 +19,7 @@ const LOOP_DETECT_THRESHOLD = 3;
 const MAX_RETRIES_PER_TOOL = 3;
 
 // Tools that change the project — gated according to the session mode.
-const MUTATING_TOOLS = new Set(['edit_file', 'write_file', 'create_directory', 'run_shell']);
+const MUTATING_TOOLS = new Set(['edit_file', 'write_file', 'create_directory', 'delete_path', 'run_shell']);
 
 // How a tool call should be handled given the current mode:
 //  - block:   refuse (planning mode — read-only).
@@ -46,6 +47,9 @@ export interface AgentDeps {
   // subagents. AgentLoop wraps it to also fold subagent usage into the
   // parent's cumulative counters and to display a spinner.
   subagentFactory?: SubagentFactory;
+  // Snapshot store — threaded onto each tool's ToolExecutionContext so edits
+  // are undoable and deletes recoverable. Optional (absent in stub mode).
+  checkpoints?: CheckpointStore;
 }
 
 export class AgentLoop {
@@ -114,12 +118,14 @@ export class AgentLoop {
 
   async submit(userText: string, ctx: SessionContext): Promise<void> {
     this.cancelled = false;
+    this.deps.checkpoints?.beginTurn();
     this.deps.store.appendTranscript({ role: 'user', text: userText });
     this.conversation.push({ role: 'user', content: userText });
 
     const toolExecCtx: ToolExecutionContext = {
       session: ctx,
       confirm: this.deps.confirm,
+      checkpoint: this.deps.checkpoints,
       depth: 0,
       subagentFactory: this.deps.subagentFactory
         ? async (input) => {
@@ -373,6 +379,10 @@ function formatToolPreview(toolName: string, input: Record<string, unknown>): st
   if (toolName === 'run_shell') {
     const cmd = typeof input.command === 'string' ? input.command : '?';
     return `$ ${cmd}`;
+  }
+  if (toolName === 'delete_path') {
+    const list = Array.isArray(input.paths) ? input.paths : input.path ? [input.path] : [];
+    return `delete (to trash): ${list.join(', ')}`;
   }
   return JSON.stringify(input, null, 2);
 }

@@ -4,6 +4,7 @@ import type { AgentHandler } from '../repl/TerminalMode.js';
 import type { ConsoleRenderer } from '../repl/ConsoleRenderer.js';
 import type { TranscriptStore } from '../session/TranscriptStore.js';
 import type { SessionContext } from '../session/SessionContext.js';
+import type { CheckpointStore } from '../session/CheckpointStore.js';
 
 import { AgentLoop } from './AgentLoop.js';
 import { ToolRegistry } from './ToolRegistry.js';
@@ -17,15 +18,18 @@ export class LiveAgent implements AgentHandler {
   readonly registry: ToolRegistry;
   readonly mcp: McpClientManager;
 
+  private readonly checkpoints?: CheckpointStore;
+
   constructor(
     private readonly renderer: ConsoleRenderer,
     store: TranscriptStore,
-    opts?: { headless?: boolean },
+    opts?: { headless?: boolean; checkpoints?: CheckpointStore },
   ) {
     const router = new LlmRouter();
     const runner = new SubagentRunner(router, store);
     this.registry = new ToolRegistry();
     this.mcp = new McpClientManager();
+    this.checkpoints = opts?.checkpoints;
     // Headless runs have no interactive user — auto-decline confirm-gated
     // commands and plan-mode edits rather than blocking on stdin. Routine
     // allow-classified work (file/dir creation, edits) still runs freely.
@@ -37,6 +41,7 @@ export class LiveAgent implements AgentHandler {
       registry: this.registry,
       confirm,
       subagentFactory: (input) => runner.run(input),
+      checkpoints: this.checkpoints,
     });
   }
 
@@ -97,6 +102,18 @@ export class LiveAgent implements AgentHandler {
 
   mcpTools(): string[] {
     return this.mcp.discoveredTools().map((d) => `mcp__${d.serverName}__${d.toolName}`);
+  }
+
+  undo(): { turn: number; restored: number } | null {
+    return this.checkpoints?.undoLastTurn() ?? null;
+  }
+
+  trashList(): ReturnType<CheckpointStore['listTrash']> {
+    return this.checkpoints?.listTrash() ?? [];
+  }
+
+  restore(id: string): ReturnType<CheckpointStore['restoreFromTrash']> {
+    return this.checkpoints?.restoreFromTrash(id) ?? null;
   }
 }
 

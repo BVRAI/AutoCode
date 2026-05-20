@@ -8,6 +8,7 @@ import { StubAgent } from './agent/StubAgent.js';
 import { LiveAgent } from './agent/LiveAgent.js';
 import { newSessionId, type SessionContext } from './session/SessionContext.js';
 import { TranscriptStore, type SessionState } from './session/TranscriptStore.js';
+import { CheckpointStore } from './session/CheckpointStore.js';
 import { findLatestSession, loadSessionMeta } from './session/SessionResume.js';
 import { AuthResolver } from './auth/AuthResolver.js';
 import { ConfigStore } from './auth/ConfigStore.js';
@@ -88,6 +89,8 @@ program
 
     const renderer = new ConsoleRenderer();
     const store = new TranscriptStore(ctx);
+    const checkpoints = new CheckpointStore(ctx.sessionDir);
+    checkpoints.sweep();
     store.appendTranscript({ role: 'system', text: `session started for ${root}` });
     if (dotenvResult.loaded > 0) {
       renderer.dim(`(loaded ${dotenvResult.loaded} var${dotenvResult.loaded === 1 ? '' : 's'} from .env)`);
@@ -106,7 +109,7 @@ program
             `no credentials for ${ctx.model.provider} — set ${envKeyFor(ctx.model.provider)} or AUTOMAX_PROXY_TOKEN. Running in stub mode.`,
           ),
           new StubAgent(renderer, store))
-        : new LiveAgent(renderer, store, { headless });
+        : new LiveAgent(renderer, store, { headless, checkpoints });
 
     // Initialize MCP servers if any are configured. Fail soft.
     if (agent instanceof LiveAgent) {

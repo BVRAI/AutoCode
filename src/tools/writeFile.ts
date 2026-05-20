@@ -50,6 +50,7 @@ export class WriteFileTool implements Tool {
       };
     }
     const before = exists ? safeRead(target) : '';
+    ctx.checkpoint?.snapshotBeforeWrite(target);
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, content, 'utf8');
     const rel = toRelative(ctx.session.projectRoot, target);

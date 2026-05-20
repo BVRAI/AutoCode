@@ -51,6 +51,7 @@ You have these tools (the exact schemas are provided separately). Pick the small
 - \`edit_file\` — exact-match string replacement
 - \`write_file\` — create or rewrite a file
 - \`create_directory\` — make a new directory under the project root (cross-platform; preferred over \`mkdir\` via run_shell)
+- \`delete_path\` — delete files/directories (moves them to a recoverable trash; preferred over \`rm\` via run_shell)
 - \`run_shell\` — run a shell command (subject to safety policy)
 - \`todo_write\` — maintain a checklist of subtasks
 - \`web_fetch\` — fetch a URL's contents

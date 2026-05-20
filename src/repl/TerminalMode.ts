@@ -5,6 +5,7 @@ import { existsSync, statSync } from 'node:fs';
 
 import { nextMode, type SessionContext, type AgentMode } from '../session/SessionContext.js';
 import type { CumulativeUsage } from '../session/TranscriptStore.js';
+import type { TrashItem } from '../session/CheckpointStore.js';
 import type { Message } from '../llm/types.js';
 import { ConsoleRenderer } from './ConsoleRenderer.js';
 import { parse, type ParsedInput } from './CommandParser.js';
@@ -19,6 +20,9 @@ export interface AgentHandler {
   compactConversation(): { before: number; after: number };
   cumulativeUsage(): { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
   loadState?(state: { messages: Message[]; usage: CumulativeUsage }): void;
+  undo?(): { turn: number; restored: number } | null;
+  trashList?(): TrashItem[];
+  restore?(id: string): TrashItem | null;
   mcpStatus?(): Array<{ name: string; connected: boolean; toolCount: number; error?: string }>;
   mcpTools?(): string[];
 }
@@ -131,6 +135,9 @@ export class TerminalMode {
       | 'diff'
       | 'auth'
       | 'mode'
+      | 'undo'
+      | 'trash'
+      | 'restore'
       | 'mcp',
     args: string[],
   ): Promise<void> {
@@ -176,10 +183,54 @@ export class TerminalMode {
       case 'mode':
         this.handleMode(args);
         return;
+      case 'undo':
+        this.handleUndo();
+        return;
+      case 'trash':
+        this.handleTrash();
+        return;
+      case 'restore':
+        this.handleRestore(args);
+        return;
       case 'mcp':
         this.handleMcp();
         return;
     }
+  }
+
+  private handleUndo(): void {
+    const r = this.agent.undo?.();
+    if (!r || r.restored === 0) {
+      this.renderer.dim('(nothing to undo)');
+      return;
+    }
+    this.renderer.info(`undid turn ${r.turn} — restored ${r.restored} file${r.restored === 1 ? '' : 's'}`);
+  }
+
+  private handleTrash(): void {
+    const items = this.agent.trashList?.() ?? [];
+    if (items.length === 0) {
+      this.renderer.dim('(trash is empty)');
+      return;
+    }
+    for (const it of items.slice(0, 20)) {
+      this.renderer.info(`${it.id}  ${it.deletedAt.slice(0, 19)}  ${it.kind}  ${it.originalPath}`);
+    }
+    this.renderer.dim('restore with /restore <id>');
+  }
+
+  private handleRestore(args: string[]): void {
+    const id = args[0];
+    if (!id) {
+      this.renderer.error('usage: /restore <id>  (run /trash to see ids)');
+      return;
+    }
+    const r = this.agent.restore?.(id);
+    if (!r) {
+      this.renderer.error(`no trash item with id ${id}`);
+      return;
+    }
+    this.renderer.info(`restored ${r.originalPath}`);
   }
 
   private handleMcp(): void {
@@ -213,6 +264,9 @@ export class TerminalMode {
       '/diff                          Show uncommitted git changes',
       '/auth                          Configure an API key',
       '/mode [planning|default|autocode]  Show or set the workflow mode (or shift+tab)',
+      '/undo                          Revert the file changes from the last turn',
+      '/trash                         List recently deleted files (recoverable)',
+      '/restore <id>                  Restore a deleted file from the trash',
       '/mcp                           List configured MCP servers and their tools',
       '/stop                          Cancel current task',
       '/exit                          Close autocode',

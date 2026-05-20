@@ -1,4 +1,5 @@
 import type { SessionContext } from '../session/SessionContext.js';
+import type { CheckpointStore } from '../session/CheckpointStore.js';
 
 // Function passed in via ToolExecutionContext so the `task` tool can delegate
 // to a subagent without importing AgentLoop/SubagentRunner directly. Kept as
@@ -30,6 +31,9 @@ export interface ToolExecutionContext {
   // task tool isn't usable there (defense in depth alongside the registry
   // not registering `task` for Explore).
   subagentFactory?: SubagentFactory;
+  // Snapshot store — file tools record before-state here so edits are
+  // undoable and deletes are recoverable from the trash.
+  checkpoint?: CheckpointStore;
 }
 
 export type JsonSchema = {

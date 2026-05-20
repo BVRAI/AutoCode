@@ -12,6 +12,9 @@ export type LocalCommandName =
   | 'diff'
   | 'auth'
   | 'mode'
+  | 'undo'
+  | 'trash'
+  | 'restore'
   | 'mcp';
 
 export interface LocalCommand {
@@ -45,6 +48,9 @@ const KNOWN: ReadonlySet<LocalCommandName> = new Set([
   'diff',
   'auth',
   'mode',
+  'undo',
+  'trash',
+  'restore',
   'mcp',
 ]);
 
