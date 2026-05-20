@@ -1,7 +1,8 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { resolveInsideRoot, toRelative } from '../util/pathSafety.js';
 import { classifyCommand, type SafetyVerdict } from '../safety/SafetyPolicy.js';
 import {
+  optionalBoolean,
   optionalNumber,
   optionalString,
   requireString,
@@ -11,16 +12,31 @@ import {
   type ToolResult,
 } from './types.js';
 
-const DEFAULT_TIMEOUT = 120;
+const DEFAULT_TIMEOUT = 300;
 const MAX_OUTPUT_BYTES = 100_000;
+const BACKGROUND_GRACE_MS = 3_000;
+
+// Background processes (e.g. dev servers) — killed when autocode exits so a
+// `npm run dev` never outlives its session.
+const bgChildren = new Set<ChildProcess>();
+process.on('exit', () => {
+  for (const c of bgChildren) {
+    try {
+      c.kill();
+    } catch {
+      /* ignore */
+    }
+  }
+});
 
 const DEFINITION: ToolDefinition = {
   name: 'run_shell',
   description:
     'Run a shell command. Working directory is resolved relative to the project root. ' +
-    'Commands are classified by the safety policy as allow / confirm / block. ' +
-    'Destructive patterns (rm -rf /, format, diskpart, etc.) are hard-blocked. ' +
-    'Risky-but-sometimes-valid patterns (git reset --hard, npm uninstall, etc.) require user confirmation. ' +
+    'Commands are classified by the safety policy as allow / confirm / block; destructive patterns ' +
+    'and anything targeting paths outside the project or protected system zones are hard-blocked. ' +
+    'Set background:true for long-running processes like a dev server — autocode starts it, captures ' +
+    'a few seconds of startup output, and leaves it running (killed when the session ends). ' +
     'stdout and stderr are captured and returned (truncated to 100KB total).',
   inputSchema: {
     type: 'object',
@@ -28,6 +44,7 @@ const DEFINITION: ToolDefinition = {
       command: { type: 'string', description: 'The shell command to run.' },
       working_directory: { type: 'string', description: 'Subdirectory (relative). Default project root.' },
       timeout_seconds: { type: 'number', description: `Hard timeout in seconds. Default ${DEFAULT_TIMEOUT}.` },
+      background: { type: 'boolean', description: 'Run as a long-lived process (dev server). Default false.' },
     },
     required: ['command'],
   },
@@ -40,6 +57,7 @@ export class RunShellTool implements Tool {
     const command = requireString(args, 'command');
     const wd = optionalString(args, 'working_directory');
     const timeoutSec = optionalNumber(args, 'timeout_seconds') ?? DEFAULT_TIMEOUT;
+    const background = optionalBoolean(args, 'background') ?? false;
 
     const verdict: SafetyVerdict = classifyCommand(command, ctx.session.projectRoot);
     if (verdict.kind === 'block') {
@@ -76,6 +94,20 @@ export class RunShellTool implements Tool {
       ? resolveInsideRoot(ctx.session.projectRoot, wd)
       : ctx.session.projectRoot;
 
+    if (background) {
+      const bg = await runBackground(command, cwd);
+      return {
+        summary: `started in background (pid ${bg.pid ?? 'n/a'}) in ${toRelative(ctx.session.projectRoot, cwd) || '.'}`,
+        content:
+          (bg.exited
+            ? `Process already exited (code ${bg.code ?? 'n/a'}).\n`
+            : `Process is running (pid ${bg.pid ?? 'n/a'}); it will be stopped when the session ends.\n`) +
+          (bg.output.length > 0 ? `--- startup output ---\n${bg.output}` : '(no startup output)'),
+        isError: bg.exited && bg.code !== 0,
+        metadata: { background: true, pid: bg.pid, exited: bg.exited, exitCode: bg.code },
+      };
+    }
+
     const result = await runCommand(command, cwd, timeoutSec * 1000);
     const display = trimOutput(result.stdout, result.stderr);
     const summary =
@@ -101,6 +133,56 @@ interface CommandResult {
   stdout: string;
   stderr: string;
   timedOut: boolean;
+}
+
+interface BackgroundResult {
+  pid?: number;
+  output: string;
+  exited: boolean;
+  code: number | null;
+}
+
+// Spawn a long-lived process (dev server). Captures a few seconds of startup
+// output so the agent can see early errors, then returns while it keeps
+// running. The process is killed when autocode exits.
+function runBackground(command: string, cwd: string): Promise<BackgroundResult> {
+  return new Promise((resolve) => {
+    const isWin = process.platform === 'win32';
+    const child = isWin
+      ? spawn('cmd.exe', ['/d', '/s', '/c', command], { cwd })
+      : spawn('/bin/sh', ['-c', command], { cwd });
+    bgChildren.add(child);
+    // A background process must not keep autocode's event loop alive on its
+    // own — autocode's lifetime is governed by the REPL, not the dev server.
+    child.unref();
+
+    let output = '';
+    let exited = false;
+    let code: number | null = null;
+    const cap = (d: Buffer): void => {
+      if (output.length < MAX_OUTPUT_BYTES) output += d.toString('utf8');
+    };
+    child.stdout?.on('data', (d: Buffer) => {
+      cap(d);
+      process.stdout.write(d);
+    });
+    child.stderr?.on('data', (d: Buffer) => {
+      cap(d);
+      process.stderr.write(d);
+    });
+    child.on('close', (c) => {
+      exited = true;
+      code = c;
+      bgChildren.delete(child);
+    });
+    child.on('error', (err) => {
+      exited = true;
+      output += `\n[spawn error] ${err.message}`;
+      bgChildren.delete(child);
+    });
+
+    setTimeout(() => resolve({ pid: child.pid, output, exited, code }), BACKGROUND_GRACE_MS);
+  });
 }
 
 function runCommand(command: string, cwd: string, timeoutMs: number): Promise<CommandResult> {
