@@ -1,20 +1,20 @@
 import { marked } from 'marked';
-// @ts-expect-error — no bundled types for marked-terminal in some versions.
-import TerminalRenderer from 'marked-terminal';
+// @ts-expect-error — marked-terminal v7 ships types but they don't always line up with marked v15's MarkedExtension shape.
+import { markedTerminal } from 'marked-terminal';
 
 let configured = false;
 
 function ensureConfigured(): void {
   if (configured) return;
   configured = true;
-  const renderer = new (TerminalRenderer as unknown as new (opts?: unknown) => unknown)({
-    reflowText: false,
-    width: process.stdout.columns ? Math.min(process.stdout.columns, 120) : 100,
-    showSectionPrefix: false,
-    tab: 2,
-  });
-  // marked v15 accepts a Renderer via use(); cast through unknown to keep types loose.
-  marked.use({ renderer: renderer as unknown as Parameters<typeof marked.use>[0]['renderer'] });
+  marked.use(
+    markedTerminal({
+      reflowText: false,
+      width: process.stdout.columns ? Math.min(process.stdout.columns, 120) : 100,
+      showSectionPrefix: false,
+      tab: 2,
+    }) as Parameters<typeof marked.use>[0],
+  );
 }
 
 // Render a markdown string into ANSI-formatted terminal text. Safe to call
