@@ -1,5 +1,5 @@
 import pc from 'picocolors';
-import type { SessionContext } from '../session/SessionContext.js';
+import type { SessionContext, AgentMode } from '../session/SessionContext.js';
 import { detectProjectContext, formatContextLine } from '../agent/ProjectContext.js';
 import { loadProjectInstructions } from '../agent/ProjectInstructions.js';
 import { printBanner } from './Banner.js';
@@ -24,6 +24,7 @@ export class ConsoleRenderer {
       `${pc.dim('session:')} ${ctx.sessionId}`,
       `${pc.dim('project:')} ${ctx.projectRoot}${projLine ? ' · ' + pc.cyan(projLine) : ''}`,
       `${pc.dim('model:  ')} ${ctx.model.provider} / ${ctx.model.model}`,
+      `${pc.dim('mode:   ')} ${this.modeLabel(ctx.mode)}${pc.dim('  ·  shift+tab to cycle')}`,
     ];
     if (instructions.length > 0) {
       const names = instructions.map((inst) =>
@@ -39,6 +40,24 @@ export class ConsoleRenderer {
 
   prompt(): string {
     return pc.cyan('=> ');
+  }
+
+  // A horizontal rule sized to the terminal (capped at 80).
+  hr(): string {
+    const w = Math.min(process.stdout.columns || 80, 80);
+    return pc.dim('─'.repeat(w));
+  }
+
+  // Colored mode label: planning=yellow, default=cyan, autocode=green.
+  modeLabel(mode: AgentMode): string {
+    const paint = mode === 'planning' ? pc.yellow : mode === 'autocode' ? pc.green : pc.cyan;
+    return paint(`▸ ${mode} mode`);
+  }
+
+  // The framed footer printed under a submitted prompt: lower rule + mode.
+  promptFooter(mode: AgentMode): void {
+    process.stdout.write(this.hr() + '\n');
+    process.stdout.write('  ' + this.modeLabel(mode) + '\n');
   }
 
   info(text: string): void {

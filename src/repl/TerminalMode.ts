@@ -1,9 +1,9 @@
-import { createInterface, Interface } from 'node:readline';
+import { createInterface, emitKeypressEvents, Interface } from 'node:readline';
 import { execSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { existsSync, statSync } from 'node:fs';
 
-import type { SessionContext } from '../session/SessionContext.js';
+import { nextMode, type SessionContext, type AgentMode } from '../session/SessionContext.js';
 import type { CumulativeUsage } from '../session/TranscriptStore.js';
 import type { Message } from '../llm/types.js';
 import { ConsoleRenderer } from './ConsoleRenderer.js';
@@ -26,6 +26,7 @@ export interface AgentHandler {
 export class TerminalMode {
   private readonly rl: Interface;
   private exiting = false;
+  private busy = false;
 
   constructor(
     private readonly ctx: SessionContext,
@@ -38,17 +39,53 @@ export class TerminalMode {
       terminal: true,
       prompt: this.renderer.prompt(),
     });
+    // Shift+Tab cycles the workflow mode. readline (terminal:true) already
+    // puts stdin in raw mode; a sibling keypress listener is safe.
+    emitKeypressEvents(process.stdin);
+    process.stdin.on('keypress', (_str, key) => {
+      if (key && key.name === 'tab' && key.shift) this.cycleMode();
+    });
+  }
+
+  // Print the upper rule, then the readline prompt row.
+  private showPrompt(): void {
+    process.stdout.write(this.renderer.hr() + '\n');
+    this.rl.prompt();
+  }
+
+  // Shift+Tab handler: advance the mode and give immediate feedback.
+  private cycleMode(): void {
+    this.ctx.mode = nextMode(this.ctx.mode);
+    if (this.busy) {
+      // Mid-turn: just note it; the new mode applies to the next tool call.
+      this.renderer.dim(`  ▸ mode → ${this.ctx.mode}`);
+      return;
+    }
+    // At the prompt: clear the input row, toast the change, re-prompt with
+    // the in-progress text preserved (readline may insert a stray tab).
+    const pending = this.rl.line.replace(/\t/g, '');
+    process.stdout.write('\r\x1b[2K');
+    this.renderer.dim(`  ▸ mode → ${this.ctx.mode}`);
+    this.rl.prompt();
+    if (pending) this.rl.write(pending);
   }
 
   async run(): Promise<number> {
     this.renderer.printHeader(this.ctx);
-    this.rl.prompt();
+    this.showPrompt();
 
     return new Promise<number>((resolveExit) => {
       this.rl.on('line', (line) => {
         const parsed = parse(line);
+        if (parsed.kind === 'empty') {
+          this.showPrompt();
+          return;
+        }
+        this.renderer.promptFooter(this.ctx.mode);
+        this.busy = true;
         void this.dispatch(parsed).finally(() => {
-          if (!this.exiting) this.rl.prompt();
+          this.busy = false;
+          if (!this.exiting) this.showPrompt();
         });
       });
 
@@ -62,7 +99,7 @@ export class TerminalMode {
       process.on('SIGINT', () => {
         this.agent.stop();
         this.renderer.dim('(stopped — press /exit to quit)');
-        this.rl.prompt();
+        this.showPrompt();
       });
     });
   }
@@ -93,7 +130,7 @@ export class TerminalMode {
       | 'cost'
       | 'diff'
       | 'auth'
-      | 'plan'
+      | 'mode'
       | 'mcp',
     args: string[],
   ): Promise<void> {
@@ -136,8 +173,8 @@ export class TerminalMode {
       case 'auth':
         await runAuth(this.renderer);
         return;
-      case 'plan':
-        this.handlePlan(args);
+      case 'mode':
+        this.handleMode(args);
         return;
       case 'mcp':
         this.handleMcp();
@@ -175,7 +212,7 @@ export class TerminalMode {
       '/cost                          Show session cost estimate',
       '/diff                          Show uncommitted git changes',
       '/auth                          Configure an API key',
-      '/plan [on|off]                 Toggle approval-before-edit mode',
+      '/mode [planning|default|autocode]  Show or set the workflow mode (or shift+tab)',
       '/mcp                           List configured MCP servers and their tools',
       '/stop                          Cancel current task',
       '/exit                          Close autocode',
@@ -187,7 +224,7 @@ export class TerminalMode {
     this.renderer.info(`session: ${this.ctx.sessionId}`);
     this.renderer.info(`project: ${this.ctx.projectRoot}`);
     this.renderer.info(`model:   ${this.ctx.model.provider} / ${this.ctx.model.model}`);
-    this.renderer.info(`plan:    ${this.ctx.planMode ? 'on (approval required)' : 'off (auto)'}`);
+    this.renderer.info(`mode:    ${this.ctx.mode}`);
     this.renderer.info(`started: ${this.ctx.startedAt}`);
   }
 
@@ -268,20 +305,17 @@ export class TerminalMode {
     }
   }
 
-  private handlePlan(args: string[]): void {
+  private handleMode(args: string[]): void {
     if (args.length === 0) {
-      this.renderer.info(`plan mode: ${this.ctx.planMode ? 'ON (approval required)' : 'OFF (auto)'}`);
+      this.renderer.info(`mode: ${this.ctx.mode} (cycle with shift+tab)`);
       return;
     }
     const arg = args[0]!.toLowerCase();
-    if (arg === 'on' || arg === 'true' || arg === '1') {
-      this.ctx.planMode = true;
-      this.renderer.info('plan mode: ON — file edits and shell commands require approval');
-    } else if (arg === 'off' || arg === 'false' || arg === '0') {
-      this.ctx.planMode = false;
-      this.renderer.info('plan mode: OFF — auto-approve');
+    if (arg === 'planning' || arg === 'default' || arg === 'autocode') {
+      this.ctx.mode = arg as AgentMode;
+      this.renderer.info(`mode → ${this.ctx.mode}`);
     } else {
-      this.renderer.error(`usage: /plan [on|off]`);
+      this.renderer.error('usage: /mode [planning|default|autocode]');
     }
   }
 }

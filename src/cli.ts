@@ -29,7 +29,7 @@ program
   .option('--project-root <path>', 'project root (defaults to cwd)')
   .option('--provider <name>', 'LLM provider (anthropic|xai|openai|openrouter)', process.env.AUTOMAX_PROVIDER ?? 'xai')
   .option('--model <name>', 'model id (defaults per provider)', process.env.AUTOMAX_MODEL)
-  .option('--plan-mode', 'require approval before file edits and shell commands', false)
+  .option('--plan-mode', 'start in planning mode (read-only — agent plans, makes no changes)', false)
   .option('-p, --print <prompt>', 'run a single task non-interactively and exit')
   .option('--resume <sessionId>', 'resume a specific prior session')
   .option('-c, --continue', 'resume the most recent prior session', false)
@@ -71,6 +71,11 @@ program
       ? resumedMeta.model
       : (opts.model ?? defaultModelFor(opts.provider));
 
+    // Headless runs auto-accept (no interactive approval is possible);
+    // --plan-mode starts in planning; otherwise default (review each change).
+    const headless = typeof opts.print === 'string';
+    const initialMode = headless ? 'autocode' : opts.planMode ? 'planning' : 'default';
+
     const ctx: SessionContext = {
       sessionId,
       projectRoot: root,
@@ -78,7 +83,7 @@ program
       sessionDir: join(sessionsDir(), sessionId),
       model: { provider, model },
       startedAt: new Date().toISOString(),
-      planMode: Boolean(opts.planMode),
+      mode: initialMode,
     };
 
     const renderer = new ConsoleRenderer();
@@ -91,7 +96,6 @@ program
       renderer.warn(`(no resumable session for ${resumeRequested} — starting fresh)`);
     }
 
-    const headless = typeof opts.print === 'string';
     if (headless) {
       renderer.dim(`session ${ctx.sessionId} · ${ctx.sessionDir}`);
     }

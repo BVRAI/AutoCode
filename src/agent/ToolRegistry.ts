@@ -12,6 +12,7 @@ import { GrepTool } from '../tools/grep.js';
 import { TodoWriteTool } from '../tools/todoWrite.js';
 import { WebFetchTool } from '../tools/webFetch.js';
 import { WebSearchTool } from '../tools/webSearch.js';
+import { OpenInBrowserTool } from '../tools/openInBrowser.js';
 import { TaskTool } from '../tools/task.js';
 
 export class ToolRegistry {
@@ -29,6 +30,7 @@ export class ToolRegistry {
     this.register(new TodoWriteTool());
     this.register(new WebFetchTool());
     this.register(new WebSearchTool());
+    this.register(new OpenInBrowserTool());
     this.register(new TaskTool());
   }
 

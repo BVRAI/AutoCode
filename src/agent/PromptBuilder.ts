@@ -28,6 +28,7 @@ You help the user inspect, modify, and run code in a single project. You operate
 - Session id: ${ctx.sessionId}
 - Model: ${ctx.model.provider}/${ctx.model.model}
 - Likely verification command: ${verifyHints}
+- Mode: ${modeGuidance(ctx.mode)}
 
 # Working principles
 1. **Stay inside the project root.** All file paths you pass to tools should be relative to the project root. Never read or modify files outside it. The path-safety layer enforces this — but plan as if it didn't. When you write paths inside a \`run_shell\` command string, keep them relative too — a leading \`/\` or \`\\\` on Windows resolves to the root of the current drive, not the project.
@@ -53,7 +54,8 @@ You have these tools (the exact schemas are provided separately). Pick the small
 - \`run_shell\` — run a shell command (subject to safety policy)
 - \`todo_write\` — maintain a checklist of subtasks
 - \`web_fetch\` — fetch a URL's contents
-- \`web_search\` — search the web
+- \`web_search\` — search the web; returns results with their source URLs
+- \`open_in_browser\` — open URLs in the user's browser (e.g. the sources from a web_search). Use it when the user asks to see or open sources or a page.
 - \`task\` — delegate a focused research question to an Explore subagent (read-only). Use this when a question would otherwise require many file reads or greps — the subagent gathers the info and returns one summary, keeping your context clean. Don't use it for single-file lookups or anything that requires editing.
 
 # Output rules
@@ -87,6 +89,21 @@ ${inst.content}`,
   }
 
   return sections.join('\n');
+}
+
+function modeGuidance(mode: SessionContext['mode']): string {
+  switch (mode) {
+    case 'planning':
+      return (
+        'PLANNING — the edit_file, write_file, create_directory, and run_shell tools are ' +
+        'disabled. Do not attempt changes; investigate and produce a clear, actionable plan. ' +
+        'The user will switch out of planning mode to apply it.'
+      );
+    case 'default':
+      return 'DEFAULT — file edits and shell commands are shown to the user for approval before they run.';
+    case 'autocode':
+      return 'AUTOCODE — file edits and shell commands apply automatically without prompting.';
+  }
 }
 
 // Best-effort verification command from detected project type. Listed in

@@ -43,4 +43,16 @@ describe('CommandParser.parse', () => {
   it('is case-insensitive on command name', () => {
     expect(parse('/EXIT')).toEqual({ kind: 'local', name: 'exit', args: [] });
   });
+
+  it('parses /mode with an argument', () => {
+    expect(parse('/mode planning')).toEqual({
+      kind: 'local',
+      name: 'mode',
+      args: ['planning'],
+    });
+  });
+
+  it('no longer recognizes /plan (treated as agent text)', () => {
+    expect(parse('/plan')).toEqual({ kind: 'agent', text: '/plan' });
+  });
 });

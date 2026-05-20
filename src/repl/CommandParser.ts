@@ -11,7 +11,7 @@ export type LocalCommandName =
   | 'cost'
   | 'diff'
   | 'auth'
-  | 'plan'
+  | 'mode'
   | 'mcp';
 
 export interface LocalCommand {
@@ -44,7 +44,7 @@ const KNOWN: ReadonlySet<LocalCommandName> = new Set([
   'cost',
   'diff',
   'auth',
-  'plan',
+  'mode',
   'mcp',
 ]);
 

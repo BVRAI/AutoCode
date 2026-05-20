@@ -1,6 +1,6 @@
 import type { ConsoleRenderer } from '../repl/ConsoleRenderer.js';
 import type { TranscriptStore, CumulativeUsage } from '../session/TranscriptStore.js';
-import type { SessionContext } from '../session/SessionContext.js';
+import type { SessionContext, AgentMode } from '../session/SessionContext.js';
 import type { ToolExecutionContext } from '../tools/types.js';
 import type { ContentBlock, Message, StreamEvent } from '../llm/types.js';
 import { LlmRouter, type ProviderName } from '../llm/Router.js';
@@ -17,8 +17,24 @@ const LOOP_DETECT_WINDOW = 10;
 const LOOP_DETECT_THRESHOLD = 3;
 const MAX_RETRIES_PER_TOOL = 3;
 
-// Tools that get an approval gate when planMode is on.
-const PLAN_MODE_GATED_TOOLS = new Set(['edit_file', 'write_file', 'run_shell']);
+// Tools that change the project — gated according to the session mode.
+const MUTATING_TOOLS = new Set(['edit_file', 'write_file', 'create_directory', 'run_shell']);
+
+// How a tool call should be handled given the current mode:
+//  - block:   refuse (planning mode — read-only).
+//  - approve: ask the user before running (default mode review).
+//  - allow:   run with no gate.
+export function gateFor(mode: AgentMode, toolName: string): 'block' | 'approve' | 'allow' {
+  if (!MUTATING_TOOLS.has(toolName)) return 'allow';
+  switch (mode) {
+    case 'planning':
+      return 'block';
+    case 'default':
+      return 'approve';
+    case 'autocode':
+      return 'allow';
+  }
+}
 
 export interface AgentDeps {
   renderer: ConsoleRenderer;
@@ -214,8 +230,22 @@ export class AgentLoop {
         recentToolSigs.push(sig);
         if (recentToolSigs.length > LOOP_DETECT_WINDOW) recentToolSigs.shift();
 
-        // Plan-mode gate: ask for approval on destructive tools.
-        if (ctx.planMode && PLAN_MODE_GATED_TOOLS.has(tu.name)) {
+        // Mode gate: planning blocks mutating tools; default asks first.
+        const gate = gateFor(ctx.mode, tu.name);
+        if (gate === 'block') {
+          toolResults.push({
+            type: 'tool_result',
+            toolUseId: tu.id,
+            content:
+              'Planning mode is active — file edits and commands are disabled. ' +
+              'Produce a clear plan describing the changes instead; the user can switch ' +
+              'out of planning mode (Shift+Tab) to apply it.',
+            isError: true,
+          });
+          this.deps.renderer.dim(`  ✗ ${tu.name} blocked (planning mode)`);
+          continue;
+        }
+        if (gate === 'approve') {
           const preview = formatToolPreview(tu.name, tu.input);
           const ok = await requestApproval(`Run ${tu.name}?`, preview);
           if (!ok) {
@@ -225,7 +255,7 @@ export class AgentLoop {
               content: 'User declined this tool call. Adapt your plan.',
               isError: true,
             });
-            this.deps.renderer.dim(`✗ ${tu.name} declined`);
+            this.deps.renderer.dim(`  ✗ ${tu.name} declined`);
             continue;
           }
         }
@@ -250,7 +280,7 @@ export class AgentLoop {
           summary: result.summary,
           error: result.isError ? result.content.slice(0, 500) : undefined,
         });
-        this.deps.renderer.dim(`→ ${tu.name}  ${result.summary}  (${dt}ms)`);
+        this.deps.renderer.dim(`  → ${tu.name}  ${result.summary}  (${dt}ms)`);
 
         const md = result.metadata as { before?: string; after?: string; path?: string } | undefined;
         if (!result.isError && md && typeof md.before === 'string' && typeof md.after === 'string') {
@@ -322,7 +352,7 @@ export class AgentLoop {
     if (cacheTotal > 0) parts.push(`cache: ${cachePct}%`);
     if (todos.length > 0) parts.push(`${done}/${todos.length} todos`);
     if (cost > 0) parts.push(formatUsd(cost));
-    this.deps.renderer.status(`(${parts.join(' · ')})`);
+    this.deps.renderer.status(`  (${parts.join(' · ')})`);
   }
 }
 
