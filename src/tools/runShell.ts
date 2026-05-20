@@ -41,7 +41,7 @@ export class RunShellTool implements Tool {
     const wd = optionalString(args, 'working_directory');
     const timeoutSec = optionalNumber(args, 'timeout_seconds') ?? DEFAULT_TIMEOUT;
 
-    const verdict: SafetyVerdict = classifyCommand(command);
+    const verdict: SafetyVerdict = classifyCommand(command, ctx.session.projectRoot);
     if (verdict.kind === 'block') {
       return {
         summary: `blocked: ${verdict.reason}`,

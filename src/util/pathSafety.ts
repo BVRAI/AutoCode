@@ -1,5 +1,6 @@
 import { realpathSync, statSync, existsSync } from 'node:fs';
 import { isAbsolute, normalize, relative, resolve, sep } from 'node:path';
+import { fencedReason } from '../safety/fencedZones.js';
 
 export class PathSafetyError extends Error {
   constructor(message: string) {
@@ -25,6 +26,12 @@ export function resolveInsideRoot(projectRoot: string, requested: string): strin
   // Also reject if rel happens to be absolute on Windows after relative()
   if (isAbsolute(rel)) {
     throw new PathSafetyError(`path escapes project root: ${requested}`);
+  }
+  // Defense in depth: even an in-root path is refused if it lands in a fenced
+  // system/credential zone (e.g. autocode launched inside Program Files).
+  const fenced = fencedReason(real);
+  if (fenced) {
+    throw new PathSafetyError(`path is in a protected zone (${fenced}): ${requested}`);
   }
   return real;
 }

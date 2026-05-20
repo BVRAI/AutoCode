@@ -60,3 +60,41 @@ describe('SafetyPolicy.classifyCommand', () => {
     if (v.kind === 'confirm') expect(v.reason).toMatch(/force push/i);
   });
 });
+
+describe('SafetyPolicy path-aware pass', () => {
+  const root = process.platform === 'win32' ? 'C:\\proj' : '/proj';
+  const fenced =
+    process.platform === 'win32'
+      ? (process.env.SystemRoot || 'C:\\Windows') + '\\Temp'
+      : '/etc/cron.d';
+
+  it('blocks a destructive command escaping the project root', () => {
+    expect(classifyCommand('rm -rf ../sibling', root).kind).toBe('block');
+  });
+
+  it('blocks a destructive command targeting a fenced system zone', () => {
+    expect(classifyCommand(`rm -rf ${fenced}`, root).kind).toBe('block');
+  });
+
+  it('blocks a redirect that escapes the project root', () => {
+    expect(classifyCommand('echo hi > ../../outside.txt', root).kind).toBe('block');
+  });
+
+  it('blocks a destructive command with an unresolved path variable', () => {
+    expect(classifyCommand('rm -rf $HOME/.cache', root).kind).toBe('block');
+  });
+
+  it('allows an in-project destructive path (still confirm for rm -rf)', () => {
+    expect(classifyCommand('rm -rf src/old', root).kind).toBe('confirm');
+  });
+
+  it('allows redirect to a null sink', () => {
+    const sink = process.platform === 'win32' ? 'NUL' : '/dev/null';
+    expect(classifyCommand(`npm test > ${sink}`, root).kind).toBe('allow');
+  });
+
+  it('skips the path pass when no project root is given (back-compat)', () => {
+    // rm -rf still matches SOFT_CONFIRM, but the out-of-root block needs a root
+    expect(classifyCommand('rm -rf ../sibling').kind).toBe('confirm');
+  });
+});
