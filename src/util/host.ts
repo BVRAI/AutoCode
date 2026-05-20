@@ -1,3 +1,7 @@
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { dataDir } from './paths.js';
+
 // Helpers for cooperating with a host process (Automax V6) that runs
 // autocode inside a terminal. When hosted, autocode emits structured signal
 // lines the host can act on; standalone, those code paths fall back to
@@ -12,6 +16,42 @@ export function isAutomaxHosted(): boolean {
 // `@@autocode:` prefix and filters these lines out of the visible terminal.
 export function emitHostSignal(type: string, payload: unknown): void {
   process.stdout.write(`@@autocode:${type} ${JSON.stringify(payload)}\n`);
+}
+
+let requestSeq = 0;
+
+// Make a request to the Automax host and wait for a result. autocode emits
+// `@@autocode:<type> {requestId, resultPath, ...}`; the host does the work
+// and writes a JSON result to `resultPath`, which autocode polls for. This
+// file-based round-trip avoids racing the REPL's readline on stdin and works
+// the same in interactive and headless mode. Returns null on timeout.
+export async function requestHostResult(
+  type: string,
+  payload: Record<string, unknown>,
+  timeoutMs = 30_000,
+): Promise<Record<string, unknown> | null> {
+  const ioDir = join(dataDir(), 'host-io');
+  mkdirSync(ioDir, { recursive: true });
+  requestSeq += 1;
+  const requestId = `${Date.now().toString(36)}-${requestSeq}`;
+  const resultPath = join(ioDir, `${requestId}.result.json`);
+  emitHostSignal(type, { requestId, resultPath, ...payload });
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (existsSync(resultPath)) {
+      try {
+        const data = JSON.parse(readFileSync(resultPath, 'utf8')) as Record<string, unknown>;
+        rmSync(resultPath, { force: true });
+        return data;
+      } catch {
+        rmSync(resultPath, { force: true });
+        return null;
+      }
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  return null;
 }
 
 // The platform command to open a URL in the user's default browser.

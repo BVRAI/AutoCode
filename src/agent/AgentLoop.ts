@@ -3,7 +3,7 @@ import type { TranscriptStore, CumulativeUsage } from '../session/TranscriptStor
 import type { SessionContext, AgentMode } from '../session/SessionContext.js';
 import type { CheckpointStore } from '../session/CheckpointStore.js';
 import type { ToolExecutionContext } from '../tools/types.js';
-import type { ContentBlock, Message, StreamEvent } from '../llm/types.js';
+import type { ContentBlock, ImageBlock, Message, StreamEvent } from '../llm/types.js';
 import { LlmRouter, type ProviderName } from '../llm/Router.js';
 import { ToolRegistry } from './ToolRegistry.js';
 import { buildSystemPrompt } from './PromptBuilder.js';
@@ -271,6 +271,7 @@ export class AgentLoop {
       }
 
       const toolResults: ContentBlock[] = [];
+      const toolImages: ImageBlock[] = [];
       for (const tu of toolUses) {
         if (tu.type !== 'tool_use') continue;
         const sig = `${tu.name}:${stableStringify(tu.input)}`;
@@ -340,6 +341,12 @@ export class AgentLoop {
           content: result.content,
           isError: result.isError,
         });
+        // A tool may return an image (e.g. capture_screenshot) — collect it
+        // so the agent can actually see it on the next turn.
+        const img = (result.metadata as { image?: unknown } | undefined)?.image;
+        if (img && typeof img === 'object' && (img as { type?: string }).type === 'image') {
+          toolImages.push(img as ImageBlock);
+        }
       }
 
       const loopOffender = detectLoop(recentToolSigs, LOOP_DETECT_THRESHOLD);
@@ -370,6 +377,14 @@ export class AgentLoop {
       }
 
       this.conversation.push({ role: 'user', content: toolResults });
+      // Images returned by tools ride in a follow-up user message so the
+      // model can see them (tool_result blocks are text-only here).
+      if (toolImages.length > 0) {
+        this.conversation.push({
+          role: 'user',
+          content: [...toolImages, { type: 'text', text: '(images returned by the tool calls above)' }],
+        });
+      }
     }
 
     this.deps.renderer.warn(`(stopped after ${MAX_ITERATIONS} iterations)`);
