@@ -19,11 +19,12 @@ describe('parseYes', () => {
 });
 
 describe('AutoDenyPrompter', () => {
-  it('declines confirms, returns empty answers and no selection', async () => {
+  it('declines confirms, returns empty answers, no selection, and declines approvals', async () => {
     const p = new AutoDenyPrompter();
     expect(await p.confirm('run it?')).toBe(false);
     expect(await p.ask('key?')).toBe('');
     expect(await p.choose('q', ['a', 'b'], false)).toEqual([]);
+    expect((await p.approve('edit?')).decision).toBe('decline');
   });
 });
 
@@ -31,9 +32,15 @@ describe('PrompterRef', () => {
   it('delegates to the swapped-in implementation', async () => {
     const ref = new PrompterRef(new AutoDenyPrompter());
     expect(await ref.confirm('x')).toBe(false);
-    ref.use({ confirm: async () => true, ask: async () => 'hi', choose: async () => [1] });
+    ref.use({
+      confirm: async () => true,
+      ask: async () => 'hi',
+      choose: async () => [1],
+      approve: async () => ({ decision: 'accept' }),
+    });
     expect(await ref.confirm('x')).toBe(true);
     expect(await ref.ask('x')).toBe('hi');
     expect(await ref.choose('q', ['a', 'b'], false)).toEqual([1]);
+    expect((await ref.approve('x')).decision).toBe('accept');
   });
 });

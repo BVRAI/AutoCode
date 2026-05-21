@@ -12,6 +12,7 @@ import { renderUnifiedDiff } from '../util/diff.js';
 import { estimateCost, formatUsd } from '../util/pricing.js';
 import { shouldAutoCompact } from '../util/contextWindow.js';
 import type { SubagentFactory } from '../tools/types.js';
+import type { ApproveVerdict } from '../repl/Prompter.js';
 
 const MAX_ITERATIONS = 32;
 const LOOP_DETECT_WINDOW = 10;
@@ -43,6 +44,8 @@ export interface AgentDeps {
   router: LlmRouter;
   registry: ToolRegistry;
   confirm: (prompt: string) => Promise<boolean>;
+  // Approve / decline / revise an edit or command (default-mode gate).
+  approve: (label: string) => Promise<ApproveVerdict>;
   // Ask the user a multiple-choice question (the `ask_user` tool).
   choose?: (question: string, options: string[], multiSelect: boolean) => Promise<number[]>;
   // Optional — when present, the `task` tool will use this to spawn
@@ -300,15 +303,14 @@ export class AgentLoop {
           this.deps.renderer.dim('  --- preview ---');
           this.deps.renderer.info(preview);
           this.deps.renderer.dim('  ---------------');
-          const ok = await this.deps.confirm(`Run ${tu.name}? [Y/n]`);
-          if (!ok) {
-            toolResults.push({
-              type: 'tool_result',
-              toolUseId: tu.id,
-              content: 'User declined this tool call. Adapt your plan.',
-              isError: true,
-            });
-            this.deps.renderer.dim(`  ✗ ${tu.name} declined`);
+          const verdict = await this.deps.approve(`Run ${tu.name}?`);
+          if (verdict.decision !== 'accept') {
+            const content =
+              verdict.decision === 'revise'
+                ? `User declined this tool call and asks you to revise the approach: ${verdict.guidance || '(no guidance given)'}`
+                : 'User declined this tool call. Adapt your plan.';
+            toolResults.push({ type: 'tool_result', toolUseId: tu.id, content, isError: true });
+            this.deps.renderer.dim(`  ✗ ${tu.name} ${verdict.decision}`);
             continue;
           }
         }

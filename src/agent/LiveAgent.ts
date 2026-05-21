@@ -37,6 +37,7 @@ export class LiveAgent implements AgentHandler {
       router,
       registry: this.registry,
       confirm: (message) => opts.prompter.confirm(message),
+      approve: (label) => opts.prompter.approve(label),
       choose: (question, options, multiSelect) => opts.prompter.choose(question, options, multiSelect),
       subagentFactory: (input) => runner.run(input),
       checkpoints: this.checkpoints,

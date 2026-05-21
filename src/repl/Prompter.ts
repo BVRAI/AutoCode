@@ -6,12 +6,20 @@ import type { Screen } from './Screen.js';
 // One interactive-input authority. Every yes/no confirm and free-text
 // question goes through a Prompter so the LineEditor stays the sole owner of
 // stdin in the TUI (no nested readline fighting it).
+// The outcome of an edit/command approval: apply it, skip it, or skip it
+// with guidance the agent should use to revise its approach.
+export type ApproveVerdict = { decision: 'accept' | 'decline' | 'revise'; guidance?: string };
+
+const APPROVE_OPTIONS = ['Accept', 'Decline', 'Revise — give the agent more guidance'];
+
 export interface Prompter {
   confirm(message: string): Promise<boolean>;
   ask(message: string): Promise<string>;
   // Present a multiple-choice question; resolves with the selected option
   // indices ([] on cancel / no selection).
   choose(question: string, options: string[], multiSelect: boolean): Promise<number[]>;
+  // Present an action for approval — accept / decline / revise.
+  approve(label: string): Promise<ApproveVerdict>;
 }
 
 export function parseYes(answer: string): boolean {
@@ -30,6 +38,9 @@ export class AutoDenyPrompter implements Prompter {
   }
   async choose(): Promise<number[]> {
     return [];
+  }
+  async approve(): Promise<ApproveVerdict> {
+    return { decision: 'decline' };
   }
 }
 
@@ -64,6 +75,13 @@ export class PlainPrompter implements Prompter {
     );
     return parseChoiceList(ans, options.length).slice(0, multiSelect ? options.length : 1);
   }
+  async approve(label: string): Promise<ApproveVerdict> {
+    const list = APPROVE_OPTIONS.map((o, i) => `  ${i + 1}) ${o}`).join('\n');
+    const ans = (await this.ask(`${label}\n${list}\nchoice: `)).trim();
+    if (ans === '1') return { decision: 'accept' };
+    if (ans === '3') return { decision: 'revise', guidance: await this.ask('Guidance: ') };
+    return { decision: 'decline' };
+  }
 }
 
 // TUI: print the question into the output region, then borrow the LineEditor
@@ -95,6 +113,22 @@ export class TuiPrompter implements Prompter {
     }
   }
 
+  async approve(label: string): Promise<ApproveVerdict> {
+    this.renderer.info(label);
+    let picked: number[];
+    try {
+      picked = await this.editor.chooseOnce(APPROVE_OPTIONS, false);
+    } finally {
+      this.screen.moveToOutputBottom();
+    }
+    if (picked[0] === 0) return { decision: 'accept' };
+    if (picked[0] === 2) {
+      const g = await this.askRaw('Describe how to revise:');
+      return { decision: 'revise', guidance: g === ANSWER_CANCELLED ? '' : g };
+    }
+    return { decision: 'decline' };
+  }
+
   private async askRaw(message: string): Promise<string> {
     this.renderer.info(message);
     try {
@@ -124,5 +158,8 @@ export class PrompterRef implements Prompter {
   }
   choose(question: string, options: string[], multiSelect: boolean): Promise<number[]> {
     return this.impl.choose(question, options, multiSelect);
+  }
+  approve(label: string): Promise<ApproveVerdict> {
+    return this.impl.approve(label);
   }
 }

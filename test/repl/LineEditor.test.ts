@@ -113,11 +113,12 @@ describe('LineEditor', () => {
     expect(ed.text).toBe('main prompt'); // restored
   });
 
-  it('askOnce resolves with ANSWER_CANCELLED on Ctrl+C', async () => {
-    const { ed } = make();
+  it('askOnce resolves with ANSWER_CANCELLED on Ctrl+C and interrupts the turn', async () => {
+    const { ed, cb } = make();
     const answer = ed.askOnce();
     ed.feedKey(undefined, { name: 'c', ctrl: true });
     expect(await answer).toBe(ANSWER_CANCELLED);
+    expect(cb.interrupts).toBe(1);
   });
 
   it('Shift+Tab does not cycle the mode while answering', async () => {
@@ -159,12 +160,13 @@ describe('LineEditor', () => {
     expect(await choice).toEqual([2]);
   });
 
-  it('chooseOnce: Ctrl+C resolves with no selection and restores input', async () => {
-    const { ed } = make();
+  it('chooseOnce: Ctrl+C resolves empty, restores input, and interrupts the turn', async () => {
+    const { ed, cb } = make();
     type(ed, 'kept');
     const choice = ed.chooseOnce(['a', 'b'], false);
     ed.feedKey(undefined, { name: 'c', ctrl: true });
     expect(await choice).toEqual([]);
     expect(ed.text).toBe('kept');
+    expect(cb.interrupts).toBe(1);
   });
 });

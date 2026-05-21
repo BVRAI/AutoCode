@@ -121,7 +121,9 @@ export class LineEditor {
     if (this.choice) return this.feedChoiceKey(str, key);
     if (key) {
       if (key.ctrl && key.name === 'c') {
-        if (this.pending) return this.resolveAnswer(ANSWER_CANCELLED);
+        // During an answer prompt, Ctrl+C both cancels the prompt AND
+        // interrupts the turn — so the user is never trapped in a loop.
+        if (this.pending) this.resolveAnswer(ANSWER_CANCELLED);
         return this.cb.onInterrupt();
       }
       if (key.name === 'return' || key.name === 'enter') {
@@ -150,7 +152,11 @@ export class LineEditor {
   private feedChoiceKey(str: string | undefined, key: KeyEvent | undefined): void {
     const c = this.choice!;
     if (key) {
-      if (key.ctrl && key.name === 'c') return this.resolveChoice([]);
+      if (key.ctrl && key.name === 'c') {
+        // Cancel the picker AND interrupt the turn.
+        this.resolveChoice([]);
+        return this.cb.onInterrupt();
+      }
       if (key.name === 'up') {
         c.highlight = Math.max(0, c.highlight - 1);
         return this.cb.onChange();
