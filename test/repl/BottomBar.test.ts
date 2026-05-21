@@ -66,4 +66,24 @@ describe('renderBar', () => {
     expect(renderBar(base({ queued: 2 })).rows.at(-1)).toContain('2 queued');
     expect(renderBar(base({ queued: 0 })).rows.at(-1)).not.toContain('queued');
   });
+
+  it('renders a single-select picker with a highlight marker', () => {
+    const l = renderBar(
+      base({ choice: { options: ['Red', 'Green', 'Blue'], highlight: 1, checked: new Set(), multiSelect: false } }),
+    );
+    // upper rule + 3 options + lower rule + status
+    expect(l.footerHeight).toBe(6);
+    expect(plain(l.rows[1]!)).toContain('A) Red');
+    expect(plain(l.rows[2]!)).toContain('> ');
+    expect(plain(l.rows[2]!)).toContain('B) Green');
+    expect(l.cursorRow).toBe(2); // highlighted option row
+  });
+
+  it('renders a multi-select picker with checkboxes', () => {
+    const l = renderBar(
+      base({ choice: { options: ['x', 'y'], highlight: 0, checked: new Set([1]), multiSelect: true } }),
+    );
+    expect(plain(l.rows[1]!)).toContain('[ ] A) x');
+    expect(plain(l.rows[2]!)).toContain('[x] B) y');
+  });
 });

@@ -34,6 +34,9 @@ export interface ToolExecutionContext {
   // Snapshot store — file tools record before-state here so edits are
   // undoable and deletes are recoverable from the trash.
   checkpoint?: CheckpointStore;
+  // Ask the user a multiple-choice question — resolves with the selected
+  // option indices. Absent when there is no interactive user (headless).
+  choose?: (question: string, options: string[], multiSelect: boolean) => Promise<number[]>;
 }
 
 export type JsonSchema = {

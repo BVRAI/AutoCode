@@ -12,6 +12,13 @@ export interface BarUsage {
   costText: string; // pre-formatted, e.g. "$0.06" or ''
 }
 
+export interface ChoiceView {
+  options: string[];
+  highlight: number;
+  checked: Set<number>;
+  multiSelect: boolean;
+}
+
 export interface BarState {
   input: string;
   cursor: number; // index into input
@@ -20,6 +27,7 @@ export interface BarState {
   usage: BarUsage;
   queued: number;
   busy: boolean;
+  choice?: ChoiceView; // when set, the bar shows a multiple-choice picker
 }
 
 export interface BarLayout {
@@ -35,6 +43,8 @@ export interface BarLayout {
 export function renderBar(state: BarState): BarLayout {
   const cols = Math.max(20, state.columns);
   const rule = pc.dim('─'.repeat(cols));
+
+  if (state.choice) return renderChoice(state, cols, rule);
 
   // Wrap "=> " + input into display rows.
   const full = PROMPT + state.input;
@@ -62,6 +72,31 @@ export function renderBar(state: BarState): BarLayout {
     footerHeight: rows.length,
     cursorRow: 1 + (cursorRowAll - start), // +1 for the upper rule
     cursorCol: cursorColAll,
+  };
+}
+
+// The footer as a multiple-choice picker: rule, one row per option, rule,
+// a mode + hint status line.
+function renderChoice(state: BarState, cols: number, rule: string): BarLayout {
+  const c = state.choice!;
+  const optionRows = c.options.map((opt, i) => {
+    const marker = i === c.highlight ? '>' : ' ';
+    const box = c.multiSelect ? `[${c.checked.has(i) ? 'x' : ' '}] ` : '';
+    const letter = String.fromCharCode(65 + i);
+    const raw = `${marker} ${box}${letter}) ${opt}`.slice(0, cols);
+    return i === c.highlight ? pc.cyan(raw) : raw;
+  });
+  const paint = state.mode === 'planning' ? pc.yellow : state.mode === 'autocode' ? pc.green : pc.cyan;
+  const hint = c.multiSelect ? '↑↓ move · space check · enter submit' : '↑↓ move · enter select';
+  const left = `▸ ${state.mode} mode`;
+  const gap = Math.max(1, cols - left.length - hint.length);
+  const status = paint(left) + ' '.repeat(gap) + pc.dim(hint);
+  const rows = [rule, ...optionRows, rule, status];
+  return {
+    rows,
+    footerHeight: rows.length,
+    cursorRow: 1 + c.highlight, // +1 for the upper rule
+    cursorCol: 0,
   };
 }
 

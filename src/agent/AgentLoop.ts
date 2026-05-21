@@ -43,6 +43,8 @@ export interface AgentDeps {
   router: LlmRouter;
   registry: ToolRegistry;
   confirm: (prompt: string) => Promise<boolean>;
+  // Ask the user a multiple-choice question (the `ask_user` tool).
+  choose?: (question: string, options: string[], multiSelect: boolean) => Promise<number[]>;
   // Optional — when present, the `task` tool will use this to spawn
   // subagents. AgentLoop wraps it to also fold subagent usage into the
   // parent's cumulative counters and to display a spinner.
@@ -158,6 +160,7 @@ export class AgentLoop {
     const toolExecCtx: ToolExecutionContext = {
       session: ctx,
       confirm: this.deps.confirm,
+      choose: this.deps.choose,
       checkpoint: this.deps.checkpoints,
       depth: 0,
       subagentFactory: this.deps.subagentFactory

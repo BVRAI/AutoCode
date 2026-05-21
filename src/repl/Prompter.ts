@@ -9,6 +9,9 @@ import type { Screen } from './Screen.js';
 export interface Prompter {
   confirm(message: string): Promise<boolean>;
   ask(message: string): Promise<string>;
+  // Present a multiple-choice question; resolves with the selected option
+  // indices ([] on cancel / no selection).
+  choose(question: string, options: string[], multiSelect: boolean): Promise<number[]>;
 }
 
 export function parseYes(answer: string): boolean {
@@ -25,6 +28,19 @@ export class AutoDenyPrompter implements Prompter {
   async ask(): Promise<string> {
     return '';
   }
+  async choose(): Promise<number[]> {
+    return [];
+  }
+}
+
+// Parse a comma/space-separated list of 1-based option numbers into indices.
+function parseChoiceList(answer: string, count: number): number[] {
+  const out: number[] = [];
+  for (const tok of answer.split(/[\s,]+/)) {
+    const n = Number.parseInt(tok, 10);
+    if (Number.isInteger(n) && n >= 1 && n <= count && !out.includes(n - 1)) out.push(n - 1);
+  }
+  return out;
 }
 
 // Non-TTY interactive fallback: a one-shot readline question.
@@ -40,6 +56,13 @@ export class PlainPrompter implements Prompter {
         resolve(a.trim());
       });
     });
+  }
+  async choose(question: string, options: string[], multiSelect: boolean): Promise<number[]> {
+    const list = options.map((o, i) => `  ${i + 1}) ${o}`).join('\n');
+    const ans = await this.ask(
+      `${question}\n${list}\n${multiSelect ? 'numbers (comma-separated): ' : 'number: '}`,
+    );
+    return parseChoiceList(ans, options.length).slice(0, multiSelect ? options.length : 1);
   }
 }
 
@@ -61,6 +84,15 @@ export class TuiPrompter implements Prompter {
   async ask(message: string): Promise<string> {
     const a = await this.askRaw(message);
     return a === ANSWER_CANCELLED ? '' : a;
+  }
+
+  async choose(question: string, options: string[], multiSelect: boolean): Promise<number[]> {
+    this.renderer.info(question);
+    try {
+      return await this.editor.chooseOnce(options, multiSelect);
+    } finally {
+      this.screen.moveToOutputBottom();
+    }
   }
 
   private async askRaw(message: string): Promise<string> {
@@ -89,5 +121,8 @@ export class PrompterRef implements Prompter {
   }
   ask(message: string): Promise<string> {
     return this.impl.ask(message);
+  }
+  choose(question: string, options: string[], multiSelect: boolean): Promise<number[]> {
+    return this.impl.choose(question, options, multiSelect);
   }
 }

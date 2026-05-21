@@ -100,6 +100,7 @@ export class TerminalMode {
       },
       queued: this.queue.length,
       busy: this.busy,
+      choice: this.editor.choiceState ?? undefined,
     };
   }
 
@@ -107,7 +108,7 @@ export class TerminalMode {
     if (!this.bar) return;
     // Hide the cursor across the multi-row redraw so it does not flicker.
     this.screen.hideCursor();
-    if (this.busy && !this.editor.answering) {
+    if (this.busy && !this.editor.answering && !this.editor.choosing) {
       // Mid-turn keystroke — keep streaming output undisturbed.
       this.screen.saveOutputCursor();
       this.bar.draw(this.barState());

@@ -128,4 +128,43 @@ describe('LineEditor', () => {
     await answer;
     expect(cb.cycles).toBe(0);
   });
+
+  it('chooseOnce: arrows move the highlight, Enter resolves a single pick', async () => {
+    const { ed } = make();
+    const choice = ed.chooseOnce(['one', 'two', 'three'], false);
+    ed.feedKey(undefined, { name: 'down' });
+    ed.feedKey(undefined, { name: 'down' });
+    ed.feedKey(undefined, { name: 'up' });
+    expect(ed.choiceState?.highlight).toBe(1);
+    ed.feedKey(undefined, { name: 'return' });
+    expect(await choice).toEqual([1]);
+    expect(ed.choosing).toBe(false);
+  });
+
+  it('chooseOnce multi: space toggles checkboxes, Enter submits the set', async () => {
+    const { ed } = make();
+    const choice = ed.chooseOnce(['a', 'b', 'c'], true);
+    ed.feedKey(' ', { name: 'space' }); // check option 0
+    ed.feedKey(undefined, { name: 'down' });
+    ed.feedKey(undefined, { name: 'down' });
+    ed.feedKey(' ', { name: 'space' }); // check option 2
+    ed.feedKey(undefined, { name: 'return' });
+    expect(await choice).toEqual([0, 2]);
+  });
+
+  it('chooseOnce: a letter key jumps to and picks an option (single)', async () => {
+    const { ed } = make();
+    const choice = ed.chooseOnce(['a', 'b', 'c'], false);
+    ed.feedKey('c', { name: 'c', sequence: 'c' });
+    expect(await choice).toEqual([2]);
+  });
+
+  it('chooseOnce: Ctrl+C resolves with no selection and restores input', async () => {
+    const { ed } = make();
+    type(ed, 'kept');
+    const choice = ed.chooseOnce(['a', 'b'], false);
+    ed.feedKey(undefined, { name: 'c', ctrl: true });
+    expect(await choice).toEqual([]);
+    expect(ed.text).toBe('kept');
+  });
 });

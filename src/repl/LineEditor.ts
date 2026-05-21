@@ -10,7 +10,7 @@ export interface KeyEvent {
 }
 
 export interface LineEditorCallbacks {
-  onChange(): void; // buffer or cursor moved — redraw the bar
+  onChange(): void; // buffer / cursor / choice moved — redraw the bar
   onSubmit(text: string): void;
   onInterrupt(): void; // Ctrl+C
   onCycleMode(): void; // Shift+Tab
@@ -19,16 +19,26 @@ export interface LineEditorCallbacks {
 // Resolved value when Ctrl+C is pressed during an answer prompt.
 export const ANSWER_CANCELLED = '\x03';
 
+export interface ChoiceState {
+  options: string[];
+  highlight: number;
+  checked: Set<number>;
+  multiSelect: boolean;
+}
+
 // A minimal raw-mode line editor — replaces Node's readline.Interface so the
-// input can live in a pinned footer the terminal does not own. v1 is a
-// single logical line that wraps; embedded newlines (from paste) collapse to
-// spaces. Enter submits. `askOnce()` borrows the editor for a one-shot
-// answer prompt (used by the Prompter) without losing the in-progress input.
+// input can live in a pinned footer the terminal does not own. Besides plain
+// line editing it supports two borrowed modes: `askOnce()` (one free-text
+// answer) and `chooseOnce()` (a multiple-choice picker). Both save and
+// restore the in-progress input.
 export class LineEditor {
   private buffer = '';
   private cursor = 0;
   private started = false;
   private pending: { resolve: (s: string) => void; savedBuffer: string; savedCursor: number } | null = null;
+  private choice:
+    | (ChoiceState & { resolve: (n: number[]) => void; savedBuffer: string; savedCursor: number })
+    | null = null;
 
   constructor(private readonly cb: LineEditorCallbacks) {}
 
@@ -40,6 +50,18 @@ export class LineEditor {
   }
   get answering(): boolean {
     return this.pending !== null;
+  }
+  get choosing(): boolean {
+    return this.choice !== null;
+  }
+  get choiceState(): ChoiceState | null {
+    if (!this.choice) return null;
+    return {
+      options: this.choice.options,
+      highlight: this.choice.highlight,
+      checked: this.choice.checked,
+      multiSelect: this.choice.multiSelect,
+    };
   }
 
   start(): void {
@@ -63,13 +85,29 @@ export class LineEditor {
     this.cursor = 0;
   }
 
-  // Borrow the editor to read one answer. The current input is saved and
-  // restored when the answer is submitted.
+  // Borrow the editor for one free-text answer.
   askOnce(): Promise<string> {
     return new Promise<string>((resolve) => {
       this.pending = { resolve, savedBuffer: this.buffer, savedCursor: this.cursor };
       this.buffer = '';
       this.cursor = 0;
+      this.cb.onChange();
+    });
+  }
+
+  // Borrow the editor for one multiple-choice selection. Resolves with the
+  // selected option indices ([] on cancel / no selection).
+  chooseOnce(options: string[], multiSelect: boolean): Promise<number[]> {
+    return new Promise<number[]>((resolve) => {
+      this.choice = {
+        resolve,
+        savedBuffer: this.buffer,
+        savedCursor: this.cursor,
+        options: [...options],
+        highlight: 0,
+        checked: new Set<number>(),
+        multiSelect,
+      };
       this.cb.onChange();
     });
   }
@@ -80,6 +118,7 @@ export class LineEditor {
 
   // Exposed for tests — apply one key event.
   feedKey(str: string | undefined, key: KeyEvent | undefined): void {
+    if (this.choice) return this.feedChoiceKey(str, key);
     if (key) {
       if (key.ctrl && key.name === 'c') {
         if (this.pending) return this.resolveAnswer(ANSWER_CANCELLED);
@@ -106,6 +145,62 @@ export class LineEditor {
       if (key.ctrl || key.meta) return; // ignore other control chords
     }
     if (str) this.insert(str);
+  }
+
+  private feedChoiceKey(str: string | undefined, key: KeyEvent | undefined): void {
+    const c = this.choice!;
+    if (key) {
+      if (key.ctrl && key.name === 'c') return this.resolveChoice([]);
+      if (key.name === 'up') {
+        c.highlight = Math.max(0, c.highlight - 1);
+        return this.cb.onChange();
+      }
+      if (key.name === 'down') {
+        c.highlight = Math.min(c.options.length - 1, c.highlight + 1);
+        return this.cb.onChange();
+      }
+      if (key.name === 'return' || key.name === 'enter') {
+        return this.resolveChoice(
+          c.multiSelect ? [...c.checked].sort((a, b) => a - b) : [c.highlight],
+        );
+      }
+      if (key.name === 'space') {
+        if (c.multiSelect) {
+          this.toggleChecked(c.highlight);
+          this.cb.onChange();
+        }
+        return;
+      }
+      if (key.ctrl || key.meta) return;
+    }
+    // Digit / letter shortcut → jump to that option.
+    if (str && str.length === 1) {
+      const idx = optionIndexFromKey(str);
+      if (idx >= 0 && idx < c.options.length) {
+        if (c.multiSelect) {
+          this.toggleChecked(idx);
+          this.cb.onChange();
+        } else {
+          this.resolveChoice([idx]);
+        }
+      }
+    }
+  }
+
+  private toggleChecked(i: number): void {
+    const set = this.choice!.checked;
+    if (set.has(i)) set.delete(i);
+    else set.add(i);
+  }
+
+  private resolveChoice(indices: number[]): void {
+    const c = this.choice;
+    if (!c) return;
+    this.choice = null;
+    this.buffer = c.savedBuffer;
+    this.cursor = c.savedCursor;
+    this.cb.onChange();
+    c.resolve(indices);
   }
 
   private resolveAnswer(value: string): void {
@@ -162,4 +257,12 @@ export class LineEditor {
     }
     this.cb.onSubmit(text);
   }
+}
+
+// Map a digit (1-9) or letter (a-z) key to a 0-indexed option, else -1.
+function optionIndexFromKey(ch: string): number {
+  if (ch >= '1' && ch <= '9') return ch.charCodeAt(0) - '1'.charCodeAt(0);
+  const lower = ch.toLowerCase();
+  if (lower >= 'a' && lower <= 'z') return lower.charCodeAt(0) - 'a'.charCodeAt(0);
+  return -1;
 }
