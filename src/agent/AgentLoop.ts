@@ -13,14 +13,23 @@ import { estimateCost, formatUsd } from '../util/pricing.js';
 import { shouldAutoCompact } from '../util/contextWindow.js';
 import type { SubagentFactory } from '../tools/types.js';
 import type { ApproveVerdict } from '../repl/Prompter.js';
+import { resolveVerifyCommand, runVerification } from './Verify.js';
 
-const MAX_ITERATIONS = 32;
+const MAX_ITERATIONS = 40;
 const LOOP_DETECT_WINDOW = 10;
 const LOOP_DETECT_THRESHOLD = 3;
 const MAX_RETRIES_PER_TOOL = 3;
+// How many times the harness will feed a verification failure back to the
+// agent to fix before giving up (round 0 is the user's actual turn).
+const MAX_VERIFY_ROUNDS = 2;
 
 // Tools that change the project — gated according to the session mode.
 const MUTATING_TOOLS = new Set(['edit_file', 'write_file', 'create_directory', 'delete_path', 'run_shell']);
+
+// Tools that change files on disk — a successful call means the turn should
+// be verified. (run_shell is excluded: too ambiguous, and verification itself
+// runs shell commands.)
+const FILE_MUTATING_TOOLS = new Set(['edit_file', 'write_file', 'create_directory', 'delete_path']);
 
 // How a tool call should be handled given the current mode:
 //  - block:   refuse (planning mode — read-only).
@@ -55,6 +64,11 @@ export interface AgentDeps {
   // Snapshot store — threaded onto each tool's ToolExecutionContext so edits
   // are undoable and deletes recoverable. Optional (absent in stub mode).
   checkpoints?: CheckpointStore;
+  // When true, the harness runs the project's verification command after any
+  // turn that changed files, and feeds failures back to the agent to fix.
+  autoVerify: boolean;
+  // Explicit verification command — overrides the inferred default.
+  verifyCommand?: string;
 }
 
 export class AgentLoop {
@@ -184,21 +198,76 @@ export class AgentLoop {
         : undefined,
     };
 
+    const totals = { in: 0, out: 0, cacheRead: 0, cacheWrite: 0 };
+    try {
+      let mutated = false;
+      // Round 0 is the user's actual turn; rounds 1.. are verification-driven
+      // fix attempts. After any round that changed files, the harness runs the
+      // project's verification command and, on failure, feeds the output back.
+      for (let round = 0; round <= MAX_VERIFY_ROUNDS; round++) {
+        const r = await this.runIterations(ctx, toolExecCtx, userText, totals);
+        mutated = mutated || r.mutated;
+        if (this.cancelled || !mutated || ctx.mode === 'planning' || !this.deps.autoVerify) break;
+
+        const cmd = resolveVerifyCommand(ctx.projectRoot, this.deps.verifyCommand);
+        if (!cmd) break;
+
+        this.deps.renderer.spinner.start(`verifying — $ ${cmd}`);
+        const v = await runVerification(cmd, ctx.projectRoot, () => this.cancelled);
+        this.deps.renderer.spinner.stop();
+        if (this.cancelled) break;
+
+        if (v.ok) {
+          this.deps.renderer.status(`  ✓ verification passed ($ ${cmd})`);
+          break;
+        }
+        if (round === MAX_VERIFY_ROUNDS) {
+          this.deps.renderer.warn(
+            `  ✗ verification still failing after ${MAX_VERIFY_ROUNDS} fix attempt(s) ($ ${cmd})`,
+          );
+          break;
+        }
+        this.deps.renderer.warn(`  ✗ verification failed ($ ${cmd}) — asking the agent to fix`);
+        this.conversation.push({
+          role: 'user',
+          content:
+            `The verification command \`${cmd}\` failed (exit ${v.code ?? '?'}) after your changes:\n\n` +
+            '```\n' +
+            v.output +
+            '\n```\n\n' +
+            'Fix the failures, then stop — verification re-runs automatically. If these ' +
+            'failures are pre-existing and unrelated to your changes, do not try to fix ' +
+            'them; say so briefly and stop.',
+        });
+      }
+      this.emitStatusLine(totals.in, totals.out, totals.cacheRead, totals.cacheWrite, ctx);
+    } finally {
+      // Persist the conversation after every turn — natural end, iteration
+      // cap, cancel, or exception — so the session is always resumable.
+      this.persist();
+    }
+  }
+
+  // One run of the agent's tool-use loop: repeatedly call the LLM and execute
+  // its tool calls until it ends the turn (or the iteration cap is hit).
+  // Returns whether any file-mutating tool succeeded — which tells submit()
+  // whether the result is worth verifying.
+  private async runIterations(
+    ctx: SessionContext,
+    toolExecCtx: ToolExecutionContext,
+    userText: string,
+    totals: { in: number; out: number; cacheRead: number; cacheWrite: number },
+  ): Promise<{ mutated: boolean }> {
     const recentToolSigs: string[] = [];
     const consecutiveFailures = new Map<string, number>();
+    let mutated = false;
 
-    let totalIn = 0;
-    let totalOut = 0;
-    let totalCacheRead = 0;
-    let totalCacheWrite = 0;
-
-    try {
     for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
       if (this.cancelled) {
         this.deps.renderer.spinner.stop();
         this.deps.renderer.dim('(cancelled)');
         this.conversation.push({ role: 'user', content: '[user cancelled the task]' });
-        return;
+        return { mutated };
       }
       // Auto-compact before the call if the live context is getting large.
       if (shouldAutoCompact(this.lastInputTokens, ctx.model.provider, ctx.model.model)) {
@@ -248,13 +317,13 @@ export class AgentLoop {
 
       if (!response) {
         this.deps.renderer.error('stream ended without a message_stop event');
-        return;
+        return { mutated };
       }
 
-      totalIn += response.usage.inputTokens;
-      totalOut += response.usage.outputTokens;
-      totalCacheRead += response.usage.cacheReadTokens ?? 0;
-      totalCacheWrite += response.usage.cacheWriteTokens ?? 0;
+      totals.in += response.usage.inputTokens;
+      totals.out += response.usage.outputTokens;
+      totals.cacheRead += response.usage.cacheReadTokens ?? 0;
+      totals.cacheWrite += response.usage.cacheWriteTokens ?? 0;
       this.cumIn += response.usage.inputTokens;
       this.cumOut += response.usage.outputTokens;
       this.cumCacheRead += response.usage.cacheReadTokens ?? 0;
@@ -272,9 +341,8 @@ export class AgentLoop {
 
       const toolUses = response.content.filter((b) => b.type === 'tool_use');
       if (toolUses.length === 0 || response.stopReason === 'end_turn') {
-        this.emitStatusLine(totalIn, totalOut, totalCacheRead, totalCacheWrite, ctx);
         this.deps.store.touch(null);
-        return;
+        return { mutated };
       }
 
       const toolResults: ContentBlock[] = [];
@@ -327,6 +395,7 @@ export class AgentLoop {
           consecutiveFailures.set(tu.name, (consecutiveFailures.get(tu.name) ?? 0) + 1);
         } else {
           consecutiveFailures.set(tu.name, 0);
+          if (FILE_MUTATING_TOOLS.has(tu.name)) mutated = true;
         }
 
         this.deps.store.appendToolLog({
@@ -397,13 +466,8 @@ export class AgentLoop {
     }
 
     this.deps.renderer.warn(`(stopped after ${MAX_ITERATIONS} iterations)`);
-    this.emitStatusLine(totalIn, totalOut, totalCacheRead, totalCacheWrite, ctx);
     this.deps.store.touch(null);
-    } finally {
-      // Persist the conversation after every turn — natural end, iteration
-      // cap, cancel, or exception — so the session is always resumable.
-      this.persist();
-    }
+    return { mutated };
   }
 
   private emitStatusLine(

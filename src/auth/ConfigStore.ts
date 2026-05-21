@@ -22,6 +22,11 @@ export interface AutocodeConfig {
   // Map of arbitrary server name → spawn config. Same shape as Claude Code's
   // mcpServers entry, so users can paste configs across tools.
   mcpServers?: Record<string, McpServerConfig>;
+  // Verification: the command the harness runs after file edits to check the
+  // project. `verifyCommand` overrides the inferred default; `autoVerify`
+  // disables the post-edit verification loop when set to false.
+  verifyCommand?: string;
+  autoVerify?: boolean;
 }
 
 export class ConfigStore {

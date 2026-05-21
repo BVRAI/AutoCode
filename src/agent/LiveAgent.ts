@@ -11,6 +11,7 @@ import { LlmRouter } from '../llm/Router.js';
 import { SubagentRunner } from './SubagentRunner.js';
 import { McpClientManager } from '../mcp/McpClientManager.js';
 import { McpTool } from '../mcp/McpTool.js';
+import { ConfigStore } from '../auth/ConfigStore.js';
 
 export class LiveAgent implements AgentHandler {
   readonly loop: AgentLoop;
@@ -29,6 +30,8 @@ export class LiveAgent implements AgentHandler {
     this.registry = new ToolRegistry();
     this.mcp = new McpClientManager();
     this.checkpoints = opts.checkpoints;
+    // Verification settings: on unless explicitly disabled in config.json.
+    const config = new ConfigStore().load();
     // All interactive confirmation goes through the Prompter — the single
     // owner of stdin (auto-deny in headless, the pinned bar in the TUI).
     this.loop = new AgentLoop({
@@ -41,6 +44,8 @@ export class LiveAgent implements AgentHandler {
       choose: (question, options, multiSelect) => opts.prompter.choose(question, options, multiSelect),
       subagentFactory: (input) => runner.run(input),
       checkpoints: this.checkpoints,
+      autoVerify: config.autoVerify !== false,
+      verifyCommand: config.verifyCommand,
     });
   }
 
