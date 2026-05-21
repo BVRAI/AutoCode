@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
-import { LineEditor, type LineEditorCallbacks } from '../../src/repl/LineEditor.js';
+import { describe, it, expect } from 'vitest';
+import { LineEditor, ANSWER_CANCELLED, type LineEditorCallbacks } from '../../src/repl/LineEditor.js';
 
 function make(): { ed: LineEditor; cb: LineEditorCallbacks & { submits: string[]; interrupts: number; cycles: number } } {
   const submits: string[] = [];
@@ -101,5 +101,31 @@ describe('LineEditor', () => {
     const { ed } = make();
     ed.feedKey('line one\nline two', { name: undefined });
     expect(ed.text).toBe('line one line two');
+  });
+
+  it('askOnce captures an answer and restores the prior input', async () => {
+    const { ed } = make();
+    type(ed, 'main prompt');
+    const answer = ed.askOnce();
+    type(ed, 'yes');
+    ed.feedKey(undefined, { name: 'return' });
+    expect(await answer).toBe('yes');
+    expect(ed.text).toBe('main prompt'); // restored
+  });
+
+  it('askOnce resolves with ANSWER_CANCELLED on Ctrl+C', async () => {
+    const { ed } = make();
+    const answer = ed.askOnce();
+    ed.feedKey(undefined, { name: 'c', ctrl: true });
+    expect(await answer).toBe(ANSWER_CANCELLED);
+  });
+
+  it('Shift+Tab does not cycle the mode while answering', async () => {
+    const { ed, cb } = make();
+    const answer = ed.askOnce();
+    ed.feedKey(undefined, { name: 'tab', shift: true });
+    ed.feedKey(undefined, { name: 'return' });
+    await answer;
+    expect(cb.cycles).toBe(0);
   });
 });

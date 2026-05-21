@@ -4,6 +4,7 @@ import { Command } from 'commander';
 import { ConsoleRenderer } from './repl/ConsoleRenderer.js';
 import { TerminalMode } from './repl/TerminalMode.js';
 import { runHeadless } from './repl/HeadlessMode.js';
+import { PrompterRef, AutoDenyPrompter, PlainPrompter } from './repl/Prompter.js';
 import { StubAgent } from './agent/StubAgent.js';
 import { LiveAgent } from './agent/LiveAgent.js';
 import { newSessionId, type SessionContext } from './session/SessionContext.js';
@@ -76,6 +77,9 @@ program
     // --plan-mode starts in planning; otherwise default (review each change).
     const headless = typeof opts.print === 'string';
     const initialMode = headless ? 'autocode' : opts.planMode ? 'planning' : 'default';
+    // One interactive-input authority. Headless auto-denies; the interactive
+    // path swaps in the pinned-bar prompter once TerminalMode starts.
+    const prompter = new PrompterRef(headless ? new AutoDenyPrompter() : new PlainPrompter());
 
     const ctx: SessionContext = {
       sessionId,
@@ -109,7 +113,7 @@ program
             `no credentials for ${ctx.model.provider} — set ${envKeyFor(ctx.model.provider)} or AUTOMAX_PROXY_TOKEN. Running in stub mode.`,
           ),
           new StubAgent(renderer, store))
-        : new LiveAgent(renderer, store, { headless, checkpoints });
+        : new LiveAgent(renderer, store, { checkpoints, prompter });
 
     // Initialize MCP servers if any are configured. Fail soft.
     if (agent instanceof LiveAgent) {
@@ -134,7 +138,7 @@ program
 
     const code = headless
       ? await runHeadless(agent, renderer, ctx, opts.print as string)
-      : await new TerminalMode(ctx, renderer, agent).run();
+      : await new TerminalMode(ctx, renderer, agent, prompter).run();
     if (agent instanceof LiveAgent) {
       try {
         await agent.shutdown();

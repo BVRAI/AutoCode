@@ -1,18 +1,25 @@
-import { createInterface, emitKeypressEvents, Interface } from 'node:readline';
+import { createInterface } from 'node:readline';
 import { execSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { existsSync, statSync } from 'node:fs';
+import pc from 'picocolors';
 
 import { nextMode, type SessionContext, type AgentMode } from '../session/SessionContext.js';
 import type { CumulativeUsage } from '../session/TranscriptStore.js';
 import type { TrashItem } from '../session/CheckpointStore.js';
 import type { Message, ContentBlock } from '../llm/types.js';
 import { buildAgentInput } from '../util/imageInput.js';
+import { estimateCost, formatUsd } from '../util/pricing.js';
 import { ConsoleRenderer } from './ConsoleRenderer.js';
 import { parse, type ParsedInput } from './CommandParser.js';
 import { runInit } from './InitCommand.js';
 import { runAuth } from './AuthCommand.js';
-import { estimateCost, formatUsd } from '../util/pricing.js';
+import { Screen } from './Screen.js';
+import { LineEditor } from './LineEditor.js';
+import { BottomBar, renderBar, type BarState } from './BottomBar.js';
+import { PrompterRef, TuiPrompter } from './Prompter.js';
+
+const MAX_QUEUE = 5;
 
 export interface AgentHandler {
   submit(input: string | ContentBlock[], ctx: SessionContext): Promise<void>;
@@ -28,87 +35,172 @@ export interface AgentHandler {
   mcpTools?(): string[];
 }
 
+// The interactive REPL — a pinned bottom bar (input + status) with output
+// scrolling above it via a terminal scroll region. Falls back to a plain
+// line loop when stdout is not a TTY.
 export class TerminalMode {
-  private readonly rl: Interface;
+  private readonly screen = new Screen();
+  private readonly editor: LineEditor;
+  private bar: BottomBar | null = null;
   private exiting = false;
   private busy = false;
+  private readonly queue: string[] = [];
+  private resolveExit: ((code: number) => void) | null = null;
 
   constructor(
     private readonly ctx: SessionContext,
     private readonly renderer: ConsoleRenderer,
     private readonly agent: AgentHandler,
+    private readonly prompter: PrompterRef,
   ) {
-    this.rl = createInterface({
-      input: process.stdin,
-      output: process.stdout,
-      terminal: true,
-      prompt: this.renderer.prompt(),
-    });
-    // Shift+Tab cycles the workflow mode. readline (terminal:true) already
-    // puts stdin in raw mode; a sibling keypress listener is safe.
-    emitKeypressEvents(process.stdin);
-    process.stdin.on('keypress', (_str, key) => {
-      if (key && key.name === 'tab' && key.shift) this.cycleMode();
+    this.editor = new LineEditor({
+      onChange: () => this.redrawBar(),
+      onSubmit: (text) => this.handleSubmit(text),
+      onInterrupt: () => this.handleInterrupt(),
+      onCycleMode: () => this.handleCycle(),
     });
   }
 
-  // Print the upper rule, then the readline prompt row.
-  private showPrompt(): void {
-    process.stdout.write(this.renderer.hr() + '\n');
-    this.rl.prompt();
+  run(): Promise<number> {
+    return this.screen.isTty ? this.runTui() : this.runPlain();
   }
 
-  // Shift+Tab handler: advance the mode and give immediate feedback.
-  private cycleMode(): void {
-    this.ctx.mode = nextMode(this.ctx.mode);
+  // ── TUI mode ──────────────────────────────────────────────────────────
+  private runTui(): Promise<number> {
+    this.renderer.printHeader(this.ctx);
+    // Preserve the post-header cursor across the DECSTBM install (which homes
+    // the cursor), then mark it as the output cursor.
+    process.stdout.write('\x1b7');
+    this.screen.enter(renderBar(this.barState()).footerHeight);
+    process.stdout.write('\x1b8');
+    this.screen.saveOutputCursor();
+
+    this.bar = new BottomBar(this.screen);
+    this.screen.onResize = () => this.redrawBar();
+    this.prompter.use(new TuiPrompter(this.editor, this.renderer, this.screen));
+    this.editor.start();
+    this.redrawBar();
+
+    return new Promise<number>((resolve) => {
+      this.resolveExit = resolve;
+    });
+  }
+
+  private barState(): BarState {
+    const u = this.agent.cumulativeUsage();
+    const { cost } = estimateCost(u, this.ctx.model.provider, this.ctx.model.model);
+    return {
+      input: this.editor.text,
+      cursor: this.editor.cursorIndex,
+      columns: this.screen.columns,
+      mode: this.ctx.mode,
+      usage: {
+        inputTokens: u.inputTokens,
+        outputTokens: u.outputTokens,
+        cacheReadTokens: u.cacheReadTokens,
+        costText: cost > 0 ? formatUsd(cost) : '',
+      },
+      queued: this.queue.length,
+      busy: this.busy,
+    };
+  }
+
+  private redrawBar(): void {
+    if (!this.bar) return;
+    if (this.busy && !this.editor.answering) {
+      // Mid-turn keystroke — keep streaming output undisturbed.
+      this.screen.saveOutputCursor();
+      this.bar.draw(this.barState());
+      this.screen.restoreOutputCursor();
+    } else {
+      const layout = this.bar.draw(this.barState());
+      this.bar.placeCursor(layout);
+    }
+  }
+
+  private handleSubmit(text: string): void {
     if (this.busy) {
-      // Mid-turn: just note it; the new mode applies to the next tool call.
-      this.renderer.dim(`  ▸ mode → ${this.ctx.mode}`);
+      if (this.queue.length < MAX_QUEUE) this.queue.push(text);
+      this.redrawBar();
       return;
     }
-    // At the prompt: clear the input row, toast the change, re-prompt with
-    // the in-progress text preserved (readline may insert a stray tab).
-    const pending = this.rl.line.replace(/\t/g, '');
-    process.stdout.write('\r\x1b[2K');
-    this.renderer.dim(`  ▸ mode → ${this.ctx.mode}`);
-    this.rl.prompt();
-    if (pending) this.rl.write(pending);
+    void this.runTurn(text);
   }
 
-  async run(): Promise<number> {
-    this.renderer.printHeader(this.ctx);
-    this.showPrompt();
+  private async runTurn(text: string): Promise<void> {
+    this.busy = true;
+    this.screen.restoreOutputCursor(); // cursor → output region
+    this.renderer.info(pc.cyan('=> ') + text); // echo the prompt into the log
+    this.redrawBar();
+    try {
+      await this.dispatch(parse(text));
+    } catch (e) {
+      this.renderer.error(e instanceof Error ? e.message : String(e));
+    }
+    this.busy = false;
+    this.screen.saveOutputCursor(); // remember where output ended
+    this.redrawBar();
+    const next = this.queue.shift();
+    if (next && !this.exiting) void this.runTurn(next);
+  }
 
-    return new Promise<number>((resolveExit) => {
-      this.rl.on('line', (line) => {
-        const parsed = parse(line);
-        if (parsed.kind === 'empty') {
-          this.showPrompt();
+  private handleInterrupt(): void {
+    if (this.busy) {
+      this.agent.stop();
+      this.renderer.dim('(interrupted)');
+      return;
+    }
+    if (this.editor.text.length > 0) {
+      this.editor.clear();
+      this.redrawBar();
+      return;
+    }
+    this.exit(0);
+  }
+
+  private handleCycle(): void {
+    this.ctx.mode = nextMode(this.ctx.mode);
+    this.redrawBar();
+  }
+
+  private exit(code: number): void {
+    if (this.exiting) return;
+    this.exiting = true;
+    this.editor.stop();
+    this.screen.exit();
+    this.resolveExit?.(code);
+  }
+
+  // ── Non-TTY fallback ──────────────────────────────────────────────────
+  private runPlain(): Promise<number> {
+    this.renderer.printHeader(this.ctx);
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    return new Promise<number>((resolve) => {
+      const ask = (): void => {
+        if (this.exiting) {
+          rl.close();
+          resolve(0);
           return;
         }
-        this.renderer.promptFooter(this.ctx.mode);
-        this.busy = true;
-        void this.dispatch(parsed).finally(() => {
-          this.busy = false;
-          if (!this.exiting) this.showPrompt();
+        rl.question('=> ', (line) => {
+          void (async () => {
+            const parsed = parse(line);
+            if (parsed.kind !== 'empty') {
+              try {
+                await this.dispatch(parsed);
+              } catch (e) {
+                this.renderer.error(e instanceof Error ? e.message : String(e));
+              }
+            }
+            ask();
+          })();
         });
-      });
-
-      this.rl.on('close', () => {
-        if (!this.exiting) {
-          process.stdout.write('\n');
-        }
-        resolveExit(0);
-      });
-
-      process.on('SIGINT', () => {
-        this.agent.stop();
-        this.renderer.dim('(stopped — press /exit to quit)');
-        this.showPrompt();
-      });
+      };
+      ask();
     });
   }
 
+  // ── Dispatch ──────────────────────────────────────────────────────────
   private async dispatch(parsed: ParsedInput): Promise<void> {
     switch (parsed.kind) {
       case 'empty':
@@ -163,8 +255,7 @@ export class TerminalMode {
         this.renderer.dim('(stop requested)');
         return;
       case 'exit':
-        this.exiting = true;
-        this.rl.close();
+        this.exit(0);
         return;
       case 'init':
         await runInit(this.ctx.projectRoot, this.renderer);
@@ -181,7 +272,7 @@ export class TerminalMode {
         this.handleDiff();
         return;
       case 'auth':
-        await runAuth(this.renderer);
+        await runAuth(this.prompter, this.renderer);
         return;
       case 'mode':
         this.handleMode(args);
@@ -256,13 +347,11 @@ export class TerminalMode {
     const lines = [
       '/help                          Show this message',
       '/status                        Show session info',
-      '/cwd                           Show project root',
-      '/cwd <path>                    Change project root',
-      '/model                         Show current model',
-      '/model <provider> <name>       Switch provider/model',
+      '/cwd [path]                    Show or change the project root',
+      '/model [provider name]         Show or switch provider/model',
       '/init                          Scaffold an AUTOCODE.md for this project',
       '/clear                         Reset conversation history',
-      '/compact                       Truncate conversation to last 4 turns',
+      '/compact                       Summarize older turns',
       '/cost                          Show session cost estimate',
       '/diff                          Show uncommitted git changes',
       '/auth                          Configure an API key',
@@ -271,7 +360,7 @@ export class TerminalMode {
       '/trash                         List recently deleted files (recoverable)',
       '/restore <id>                  Restore a deleted file from the trash',
       '/mcp                           List configured MCP servers and their tools',
-      '/stop                          Cancel current task',
+      '/stop                          Cancel current task (or Ctrl+C)',
       '/exit                          Close autocode',
     ];
     for (const l of lines) this.renderer.info(l);
@@ -356,8 +445,7 @@ export class TerminalMode {
       if (out.trim().length === 0) {
         this.renderer.dim('(no uncommitted changes)');
       } else {
-        process.stdout.write(out);
-        if (!out.endsWith('\n')) process.stdout.write('\n');
+        this.renderer.info(out.replace(/\n$/, ''));
       }
     } catch (e) {
       this.renderer.error(`git diff failed: ${e instanceof Error ? e.message : String(e)}`);

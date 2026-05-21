@@ -1,6 +1,5 @@
-import { createInterface } from 'node:readline';
-
 import type { AgentHandler } from '../repl/TerminalMode.js';
+import type { Prompter } from '../repl/Prompter.js';
 import type { ConsoleRenderer } from '../repl/ConsoleRenderer.js';
 import type { TranscriptStore } from '../session/TranscriptStore.js';
 import type { SessionContext } from '../session/SessionContext.js';
@@ -23,23 +22,21 @@ export class LiveAgent implements AgentHandler {
   constructor(
     private readonly renderer: ConsoleRenderer,
     store: TranscriptStore,
-    opts?: { headless?: boolean; checkpoints?: CheckpointStore },
+    opts: { checkpoints?: CheckpointStore; prompter: Prompter },
   ) {
     const router = new LlmRouter();
     const runner = new SubagentRunner(router, store);
     this.registry = new ToolRegistry();
     this.mcp = new McpClientManager();
-    this.checkpoints = opts?.checkpoints;
-    // Headless runs have no interactive user — auto-decline confirm-gated
-    // commands and plan-mode edits rather than blocking on stdin. Routine
-    // allow-classified work (file/dir creation, edits) still runs freely.
-    const confirm = opts?.headless ? async () => false : (prompt: string) => askYesNo(prompt);
+    this.checkpoints = opts.checkpoints;
+    // All interactive confirmation goes through the Prompter — the single
+    // owner of stdin (auto-deny in headless, the pinned bar in the TUI).
     this.loop = new AgentLoop({
       renderer: this.renderer,
       store,
       router,
       registry: this.registry,
-      confirm,
+      confirm: (message) => opts.prompter.confirm(message),
       subagentFactory: (input) => runner.run(input),
       checkpoints: this.checkpoints,
     });
@@ -118,14 +115,4 @@ export class LiveAgent implements AgentHandler {
   restore(id: string): ReturnType<CheckpointStore['restoreFromTrash']> {
     return this.checkpoints?.restoreFromTrash(id) ?? null;
   }
-}
-
-function askYesNo(prompt: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    rl.question(`${prompt} [y/N] `, (answer) => {
-      rl.close();
-      resolve(answer.trim().toLowerCase().startsWith('y'));
-    });
-  });
 }

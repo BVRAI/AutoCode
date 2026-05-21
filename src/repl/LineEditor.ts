@@ -16,14 +16,19 @@ export interface LineEditorCallbacks {
   onCycleMode(): void; // Shift+Tab
 }
 
+// Resolved value when Ctrl+C is pressed during an answer prompt.
+export const ANSWER_CANCELLED = '\x03';
+
 // A minimal raw-mode line editor — replaces Node's readline.Interface so the
 // input can live in a pinned footer the terminal does not own. v1 is a
 // single logical line that wraps; embedded newlines (from paste) collapse to
-// spaces. Enter submits.
+// spaces. Enter submits. `askOnce()` borrows the editor for a one-shot
+// answer prompt (used by the Prompter) without losing the in-progress input.
 export class LineEditor {
   private buffer = '';
   private cursor = 0;
   private started = false;
+  private pending: { resolve: (s: string) => void; savedBuffer: string; savedCursor: number } | null = null;
 
   constructor(private readonly cb: LineEditorCallbacks) {}
 
@@ -32,6 +37,9 @@ export class LineEditor {
   }
   get cursorIndex(): number {
     return this.cursor;
+  }
+  get answering(): boolean {
+    return this.pending !== null;
   }
 
   start(): void {
@@ -55,6 +63,17 @@ export class LineEditor {
     this.cursor = 0;
   }
 
+  // Borrow the editor to read one answer. The current input is saved and
+  // restored when the answer is submitted.
+  askOnce(): Promise<string> {
+    return new Promise<string>((resolve) => {
+      this.pending = { resolve, savedBuffer: this.buffer, savedCursor: this.cursor };
+      this.buffer = '';
+      this.cursor = 0;
+      this.cb.onChange();
+    });
+  }
+
   private onKeypress = (str: string | undefined, key: KeyEvent | undefined): void => {
     this.feedKey(str, key);
   };
@@ -62,9 +81,18 @@ export class LineEditor {
   // Exposed for tests — apply one key event.
   feedKey(str: string | undefined, key: KeyEvent | undefined): void {
     if (key) {
-      if (key.ctrl && key.name === 'c') return this.cb.onInterrupt();
-      if (key.name === 'tab' && key.shift) return this.cb.onCycleMode();
-      if (key.name === 'return' || key.name === 'enter') return this.submit();
+      if (key.ctrl && key.name === 'c') {
+        if (this.pending) return this.resolveAnswer(ANSWER_CANCELLED);
+        return this.cb.onInterrupt();
+      }
+      if (key.name === 'return' || key.name === 'enter') {
+        if (this.pending) return this.resolveAnswer(this.buffer);
+        return this.submit();
+      }
+      if (key.name === 'tab' && key.shift) {
+        if (!this.pending) this.cb.onCycleMode();
+        return;
+      }
       if (key.name === 'backspace') return this.backspace();
       if (key.name === 'delete') return this.deleteForward();
       if (key.name === 'left') return this.move(-1);
@@ -78,6 +106,16 @@ export class LineEditor {
       if (key.ctrl || key.meta) return; // ignore other control chords
     }
     if (str) this.insert(str);
+  }
+
+  private resolveAnswer(value: string): void {
+    const p = this.pending;
+    if (!p) return;
+    this.pending = null;
+    this.buffer = p.savedBuffer;
+    this.cursor = p.savedCursor;
+    this.cb.onChange();
+    p.resolve(value);
   }
 
   private insert(s: string): void {

@@ -5,15 +5,12 @@ import { loadProjectInstructions } from '../agent/ProjectInstructions.js';
 import { printBanner } from './Banner.js';
 import { Spinner } from './Spinner.js';
 import { renderUnifiedDiff } from '../util/diff.js';
-import { renderMarkdown, looksLikeMarkdown } from './MarkdownRenderer.js';
-import { countWrappedRows } from './wrap.js';
 import { getRepoMap } from '../agent/RepoMap.js';
 
 export class ConsoleRenderer {
   readonly spinner = new Spinner();
   private streaming = false;
   private streamBuffer = '';
-  private readonly canRedraw = Boolean(process.stdout.isTTY);
 
   printHeader(ctx: SessionContext): void {
     printBanner();
@@ -44,26 +41,10 @@ export class ConsoleRenderer {
     process.stdout.write(lines.join('\n') + '\n');
   }
 
-  prompt(): string {
-    return pc.cyan('=> ');
-  }
-
-  // A horizontal rule sized to the terminal (capped at 80).
-  hr(): string {
-    const w = Math.min(process.stdout.columns || 80, 80);
-    return pc.dim('─'.repeat(w));
-  }
-
   // Colored mode label: planning=yellow, default=cyan, autocode=green.
   modeLabel(mode: AgentMode): string {
     const paint = mode === 'planning' ? pc.yellow : mode === 'autocode' ? pc.green : pc.cyan;
     return paint(`▸ ${mode} mode`);
-  }
-
-  // The framed footer printed under a submitted prompt: lower rule + mode.
-  promptFooter(mode: AgentMode): void {
-    process.stdout.write(this.hr() + '\n');
-    process.stdout.write('  ' + this.modeLabel(mode) + '\n');
   }
 
   info(text: string): void {
@@ -118,32 +99,10 @@ export class ConsoleRenderer {
   endAssistantStream(): void {
     if (!this.streaming) return;
     this.streaming = false;
-    // Ensure we end on a newline.
+    // Ensure we end on a newline. (The cursor-up markdown re-render is not
+    // used under the pinned-bar scroll region — it would erase the footer.)
     if (!this.streamBuffer.endsWith('\n')) {
       process.stdout.write('\n');
-    }
-    // Final markdown redraw if it's worth it and we're on a TTY.
-    if (this.canRedraw && looksLikeMarkdown(this.streamBuffer)) {
-      const rendered = renderMarkdown(this.streamBuffer);
-      // Move cursor up over the streamed text and erase, then reprint with
-      // markdown formatting. Count *physical* rows (accounting for line
-      // wrapping) — counting only newlines undershoots when lines wrap and
-      // leaves the raw stream visible above the re-render.
-      const cols = process.stdout.columns || 80;
-      const linesToErase = countWrappedRows(this.streamBuffer, cols, 4); // 4 = "ac: " prefix
-      process.stdout.write(`\x1b[${linesToErase}A\r\x1b[J`);
-      // Reprint with ac: prefix, indenting continuation lines.
-      const lines = rendered.split('\n');
-      let first = true;
-      for (const line of lines) {
-        if (first) {
-          if (line.trim().length === 0) continue;
-          process.stdout.write(`${pc.magenta('ac:')} ${line}\n`);
-          first = false;
-        } else {
-          process.stdout.write(`    ${line}\n`);
-        }
-      }
     }
     process.stdout.write('\n');
     this.streamBuffer = '';

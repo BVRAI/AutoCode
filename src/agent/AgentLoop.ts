@@ -10,7 +10,6 @@ import { buildSystemPrompt } from './PromptBuilder.js';
 import { currentTodos } from '../tools/todoWrite.js';
 import { renderUnifiedDiff } from '../util/diff.js';
 import { estimateCost, formatUsd } from '../util/pricing.js';
-import { requestApproval } from '../repl/ApprovalPrompt.js';
 import { shouldAutoCompact } from '../util/contextWindow.js';
 import type { SubagentFactory } from '../tools/types.js';
 
@@ -295,7 +294,10 @@ export class AgentLoop {
         }
         if (gate === 'approve') {
           const preview = formatToolPreview(tu.name, tu.input);
-          const ok = await requestApproval(`Run ${tu.name}?`, preview);
+          this.deps.renderer.dim('  --- preview ---');
+          this.deps.renderer.info(preview);
+          this.deps.renderer.dim('  ---------------');
+          const ok = await this.deps.confirm(`Run ${tu.name}? [Y/n]`);
           if (!ok) {
             toolResults.push({
               type: 'tool_result',
