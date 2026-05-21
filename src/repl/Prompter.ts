@@ -65,11 +65,11 @@ export class TuiPrompter implements Prompter {
 
   private async askRaw(message: string): Promise<string> {
     this.renderer.info(message);
-    this.screen.saveOutputCursor();
     try {
       return await this.editor.askOnce();
     } finally {
-      this.screen.restoreOutputCursor();
+      // Resume output at the bottom of the output region.
+      this.screen.moveToOutputBottom();
     }
   }
 }

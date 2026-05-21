@@ -68,12 +68,10 @@ export class TerminalMode {
   // ── TUI mode ──────────────────────────────────────────────────────────
   private runTui(): Promise<number> {
     this.renderer.printHeader(this.ctx);
-    // Preserve the post-header cursor across the DECSTBM install (which homes
-    // the cursor), then mark it as the output cursor.
-    process.stdout.write('\x1b7');
     this.screen.enter(renderBar(this.barState()).footerHeight);
-    process.stdout.write('\x1b8');
-    this.screen.saveOutputCursor();
+    // Park the output cursor at the bottom of the output region — output
+    // accumulates there and scrolls up.
+    this.screen.moveToOutputBottom();
 
     this.bar = new BottomBar(this.screen);
     this.screen.onResize = () => this.redrawBar();
@@ -107,6 +105,8 @@ export class TerminalMode {
 
   private redrawBar(): void {
     if (!this.bar) return;
+    // Hide the cursor across the multi-row redraw so it does not flicker.
+    this.screen.hideCursor();
     if (this.busy && !this.editor.answering) {
       // Mid-turn keystroke — keep streaming output undisturbed.
       this.screen.saveOutputCursor();
@@ -116,6 +116,7 @@ export class TerminalMode {
       const layout = this.bar.draw(this.barState());
       this.bar.placeCursor(layout);
     }
+    this.screen.showCursor();
   }
 
   private handleSubmit(text: string): void {
@@ -129,7 +130,7 @@ export class TerminalMode {
 
   private async runTurn(text: string): Promise<void> {
     this.busy = true;
-    this.screen.restoreOutputCursor(); // cursor → output region
+    this.screen.moveToOutputBottom(); // cursor → output region
     this.renderer.info(pc.cyan('=> ') + text); // echo the prompt into the log
     this.redrawBar();
     try {
@@ -138,7 +139,6 @@ export class TerminalMode {
       this.renderer.error(e instanceof Error ? e.message : String(e));
     }
     this.busy = false;
-    this.screen.saveOutputCursor(); // remember where output ended
     this.redrawBar();
     const next = this.queue.shift();
     if (next && !this.exiting) void this.runTurn(next);

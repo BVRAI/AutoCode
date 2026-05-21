@@ -78,12 +78,29 @@ export class Screen {
     this.out.write(`${ESC}[1;${bottom}r`);
   }
 
+  // ESC7/ESC8 — used only transiently within a single footer redraw while a
+  // turn streams, so the saved position can never go stale.
   saveOutputCursor(): void {
     if (this.active) this.out.write(`${ESC}7`);
   }
 
   restoreOutputCursor(): void {
     if (this.active) this.out.write(`${ESC}8`);
+  }
+
+  // Park the cursor at the bottom row of the output region. Output written
+  // here accumulates and scrolls upward — a known, absolute position that
+  // does not depend on a saved cursor surviving the scroll-region install.
+  moveToOutputBottom(): void {
+    if (this.active) this.out.write(`${ESC}[${this.outputRows};1H`);
+  }
+
+  hideCursor(): void {
+    if (this.active) this.out.write(`${ESC}[?25l`);
+  }
+
+  showCursor(): void {
+    if (this.active) this.out.write(`${ESC}[?25h`);
   }
 
   // Move the cursor to (1-indexed) row `rowInFooter`, column `col` within the
