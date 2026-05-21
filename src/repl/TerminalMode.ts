@@ -18,6 +18,7 @@ import { Screen } from './Screen.js';
 import { LineEditor } from './LineEditor.js';
 import { BottomBar, renderBar, type BarState } from './BottomBar.js';
 import { PrompterRef, TuiPrompter } from './Prompter.js';
+import { BANNER_GALLERY, bannerBlock } from './Banner.js';
 
 const MAX_QUEUE = 5;
 
@@ -46,6 +47,10 @@ export class TerminalMode {
   private busy = false;
   private readonly queue: string[] = [];
   private resolveExit: ((code: number) => void) | null = null;
+  // Launch-banner rotation — flashes a new random gallery banner every 2s
+  // until the first prompt is submitted.
+  private bannerTimer: ReturnType<typeof setInterval> | null = null;
+  private lastBannerId = 1; // banner 1 is the static draw from printHeader
 
   constructor(
     private readonly ctx: SessionContext,
@@ -67,6 +72,7 @@ export class TerminalMode {
 
   // ── TUI mode ──────────────────────────────────────────────────────────
   private runTui(): Promise<number> {
+    this.screen.clear(); // anchor the header (and banner) at row 1
     this.renderer.printHeader(this.ctx);
     this.screen.enter(renderBar(this.barState()).footerHeight);
     // Park the output cursor at the bottom of the output region — output
@@ -78,10 +84,43 @@ export class TerminalMode {
     this.prompter.use(new TuiPrompter(this.editor, this.renderer, this.screen));
     this.editor.start();
     this.redrawBar();
+    this.startBannerRotation();
 
     return new Promise<number>((resolve) => {
       this.resolveExit = resolve;
     });
+  }
+
+  // ── Launch-banner rotation ────────────────────────────────────────────
+  // The banner sits at fixed rows 1–6 (drawn by printHeader before the
+  // scroll region was installed). Until the first prompt, swap in a random
+  // gallery banner every 2s. Skipped on short terminals where the header
+  // may already have scrolled off.
+  private startBannerRotation(): void {
+    if (this.screen.outputRows < 14) return;
+    this.bannerTimer = setInterval(() => this.rotateBanner(), 2000);
+  }
+
+  private stopBannerRotation(): void {
+    if (this.bannerTimer) {
+      clearInterval(this.bannerTimer);
+      this.bannerTimer = null;
+    }
+  }
+
+  private rotateBanner(): void {
+    if (!this.bar) return;
+    let pick = BANNER_GALLERY[Math.floor(Math.random() * BANNER_GALLERY.length)]!;
+    while (pick.id === this.lastBannerId && BANNER_GALLERY.length > 1) {
+      pick = BANNER_GALLERY[Math.floor(Math.random() * BANNER_GALLERY.length)]!;
+    }
+    this.lastBannerId = pick.id;
+    this.screen.hideCursor();
+    const block = bannerBlock(pick);
+    for (let i = 0; i < block.length; i++) {
+      this.screen.write(`\x1b[${i + 1};1H\x1b[2K` + block[i]!);
+    }
+    this.redrawBar(); // re-places the input cursor and shows it
   }
 
   private barState(): BarState {
@@ -130,6 +169,7 @@ export class TerminalMode {
   }
 
   private async runTurn(text: string): Promise<void> {
+    this.stopBannerRotation(); // first prompt ends the banner flashing
     this.busy = true;
     this.screen.moveToOutputBottom(); // cursor → output region
     this.renderer.info(pc.cyan('=> ') + text); // echo the prompt into the log
@@ -168,6 +208,7 @@ export class TerminalMode {
   private exit(code: number): void {
     if (this.exiting) return;
     this.exiting = true;
+    this.stopBannerRotation();
     this.editor.stop();
     this.screen.exit();
     this.resolveExit?.(code);

@@ -92,6 +92,18 @@ export const BANNER_GALLERY: Array<{ id: number; label: string; lines: string[] 
   },
 ];
 
+// Fixed height of the banner block (blank · 3 art rows · tagline · blank) so
+// the rotating banner never shifts the layout below it.
+export const BANNER_BLOCK_HEIGHT = 6;
+
+// The 6-row block for a gallery entry — art padded to 3 rows, coloured,
+// with the tagline. Used by the launch-banner rotation.
+export function bannerBlock(entry: { lines: string[] }): string[] {
+  const art = [...entry.lines];
+  while (art.length < 3) art.push('');
+  return ['', ...art.slice(0, 3).map((l) => pc.cyan(l)), pc.dim(TAGLINE), ''];
+}
+
 export function printBannerGallery(stream: NodeJS.WriteStream = process.stdout): void {
   stream.write('\n' + pc.dim('autocode — startup banner options:') + '\n\n');
   for (const b of BANNER_GALLERY) {

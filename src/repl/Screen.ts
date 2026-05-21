@@ -40,6 +40,13 @@ export class Screen {
     return this.outputRows + 1;
   }
 
+  // Wipe the screen + scrollback and home the cursor. Called once at TUI
+  // startup so the header (and the row-1-anchored launch banner) lands at a
+  // known absolute position.
+  clear(): void {
+    if (this.isTty) this.out.write(`${ESC}[2J${ESC}[3J${ESC}[H`);
+  }
+
   enter(footerHeight: number): void {
     if (!this.isTty) return;
     this.footerHeight = footerHeight;
