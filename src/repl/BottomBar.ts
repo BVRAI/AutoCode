@@ -115,13 +115,14 @@ function renderStatus(state: BarState, cols: number): string {
   const queuedPlain = state.queued > 0 ? `${state.queued} queued  ` : '';
   const rightPlain = queuedPlain + usagePlain;
 
-  const gap = cols - modePlain.length - rightPlain.length;
+  const indent = '    '; // inset the mode label one tab from the left edge
+  const gap = cols - indent.length - modePlain.length - rightPlain.length;
   if (gap < 1) {
     // Too narrow — just show the mode.
-    return left;
+    return indent + left;
   }
   const right = (state.queued > 0 ? pc.yellow(queuedPlain) : '') + pc.dim(usagePlain);
-  return left + ' '.repeat(gap) + right;
+  return indent + left + ' '.repeat(gap) + right;
 }
 
 function kfmt(n: number): string {
