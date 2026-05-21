@@ -223,13 +223,15 @@ export class AgentLoop {
         );
         for await (const evt of stream as AsyncIterable<StreamEvent>) {
           if (evt.type === 'text_delta') {
+            // The reply is buffered (rendered as styled markdown at the end),
+            // so the spinner keeps running while it arrives — no silent gap.
             if (!firstTextSeen) {
-              this.deps.renderer.spinner.stop();
               this.deps.renderer.beginAssistantStream();
               firstTextSeen = true;
             }
             this.deps.renderer.streamChunk(evt.text);
           } else if (evt.type === 'tool_use_start') {
+            this.deps.renderer.spinner.stop();
             if (firstTextSeen) {
               this.deps.renderer.endAssistantStream();
               firstTextSeen = false;

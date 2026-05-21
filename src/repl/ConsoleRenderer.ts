@@ -5,6 +5,7 @@ import { loadProjectInstructions } from '../agent/ProjectInstructions.js';
 import { printBanner } from './Banner.js';
 import { Spinner } from './Spinner.js';
 import { renderUnifiedDiff } from '../util/diff.js';
+import { renderMarkdown, looksLikeMarkdown } from './MarkdownRenderer.js';
 import { getRepoMap } from '../agent/RepoMap.js';
 
 export class ConsoleRenderer {
@@ -85,27 +86,35 @@ export class ConsoleRenderer {
   beginAssistantStream(): void {
     this.streaming = true;
     this.streamBuffer = '';
-    process.stdout.write(pc.magenta('ac: '));
   }
 
+  // The reply is buffered, not written live — so the styled block can be
+  // rendered once at the end with no cursor-up (which would erase the
+  // pinned footer). The spinner runs meanwhile.
   streamChunk(text: string): void {
-    if (!this.streaming) {
-      this.beginAssistantStream();
-    }
-    process.stdout.write(text);
+    if (!this.streaming) this.beginAssistantStream();
     this.streamBuffer += text;
   }
 
   endAssistantStream(): void {
     if (!this.streaming) return;
     this.streaming = false;
-    // Ensure we end on a newline. (The cursor-up markdown re-render is not
-    // used under the pinned-bar scroll region — it would erase the footer.)
-    if (!this.streamBuffer.endsWith('\n')) {
-      process.stdout.write('\n');
+    const text = this.streamBuffer;
+    this.streamBuffer = '';
+    if (text.trim().length === 0) return;
+    const rendered = looksLikeMarkdown(text) ? renderMarkdown(text) : text;
+    const lines = rendered.split(/\r?\n/);
+    let first = true;
+    for (const line of lines) {
+      if (first) {
+        if (line.trim().length === 0) continue;
+        process.stdout.write(`${pc.magenta('ac:')} ${line}\n`);
+        first = false;
+      } else {
+        process.stdout.write(`    ${line}\n`);
+      }
     }
     process.stdout.write('\n');
-    this.streamBuffer = '';
   }
 
   // Render a colored inline unified diff. Truncates extremely long diffs.
