@@ -133,6 +133,7 @@ export class TerminalMode {
     this.busy = true;
     this.screen.moveToOutputBottom(); // cursor → output region
     this.renderer.info(pc.cyan('=> ') + text); // echo the prompt into the log
+    this.renderer.rule(); // separate the prompt from the reply
     this.redrawBar();
     try {
       await this.dispatch(parse(text));

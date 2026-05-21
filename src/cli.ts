@@ -5,6 +5,7 @@ import { ConsoleRenderer } from './repl/ConsoleRenderer.js';
 import { TerminalMode } from './repl/TerminalMode.js';
 import { runHeadless } from './repl/HeadlessMode.js';
 import { PrompterRef, AutoDenyPrompter, PlainPrompter } from './repl/Prompter.js';
+import { printBannerGallery } from './repl/Banner.js';
 import { StubAgent } from './agent/StubAgent.js';
 import { LiveAgent } from './agent/LiveAgent.js';
 import { newSessionId, type SessionContext } from './session/SessionContext.js';
@@ -35,6 +36,7 @@ program
   .option('-p, --print <prompt>', 'run a single task non-interactively and exit')
   .option('--resume <sessionId>', 'resume a specific prior session')
   .option('-c, --continue', 'resume the most recent prior session', false)
+  .option('--banners', 'preview the startup banner options and exit', false)
   .action(
     async (opts: {
       projectRoot?: string;
@@ -44,7 +46,12 @@ program
       print?: string;
       resume?: string;
       continue?: boolean;
+      banners?: boolean;
     }) => {
+    if (opts.banners) {
+      printBannerGallery();
+      process.exit(0);
+    }
     // Resolve a resume target before building the session context. A session
     // is resumable only if it has both state.json and conversation.json.
     let resumedMeta: SessionState | null = null;

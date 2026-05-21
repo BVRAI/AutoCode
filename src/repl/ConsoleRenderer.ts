@@ -52,6 +52,11 @@ export class ConsoleRenderer {
     process.stdout.write(text + '\n');
   }
 
+  // A full-width horizontal rule — separates a user prompt from the reply.
+  rule(): void {
+    process.stdout.write(pc.dim('─'.repeat(process.stdout.columns || 80)) + '\n');
+  }
+
   assistant(text: string): void {
     const lines = text.split(/\r?\n/);
     let first = true;
