@@ -26,6 +26,7 @@ You help the user inspect, modify, and run code in a single project. You operate
 - Project root: ${ctx.projectRoot}
 - Project type: ${projectLine || '(none detected)'}
 - Operating system: ${os}
+- Shell for run_shell: ${platform() === 'win32' ? 'cmd.exe' : '/bin/sh'} — prefer commands native to this shell, and always wrap any path or argument containing spaces in double quotes.
 - Session id: ${ctx.sessionId}
 - Model: ${ctx.model.provider}/${ctx.model.model}
 - Likely verification command: ${verifyHints}

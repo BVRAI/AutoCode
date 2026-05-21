@@ -147,10 +147,10 @@ interface BackgroundResult {
 // running. The process is killed when autocode exits.
 function runBackground(command: string, cwd: string): Promise<BackgroundResult> {
   return new Promise((resolve) => {
-    const isWin = process.platform === 'win32';
-    const child = isWin
-      ? spawn('cmd.exe', ['/d', '/s', '/c', command], { cwd })
-      : spawn('/bin/sh', ['-c', command], { cwd });
+    // shell:true lets Node invoke the platform shell correctly — on Windows it
+    // passes the command verbatim to cmd.exe (no argv re-escaping that would
+    // mangle embedded quotes); on POSIX it uses /bin/sh -c.
+    const child = spawn(command, { cwd, shell: true });
     bgChildren.add(child);
     // A background process must not keep autocode's event loop alive on its
     // own — autocode's lifetime is governed by the REPL, not the dev server.
@@ -187,10 +187,9 @@ function runBackground(command: string, cwd: string): Promise<BackgroundResult> 
 
 function runCommand(command: string, cwd: string, timeoutMs: number): Promise<CommandResult> {
   return new Promise((resolve) => {
-    const isWin = process.platform === 'win32';
-    const child = isWin
-      ? spawn('cmd.exe', ['/d', '/s', '/c', command], { cwd })
-      : spawn('/bin/sh', ['-c', command], { cwd });
+    // shell:true — see runBackground: avoids the argv re-escaping that
+    // corrupted quoted arguments containing spaces.
+    const child = spawn(command, { cwd, shell: true });
 
     let stdout = '';
     let stderr = '';

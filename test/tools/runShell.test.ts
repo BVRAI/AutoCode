@@ -17,6 +17,28 @@ function ctx(): ToolExecutionContext {
   return { session };
 }
 
+describe('run_shell quoting', () => {
+  // Regression: argv-array spawn on Windows re-escaped embedded quotes into
+  // \" which cmd.exe mangled — quoted arguments with spaces were corrupted.
+  it('preserves a quoted argument that contains spaces', async () => {
+    const out = await new RunShellTool().execute(
+      { command: 'node -e "console.log(\'a b c\')"' },
+      ctx(),
+    );
+    expect(out.isError).toBe(false);
+    expect(out.content).toContain('a b c');
+  }, 20_000);
+
+  it('passes a quoted spaced path through as a single argument', async () => {
+    const out = await new RunShellTool().execute(
+      { command: 'node -e "console.log(process.argv[1])" "new par website"' },
+      ctx(),
+    );
+    expect(out.isError).toBe(false);
+    expect(out.content).toContain('new par website');
+  }, 20_000);
+});
+
 describe('run_shell background mode', () => {
   it('returns promptly for a long-running process instead of hanging', async () => {
     const t0 = Date.now();
