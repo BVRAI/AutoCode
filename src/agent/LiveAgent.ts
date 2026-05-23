@@ -12,6 +12,8 @@ import { SubagentRunner } from './SubagentRunner.js';
 import { McpClientManager } from '../mcp/McpClientManager.js';
 import { McpTool } from '../mcp/McpTool.js';
 import { ConfigStore } from '../auth/ConfigStore.js';
+import type { EventEmitter } from '../repl/EventEmitter.js';
+import { NullEventEmitter } from '../repl/EventEmitter.js';
 
 export class LiveAgent implements AgentHandler {
   readonly loop: AgentLoop;
@@ -23,7 +25,7 @@ export class LiveAgent implements AgentHandler {
   constructor(
     private readonly renderer: ConsoleRenderer,
     store: TranscriptStore,
-    opts: { checkpoints?: CheckpointStore; prompter: Prompter },
+    opts: { checkpoints?: CheckpointStore; prompter: Prompter; emitter?: EventEmitter },
   ) {
     const router = new LlmRouter();
     const runner = new SubagentRunner(router, store);
@@ -46,6 +48,7 @@ export class LiveAgent implements AgentHandler {
       checkpoints: this.checkpoints,
       autoVerify: config.autoVerify !== false,
       verifyCommand: config.verifyCommand,
+      emitter: opts.emitter ?? new NullEventEmitter(),
     });
   }
 

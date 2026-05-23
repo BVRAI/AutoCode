@@ -9,6 +9,7 @@ import { printBannerGallery } from './repl/Banner.js';
 import { checkForUpdate, readOwnPackage, runUpdate, shouldAutoUpdate } from './update/UpdateChecker.js';
 import { isBundled } from './util/host.js';
 import pc from 'picocolors';
+import { NullEventEmitter, StdoutEventEmitter, type EventEmitter } from './repl/EventEmitter.js';
 import { StubAgent } from './agent/StubAgent.js';
 import { LiveAgent } from './agent/LiveAgent.js';
 import { newSessionId, type SessionContext } from './session/SessionContext.js';
@@ -41,6 +42,7 @@ program
   .option('-c, --continue', 'resume the most recent prior session', false)
   .option('--banners', 'preview the startup banner options and exit', false)
   .option('--update', 'install the latest autocode from npm and exit', false)
+  .option('--automax', 'emit machine-readable activity events for the Automax host', false)
   .action(
     async (opts: {
       projectRoot?: string;
@@ -52,6 +54,7 @@ program
       continue?: boolean;
       banners?: boolean;
       update?: boolean;
+      automax?: boolean;
     }) => {
     if (opts.banners) {
       printBannerGallery();
@@ -179,6 +182,13 @@ program
     if (headless) {
       renderer.dim(`session ${ctx.sessionId} · ${ctx.sessionDir}`);
     }
+    // When --automax is set, autocode emits one <<AMX>>{…}<</AMX>> JSON line
+    // per significant moment so the V6 host can track state without scraping
+    // the terminal. Also set an env var so deeper code can branch on it
+    // without threading the flag everywhere.
+    const emitter: EventEmitter = opts.automax ? new StdoutEventEmitter() : new NullEventEmitter();
+    if (opts.automax) process.env.AUTOCODE_AUTOMAX = '1';
+
     const auth = new AuthResolver().resolve(ctx.model.provider);
     const agent =
       auth.kind === 'missing'
@@ -186,7 +196,7 @@ program
             `no credentials for ${ctx.model.provider} — set ${envKeyFor(ctx.model.provider)} or AUTOMAX_PROXY_TOKEN. Running in stub mode.`,
           ),
           new StubAgent(renderer, store))
-        : new LiveAgent(renderer, store, { checkpoints, prompter });
+        : new LiveAgent(renderer, store, { checkpoints, prompter, emitter });
 
     // Initialize MCP servers if any are configured. Fail soft.
     if (agent instanceof LiveAgent) {
@@ -211,7 +221,7 @@ program
 
     const code = headless
       ? await runHeadless(agent, renderer, ctx, opts.print as string)
-      : await new TerminalMode(ctx, renderer, agent, prompter).run();
+      : await new TerminalMode(ctx, renderer, agent, prompter, emitter).run();
     if (agent instanceof LiveAgent) {
       try {
         await agent.shutdown();

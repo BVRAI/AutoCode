@@ -21,6 +21,7 @@ import { PrompterRef, TuiPrompter } from './Prompter.js';
 import { BANNER_GALLERY, bannerBlock } from './Banner.js';
 import { runUpdate } from '../update/UpdateChecker.js';
 import { isBundled } from '../util/host.js';
+import { type EventEmitter, NullEventEmitter } from './EventEmitter.js';
 
 const MAX_QUEUE = 5;
 
@@ -62,6 +63,7 @@ export class TerminalMode {
     private readonly renderer: ConsoleRenderer,
     private readonly agent: AgentHandler,
     private readonly prompter: PrompterRef,
+    private readonly emitter: EventEmitter = new NullEventEmitter(),
   ) {
     this.editor = new LineEditor({
       onChange: () => this.redrawBar(),
@@ -86,7 +88,7 @@ export class TerminalMode {
 
     this.bar = new BottomBar(this.screen);
     this.screen.onResize = () => this.handleResize();
-    this.prompter.use(new TuiPrompter(this.editor, this.renderer, this.screen));
+    this.prompter.use(new TuiPrompter(this.editor, this.renderer, this.screen, this.emitter));
     this.editor.start();
     this.redrawBar();
     this.startBannerRotation();

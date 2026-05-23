@@ -2,6 +2,7 @@ import { createInterface } from 'node:readline';
 import { ANSWER_CANCELLED, type LineEditor } from './LineEditor.js';
 import type { ConsoleRenderer } from './ConsoleRenderer.js';
 import type { Screen } from './Screen.js';
+import { type EventEmitter, NullEventEmitter } from './EventEmitter.js';
 
 // One interactive-input authority. Every yes/no confirm and free-text
 // question goes through a Prompter so the LineEditor stays the sole owner of
@@ -29,17 +30,28 @@ export function parseYes(answer: string): boolean {
 }
 
 // Headless: no interactive user — decline confirms, return empty answers.
+// Still emits open/resolved events so the Automax host can see "autocode
+// reached a gate it can't satisfy" rather than guessing.
 export class AutoDenyPrompter implements Prompter {
-  async confirm(): Promise<boolean> {
+  constructor(private readonly emitter: EventEmitter = new NullEventEmitter()) {}
+  async confirm(message: string): Promise<boolean> {
+    this.emitter.emit('picker_opened', { kind: 'confirm', message, options: ['Yes', 'No'] });
+    this.emitter.emit('picker_resolved', { choice: 'no' });
     return false;
   }
-  async ask(): Promise<string> {
+  async ask(message: string): Promise<string> {
+    this.emitter.emit('text_input_opened', { prompt: message });
+    this.emitter.emit('text_input_resolved', { answer: '' });
     return '';
   }
-  async choose(): Promise<number[]> {
+  async choose(question: string, options: string[], multiSelect: boolean): Promise<number[]> {
+    this.emitter.emit('picker_opened', { kind: 'choose', question, options, multiSelect });
+    this.emitter.emit('picker_resolved', { choice: [] });
     return [];
   }
-  async approve(): Promise<ApproveVerdict> {
+  async approve(label: string): Promise<ApproveVerdict> {
+    this.emitter.emit('picker_opened', { kind: 'approve', label, options: ['Accept', 'Decline', 'Revise'] });
+    this.emitter.emit('picker_resolved', { choice: 'decline' });
     return { decision: 'decline' };
   }
 }
@@ -56,10 +68,22 @@ function parseChoiceList(answer: string, count: number): number[] {
 
 // Non-TTY interactive fallback: a one-shot readline question.
 export class PlainPrompter implements Prompter {
+  constructor(private readonly emitter: EventEmitter = new NullEventEmitter()) {}
   async confirm(message: string): Promise<boolean> {
-    return parseYes(await this.ask(`${message} [Y/n] `));
+    this.emitter.emit('picker_opened', { kind: 'confirm', message, options: ['Yes', 'No'] });
+    const yes = parseYes(await this.askInternal(`${message} [Y/n] `));
+    this.emitter.emit('picker_resolved', { choice: yes ? 'yes' : 'no' });
+    return yes;
   }
-  ask(message: string): Promise<string> {
+  async ask(message: string): Promise<string> {
+    this.emitter.emit('text_input_opened', { prompt: message });
+    const a = await this.askInternal(message);
+    this.emitter.emit('text_input_resolved', { answer: a });
+    return a;
+  }
+  // Internal readline ask used by confirm/choose/approve so the picker-level
+  // events aren't shadowed by a nested text_input pair.
+  private askInternal(message: string): Promise<string> {
     return new Promise((resolve) => {
       const rl = createInterface({ input: process.stdin, output: process.stderr });
       rl.question(message, (a) => {
@@ -69,18 +93,25 @@ export class PlainPrompter implements Prompter {
     });
   }
   async choose(question: string, options: string[], multiSelect: boolean): Promise<number[]> {
+    this.emitter.emit('picker_opened', { kind: 'choose', question, options, multiSelect });
     const list = options.map((o, i) => `  ${i + 1}) ${o}`).join('\n');
-    const ans = await this.ask(
+    const ans = await this.askInternal(
       `${question}\n${list}\n${multiSelect ? 'numbers (comma-separated): ' : 'number: '}`,
     );
-    return parseChoiceList(ans, options.length).slice(0, multiSelect ? options.length : 1);
+    const choices = parseChoiceList(ans, options.length).slice(0, multiSelect ? options.length : 1);
+    this.emitter.emit('picker_resolved', { choice: choices });
+    return choices;
   }
   async approve(label: string): Promise<ApproveVerdict> {
+    this.emitter.emit('picker_opened', { kind: 'approve', label, options: ['Accept', 'Decline', 'Revise'] });
     const list = APPROVE_OPTIONS.map((o, i) => `  ${i + 1}) ${o}`).join('\n');
-    const ans = (await this.ask(`${label}\n${list}\nchoice: `)).trim();
-    if (ans === '1') return { decision: 'accept' };
-    if (ans === '3') return { decision: 'revise', guidance: await this.ask('Guidance: ') };
-    return { decision: 'decline' };
+    const ans = (await this.askInternal(`${label}\n${list}\nchoice: `)).trim();
+    let decision: 'accept' | 'decline' | 'revise' = 'decline';
+    if (ans === '1') decision = 'accept';
+    else if (ans === '3') decision = 'revise';
+    this.emitter.emit('picker_resolved', { choice: decision });
+    if (decision === 'revise') return { decision, guidance: await this.ask('Guidance: ') };
+    return { decision };
   }
 }
 
@@ -93,27 +124,39 @@ export class TuiPrompter implements Prompter {
     private readonly editor: LineEditor,
     private readonly renderer: ConsoleRenderer,
     private readonly screen: Screen,
+    private readonly emitter: EventEmitter = new NullEventEmitter(),
   ) {}
 
   async confirm(message: string): Promise<boolean> {
-    return parseYes(await this.askRaw(`${message} [Y/n]`));
+    this.emitter.emit('picker_opened', { kind: 'confirm', message, options: ['Yes', 'No'] });
+    const yes = parseYes(await this.askRaw(`${message} [Y/n]`));
+    this.emitter.emit('picker_resolved', { choice: yes ? 'yes' : 'no' });
+    return yes;
   }
 
   async ask(message: string): Promise<string> {
+    this.emitter.emit('text_input_opened', { prompt: message });
     const a = await this.askRaw(message);
-    return a === ANSWER_CANCELLED ? '' : a;
+    const answer = a === ANSWER_CANCELLED ? '' : a;
+    this.emitter.emit('text_input_resolved', { answer });
+    return answer;
   }
 
   async choose(question: string, options: string[], multiSelect: boolean): Promise<number[]> {
+    this.emitter.emit('picker_opened', { kind: 'choose', question, options, multiSelect });
     this.renderer.info(question);
+    let result: number[];
     try {
-      return await this.editor.chooseOnce(options, multiSelect);
+      result = await this.editor.chooseOnce(options, multiSelect);
     } finally {
       this.screen.moveToOutputBottom();
     }
+    this.emitter.emit('picker_resolved', { choice: result });
+    return result;
   }
 
   async approve(label: string): Promise<ApproveVerdict> {
+    this.emitter.emit('picker_opened', { kind: 'approve', label, options: ['Accept', 'Decline', 'Revise'] });
     this.renderer.info(label);
     let picked: number[];
     try {
@@ -121,12 +164,15 @@ export class TuiPrompter implements Prompter {
     } finally {
       this.screen.moveToOutputBottom();
     }
-    if (picked[0] === 0) return { decision: 'accept' };
-    if (picked[0] === 2) {
-      const g = await this.askRaw('Describe how to revise:');
-      return { decision: 'revise', guidance: g === ANSWER_CANCELLED ? '' : g };
+    let decision: 'accept' | 'decline' | 'revise' = 'decline';
+    if (picked[0] === 0) decision = 'accept';
+    else if (picked[0] === 2) decision = 'revise';
+    this.emitter.emit('picker_resolved', { choice: decision });
+    if (decision === 'revise') {
+      const g = await this.ask('Describe how to revise:');
+      return { decision, guidance: g };
     }
-    return { decision: 'decline' };
+    return { decision };
   }
 
   private async askRaw(message: string): Promise<string> {

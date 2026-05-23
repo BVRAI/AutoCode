@@ -14,6 +14,7 @@ import { shouldAutoCompact } from '../util/contextWindow.js';
 import type { SubagentFactory } from '../tools/types.js';
 import type { ApproveVerdict } from '../repl/Prompter.js';
 import { resolveVerifyCommand, runVerification } from './Verify.js';
+import type { EventEmitter } from '../repl/EventEmitter.js';
 
 const MAX_ITERATIONS = 40;
 const LOOP_DETECT_WINDOW = 10;
@@ -69,6 +70,9 @@ export interface AgentDeps {
   autoVerify: boolean;
   // Explicit verification command — overrides the inferred default.
   verifyCommand?: string;
+  // Machine-readable activity stream for the Automax V6 host. NullEventEmitter
+  // when --automax is off; StdoutEventEmitter when it is on.
+  emitter: EventEmitter;
 }
 
 export class AgentLoop {
@@ -199,13 +203,26 @@ export class AgentLoop {
     };
 
     const totals = { in: 0, out: 0, cacheRead: 0, cacheWrite: 0 };
+    // Accumulated across all verification rounds — surfaced in the `completed`
+    // event so V6 / the host can see which files this turn touched.
+    const filesChanged = new Set<string>();
+    // Mutable container so runIterations can update the last assistant text
+    // we report as the turn's `summary` on completion.
+    const turnState = { lastAssistantText: '' };
     try {
+      this.deps.emitter.emit('started', {
+        task: userText,
+        projectRoot: ctx.projectRoot,
+        sessionId: ctx.sessionId,
+        mode: ctx.mode,
+        model: `${ctx.model.provider}/${ctx.model.model}`,
+      });
       let mutated = false;
       // Round 0 is the user's actual turn; rounds 1.. are verification-driven
       // fix attempts. After any round that changed files, the harness runs the
       // project's verification command and, on failure, feeds the output back.
       for (let round = 0; round <= MAX_VERIFY_ROUNDS; round++) {
-        const r = await this.runIterations(ctx, toolExecCtx, userText, totals);
+        const r = await this.runIterations(ctx, toolExecCtx, userText, totals, filesChanged, turnState);
         mutated = mutated || r.mutated;
         if (this.cancelled || !mutated || ctx.mode === 'planning' || !this.deps.autoVerify) break;
 
@@ -240,7 +257,18 @@ export class AgentLoop {
             'them; say so briefly and stop.',
         });
       }
+      if (this.cancelled) {
+        this.deps.emitter.emit('failed', { error: 'cancelled by user' });
+      } else {
+        this.deps.emitter.emit('completed', {
+          summary: turnState.lastAssistantText,
+          filesChanged: [...filesChanged],
+        });
+      }
       this.emitStatusLine(totals.in, totals.out, totals.cacheRead, totals.cacheWrite, ctx);
+    } catch (e) {
+      this.deps.emitter.emit('failed', { error: e instanceof Error ? e.message : String(e) });
+      throw e;
     } finally {
       // Persist the conversation after every turn — natural end, iteration
       // cap, cancel, or exception — so the session is always resumable.
@@ -257,6 +285,8 @@ export class AgentLoop {
     toolExecCtx: ToolExecutionContext,
     userText: string,
     totals: { in: number; out: number; cacheRead: number; cacheWrite: number },
+    filesChanged: Set<string>,
+    turnState: { lastAssistantText: string },
   ): Promise<{ mutated: boolean }> {
     const recentToolSigs: string[] = [];
     const consecutiveFailures = new Map<string, number>();
@@ -333,10 +363,17 @@ export class AgentLoop {
       this.conversation.push({ role: 'assistant', content: response.content });
 
       // Transcript log: capture the streamed text portions.
+      const assistantTextParts: string[] = [];
       for (const b of response.content) {
         if (b.type === 'text' && b.text.trim().length > 0) {
           this.deps.store.appendTranscript({ role: 'assistant', text: b.text });
+          assistantTextParts.push(b.text);
         }
+      }
+      // The last iteration's assistant text becomes the turn's `completed`
+      // summary — overwriting any intermediate iteration's text.
+      if (assistantTextParts.length > 0) {
+        turnState.lastAssistantText = assistantTextParts.join('\n').trim();
       }
 
       const toolUses = response.content.filter((b) => b.type === 'tool_use');
@@ -352,6 +389,13 @@ export class AgentLoop {
         const sig = `${tu.name}:${stableStringify(tu.input)}`;
         recentToolSigs.push(sig);
         if (recentToolSigs.length > LOOP_DETECT_WINDOW) recentToolSigs.shift();
+
+        // Activity events for the Automax host. tool_call gives the
+        // mechanical detail (name + args); file_edit_proposed is a semantic
+        // shortcut so V6 can surface "autocode wants to edit X" without
+        // parsing the tool args.
+        this.deps.emitter.emit('tool_call', { name: tu.name, args: tu.input });
+        emitFileEditProposed(this.deps.emitter, tu.name, tu.input);
 
         // Mode gate: planning blocks mutating tools; default asks first.
         const gate = gateFor(ctx.mode, tu.name);
@@ -395,7 +439,10 @@ export class AgentLoop {
           consecutiveFailures.set(tu.name, (consecutiveFailures.get(tu.name) ?? 0) + 1);
         } else {
           consecutiveFailures.set(tu.name, 0);
-          if (FILE_MUTATING_TOOLS.has(tu.name)) mutated = true;
+          if (FILE_MUTATING_TOOLS.has(tu.name)) {
+            mutated = true;
+            for (const p of pathsTouched(tu.input)) filesChanged.add(p);
+          }
         }
 
         this.deps.store.appendToolLog({
@@ -559,6 +606,40 @@ function detectLoop(window: string[], threshold: number): string | null {
     }
   }
   return null;
+}
+
+// Emit a `file_edit_proposed` semantic event for any file-mutating tool so the
+// Automax host can surface "autocode wants to touch this file" without
+// parsing tool_call args. No-op for tools that don't touch files.
+function emitFileEditProposed(
+  emitter: EventEmitter,
+  name: string,
+  input: Record<string, unknown>,
+): void {
+  const path = typeof input.path === 'string' ? input.path : undefined;
+  const paths = Array.isArray(input.paths) ? (input.paths as unknown[]).filter((p): p is string => typeof p === 'string') : undefined;
+  const summaryFor: Record<string, string> = {
+    edit_file: 'edit',
+    write_file: input.mode === 'overwrite' ? 'rewrite' : 'create',
+    create_directory: 'mkdir',
+    delete_path: 'delete',
+  };
+  const summary = summaryFor[name];
+  if (!summary) return;
+  const target = path ?? (paths && paths.length > 0 ? paths.join(', ') : undefined);
+  if (!target) return;
+  emitter.emit('file_edit_proposed', { path: target, summary });
+}
+
+// Collect the file paths affected by a successful file-mutating tool call —
+// used to populate filesChanged in the turn's completed event.
+function pathsTouched(input: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  if (typeof input.path === 'string') out.push(input.path);
+  if (Array.isArray(input.paths)) {
+    for (const p of input.paths) if (typeof p === 'string') out.push(p);
+  }
+  return out;
 }
 
 function stableStringify(o: unknown): string {
