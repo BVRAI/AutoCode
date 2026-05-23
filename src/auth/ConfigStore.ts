@@ -34,6 +34,11 @@ export interface AutocodeConfig {
   // `AUTOCODE_NO_UPDATE=1`, to disable. On disable you still see the notify
   // banner — you just have to run `/update` yourself.
   autoUpdate?: boolean;
+  // Smart docs — at /exit, if the session changed files or made ≥3 tool
+  // calls, autocode asks a small model to propose 0-5 lines worth appending
+  // to AUTOCODE.md. Default true; set to false to skip the auto-trigger
+  // (the explicit /reflect command still works either way).
+  reflectAfterSession?: boolean;
 }
 
 export class ConfigStore {

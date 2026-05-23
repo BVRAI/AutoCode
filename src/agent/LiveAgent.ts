@@ -126,4 +126,12 @@ export class LiveAgent implements AgentHandler {
   restore(id: string): ReturnType<CheckpointStore['restoreFromTrash']> {
     return this.checkpoints?.restoreFromTrash(id) ?? null;
   }
+
+  hasReflectableActivity(): boolean {
+    return this.loop.hasReflectableActivity();
+  }
+
+  reflectOnSession(ctx: SessionContext): ReturnType<AgentLoop['reflectOnSession']> {
+    return this.loop.reflectOnSession(ctx);
+  }
 }

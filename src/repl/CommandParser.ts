@@ -16,7 +16,8 @@ export type LocalCommandName =
   | 'trash'
   | 'restore'
   | 'mcp'
-  | 'update';
+  | 'update'
+  | 'reflect';
 
 export interface LocalCommand {
   kind: 'local';
@@ -54,6 +55,7 @@ const KNOWN: ReadonlySet<LocalCommandName> = new Set([
   'restore',
   'mcp',
   'update',
+  'reflect',
 ]);
 
 export function parse(line: string): ParsedInput {

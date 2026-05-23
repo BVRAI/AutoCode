@@ -21,6 +21,9 @@ import { PrompterRef, TuiPrompter } from './Prompter.js';
 import { BANNER_GALLERY, bannerBlock } from './Banner.js';
 import { runUpdate } from '../update/UpdateChecker.js';
 import { isBundled } from '../util/host.js';
+import { applyProposal, type Proposal } from '../agent/SessionReflection.js';
+import { ConfigStore } from '../auth/ConfigStore.js';
+import { relative } from 'node:path';
 import { type EventEmitter, NullEventEmitter } from './EventEmitter.js';
 
 const MAX_QUEUE = 5;
@@ -33,6 +36,8 @@ export interface AgentHandler {
   cumulativeUsage(): { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
   loadState?(state: { messages: Message[]; usage: CumulativeUsage }): void;
   undo?(grain?: 'step' | 'turn'): { turn: number; restored: number; step?: number } | null;
+  hasReflectableActivity?(): boolean;
+  reflectOnSession?(ctx: SessionContext): Promise<import('../agent/SessionReflection.js').Proposal[]>;
   trashList?(): TrashItem[];
   restore?(id: string): TrashItem | null;
   mcpStatus?(): Array<{ name: string; connected: boolean; toolCount: number; error?: string }>;
@@ -319,7 +324,8 @@ export class TerminalMode {
       | 'trash'
       | 'restore'
       | 'mcp'
-      | 'update',
+      | 'update'
+      | 'reflect',
     args: string[],
   ): Promise<void> {
     switch (name) {
@@ -340,8 +346,7 @@ export class TerminalMode {
         this.renderer.dim('(stop requested)');
         return;
       case 'exit':
-        this.exit(0);
-        return;
+        return this.handleExit();
       case 'init':
         await runInit(this.ctx.projectRoot, this.renderer);
         return;
@@ -376,7 +381,81 @@ export class TerminalMode {
         return;
       case 'update':
         return this.handleUpdate();
+      case 'reflect':
+        return this.handleReflect();
     }
+  }
+
+  // Smart docs — run a reflection on the session and review proposals
+  // one at a time. Called explicitly via /reflect, and by exit() when
+  // the session has meaningful activity (unless disabled in config).
+  // /exit handler — runs smart-docs reflection first (unless conditions
+  // say no), then shuts the TUI down. Distinct from the Ctrl+C exit path
+  // (handleInterrupt) which exits immediately without reflection — Ctrl+C
+  // is for "get me out fast."
+  private async handleExit(): Promise<void> {
+    await this.maybeReflectAtExit();
+    this.exit(0);
+  }
+
+  private async maybeReflectAtExit(): Promise<void> {
+    if (!this.screen.isTty) return; // headless: no interactive review
+    if (!this.agent.hasReflectableActivity) return; // no capability (e.g. stub)
+    if (!this.agent.hasReflectableActivity()) return; // nothing meaningful happened
+    let cfg: { reflectAfterSession?: boolean } = {};
+    try {
+      cfg = new ConfigStore().load();
+    } catch {
+      /* default config */
+    }
+    if (cfg.reflectAfterSession === false) return;
+    await this.handleReflect();
+  }
+
+  private async handleReflect(): Promise<void> {
+    if (!this.agent.reflectOnSession) {
+      this.renderer.dim('(reflection not available in this mode)');
+      return;
+    }
+    this.renderer.dim('reflecting on this session…');
+    this.renderer.spinner.start('reflecting');
+    let proposals: Proposal[] = [];
+    try {
+      proposals = await this.agent.reflectOnSession(this.ctx);
+    } catch (e) {
+      this.renderer.spinner.stop();
+      this.renderer.warn(`(reflection failed: ${e instanceof Error ? e.message : String(e)})`);
+      return;
+    }
+    this.renderer.spinner.stop();
+    if (proposals.length === 0) {
+      this.renderer.dim('(nothing worth recording — pretty quiet session)');
+      return;
+    }
+    this.renderer.info(`Found ${proposals.length} proposal${proposals.length === 1 ? '' : 's'} to consider:`);
+    let accepted = 0;
+    for (let i = 0; i < proposals.length; i++) {
+      if (this.exiting) break;
+      const p = proposals[i]!;
+      const targetRel = relative(this.ctx.projectRoot, p.target).replace(/\\/g, '/') || 'AUTOCODE.md';
+      const label =
+        `Proposal ${i + 1}/${proposals.length}  →  ${targetRel}\n` +
+        `  ${p.text}\n` +
+        `  why: ${p.reason}`;
+      const verdict = await this.prompter.approve(label);
+      if (verdict.decision === 'accept') {
+        applyProposal(p);
+        this.renderer.dim(`  ✓ appended to ${targetRel}`);
+        accepted += 1;
+      } else if (verdict.decision === 'revise' && verdict.guidance) {
+        applyProposal({ ...p, text: verdict.guidance });
+        this.renderer.dim(`  ✓ appended (revised) to ${targetRel}`);
+        accepted += 1;
+      } else {
+        this.renderer.dim('  ✗ skipped');
+      }
+    }
+    this.renderer.dim(`(${accepted}/${proposals.length} accepted)`);
   }
 
   private async handleUpdate(): Promise<void> {
@@ -462,6 +541,7 @@ export class TerminalMode {
       '/restore <id>                  Restore a deleted file from the trash',
       '/mcp                           List configured MCP servers and their tools',
       '/update                        Check for and install the latest autocode (npm)',
+      '/reflect                       Propose AUTOCODE.md additions based on this session',
       '/stop                          Cancel current task (or Ctrl+C)',
       '/exit                          Close autocode',
     ];

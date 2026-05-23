@@ -15,6 +15,7 @@ import type { SubagentFactory } from '../tools/types.js';
 import type { ApproveVerdict } from '../repl/Prompter.js';
 import { resolveVerifyCommand, runVerification } from './Verify.js';
 import type { EventEmitter } from '../repl/EventEmitter.js';
+import { runSessionReflection, type Proposal, type SessionSnapshot } from './SessionReflection.js';
 
 const MAX_ITERATIONS = 40;
 const LOOP_DETECT_WINDOW = 10;
@@ -85,6 +86,11 @@ export class AgentLoop {
   // Input-token count of the most recent LLM call ≈ current context size;
   // drives auto-compaction.
   private lastInputTokens = 0;
+  // Session-scoped accumulators used by the smart-docs reflection at
+  // /exit or /reflect time. Per-turn filesChanged is computed inside
+  // submit(); this Set is the union across all turns in the session.
+  private readonly sessionFilesChanged = new Set<string>();
+  private sessionToolCalls = 0;
 
   constructor(private readonly deps: AgentDeps) {}
 
@@ -169,6 +175,72 @@ export class AgentLoop {
       .trim();
     if (!text) throw new Error('empty summary');
     return text;
+  }
+
+  // Whether the session has done enough to be worth reflecting on. Used by
+  // TerminalMode to decide whether to auto-trigger smart-docs on /exit.
+  hasReflectableActivity(): boolean {
+    return this.sessionFilesChanged.size > 0 || this.sessionToolCalls >= 3;
+  }
+
+  // Smart docs — ask a small model to look at this session and propose
+  // appendable lines for the right-scoped AUTOCODE.md. Returns [] on any
+  // LLM error or when nothing meaningful happened. The caller (TerminalMode)
+  // handles the user-review UX + writes accepted proposals.
+  async reflectOnSession(ctx: SessionContext): Promise<Proposal[]> {
+    const snapshot: SessionSnapshot = {
+      userPrompts: this.extractUserPrompts(),
+      assistantReplies: this.extractAssistantTexts(),
+      toolCalls: this.extractToolCallPreviews(),
+      filesChanged: [...this.sessionFilesChanged].sort(),
+    };
+    return runSessionReflection(snapshot, {
+      router: this.deps.router,
+      provider: ctx.model.provider as ProviderName,
+      model: ctx.model.model,
+      projectRoot: ctx.projectRoot,
+    });
+  }
+
+  private extractUserPrompts(): string[] {
+    const out: string[] = [];
+    for (const m of this.conversation) {
+      if (m.role !== 'user') continue;
+      const text = typeof m.content === 'string' ? m.content : textOf(m.content);
+      if (text.trim().length > 0 && !text.startsWith('[Summary of earlier conversation]') && !text.startsWith('[user cancelled')) {
+        out.push(text);
+      }
+    }
+    return out;
+  }
+
+  private extractAssistantTexts(): string[] {
+    const out: string[] = [];
+    for (const m of this.conversation) {
+      if (m.role !== 'assistant' || typeof m.content === 'string') continue;
+      const joined = m.content
+        .filter((b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text')
+        .map((b) => b.text)
+        .join('\n')
+        .trim();
+      if (joined.length > 0) out.push(joined);
+    }
+    return out;
+  }
+
+  private extractToolCallPreviews(): Array<{ name: string; argsPreview: string }> {
+    const out: Array<{ name: string; argsPreview: string }> = [];
+    for (const m of this.conversation) {
+      if (m.role !== 'assistant' || typeof m.content === 'string') continue;
+      for (const b of m.content) {
+        if (b.type !== 'tool_use') continue;
+        out.push({
+          name: b.name,
+          argsPreview: JSON.stringify(b.input).slice(0, 200),
+        });
+      }
+    }
+    return out;
   }
 
   async submit(input: string | ContentBlock[], ctx: SessionContext): Promise<void> {
@@ -392,6 +464,7 @@ export class AgentLoop {
         const sig = `${tu.name}:${stableStringify(tu.input)}`;
         recentToolSigs.push(sig);
         if (recentToolSigs.length > LOOP_DETECT_WINDOW) recentToolSigs.shift();
+        this.sessionToolCalls += 1;
 
         // Activity events for the Automax host. tool_call gives the
         // mechanical detail (name + args); file_edit_proposed is a semantic
@@ -448,7 +521,10 @@ export class AgentLoop {
           consecutiveFailures.set(tu.name, 0);
           if (FILE_MUTATING_TOOLS.has(tu.name)) {
             mutated = true;
-            for (const p of pathsTouched(tu.input)) filesChanged.add(p);
+            for (const p of pathsTouched(tu.input)) {
+              filesChanged.add(p);
+              this.sessionFilesChanged.add(p);
+            }
           }
         }
 
