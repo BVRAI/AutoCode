@@ -1,0 +1,64 @@
+name: Release
+
+# Tag a commit `vX.Y.Z` (matching the version in package.json) and push it to
+# trigger a release: build + test, publish to npm, then create a GitHub Release
+# whose body is the matching section of CHANGELOG.md.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write  # to create the GitHub Release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+
+      # Sanity: the git tag must match package.json's version (v0.1.0 → 0.1.0).
+      - name: Verify tag matches package version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg=$(node -p "require('./package.json').version")
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package version $pkg"
+            exit 1
+          fi
+
+      - name: Publish to npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Extract release notes from CHANGELOG.md
+        id: notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v ver="$version" '
+            /^## \[/ {
+              if (found) exit
+              if ($0 ~ "\\[" ver "\\]") { found = 1; next }
+            }
+            found { print }
+          ' CHANGELOG.md > release_notes.md
+          if [ ! -s release_notes.md ]; then
+            echo "Release ${GITHUB_REF_NAME}." > release_notes.md
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          body_path: release_notes.md

@@ -19,6 +19,8 @@ import { LineEditor } from './LineEditor.js';
 import { BottomBar, renderBar, type BarState } from './BottomBar.js';
 import { PrompterRef, TuiPrompter } from './Prompter.js';
 import { BANNER_GALLERY, bannerBlock } from './Banner.js';
+import { runUpdate } from '../update/UpdateChecker.js';
+import { isBundled } from '../util/host.js';
 
 const MAX_QUEUE = 5;
 
@@ -277,7 +279,8 @@ export class TerminalMode {
       | 'undo'
       | 'trash'
       | 'restore'
-      | 'mcp',
+      | 'mcp'
+      | 'update',
     args: string[],
   ): Promise<void> {
     switch (name) {
@@ -332,7 +335,17 @@ export class TerminalMode {
       case 'mcp':
         this.handleMcp();
         return;
+      case 'update':
+        return this.handleUpdate();
     }
+  }
+
+  private async handleUpdate(): Promise<void> {
+    if (isBundled()) {
+      this.renderer.dim('(autocode is bundled with Automax — V6 manages updates via Velopack)');
+      return;
+    }
+    await runUpdate(this.renderer);
   }
 
   private handleUndo(): void {
@@ -403,6 +416,7 @@ export class TerminalMode {
       '/trash                         List recently deleted files (recoverable)',
       '/restore <id>                  Restore a deleted file from the trash',
       '/mcp                           List configured MCP servers and their tools',
+      '/update                        Check for and install the latest autocode (npm)',
       '/stop                          Cancel current task (or Ctrl+C)',
       '/exit                          Close autocode',
     ];

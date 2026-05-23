@@ -27,6 +27,13 @@ export interface AutocodeConfig {
   // disables the post-edit verification loop when set to false.
   verifyCommand?: string;
   autoVerify?: boolean;
+  // Auto-update is **opt-out** — when a newer version is detected at startup
+  // (standalone install only; never for the V6-bundled copy or in headless
+  // mode or on a prerelease), autocode auto-installs and tells the user to
+  // relaunch. Set `autoUpdate: false` here, or set the env var
+  // `AUTOCODE_NO_UPDATE=1`, to disable. On disable you still see the notify
+  // banner — you just have to run `/update` yourself.
+  autoUpdate?: boolean;
 }
 
 export class ConfigStore {

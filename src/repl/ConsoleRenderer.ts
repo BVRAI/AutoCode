@@ -12,6 +12,13 @@ export class ConsoleRenderer {
   readonly spinner = new Spinner();
   private streaming = false;
   private streamBuffer = '';
+  // Optional one-line banner shown in the header — set by the update checker
+  // at startup when a newer autocode version is available.
+  private updateBanner: string | null = null;
+
+  setUpdateBanner(text: string | null): void {
+    this.updateBanner = text;
+  }
 
   printHeader(ctx: SessionContext): void {
     printBanner();
@@ -36,6 +43,7 @@ export class ConsoleRenderer {
       const n = repoMap.split('\n').filter((l) => l.length > 0 && !l.startsWith('…')).length;
       lines.push(pc.dim(`repo map: ${n} file${n === 1 ? '' : 's'} indexed`));
     }
+    if (this.updateBanner) lines.push(this.updateBanner);
     lines.push('');
     lines.push(pc.dim('Type /help for commands. Plain text is sent to the agent.'));
     lines.push('');

@@ -12,6 +12,15 @@ export function isAutomaxHosted(): boolean {
   return Boolean(process.env.AUTOMAX_PROXY_TOKEN);
 }
 
+// True when this is the V6-bundled copy of autocode (updated by V6's Velopack —
+// the bundled copy must not try to self-update or nag the user). Set by V6 at
+// launch via the AUTOMAX_BUNDLED env var; a sentinel `.automax-bundled` file
+// next to the install also works for non-launcher distribution.
+export function isBundled(): boolean {
+  if (process.env.AUTOMAX_BUNDLED === '1') return true;
+  return false;
+}
+
 // Emit a host-protocol line to stdout. The host (V6, Phase 9) scans for the
 // `@@autocode:` prefix and filters these lines out of the visible terminal.
 export function emitHostSignal(type: string, payload: unknown): void {

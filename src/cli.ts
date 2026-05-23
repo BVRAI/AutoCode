@@ -6,6 +6,9 @@ import { TerminalMode } from './repl/TerminalMode.js';
 import { runHeadless } from './repl/HeadlessMode.js';
 import { PrompterRef, AutoDenyPrompter, PlainPrompter } from './repl/Prompter.js';
 import { printBannerGallery } from './repl/Banner.js';
+import { checkForUpdate, readOwnPackage, runUpdate, shouldAutoUpdate } from './update/UpdateChecker.js';
+import { isBundled } from './util/host.js';
+import pc from 'picocolors';
 import { StubAgent } from './agent/StubAgent.js';
 import { LiveAgent } from './agent/LiveAgent.js';
 import { newSessionId, type SessionContext } from './session/SessionContext.js';
@@ -37,6 +40,7 @@ program
   .option('--resume <sessionId>', 'resume a specific prior session')
   .option('-c, --continue', 'resume the most recent prior session', false)
   .option('--banners', 'preview the startup banner options and exit', false)
+  .option('--update', 'install the latest autocode from npm and exit', false)
   .action(
     async (opts: {
       projectRoot?: string;
@@ -47,10 +51,25 @@ program
       resume?: string;
       continue?: boolean;
       banners?: boolean;
+      update?: boolean;
     }) => {
     if (opts.banners) {
       printBannerGallery();
       process.exit(0);
+    }
+    if (opts.update) {
+      if (isBundled()) {
+        process.stderr.write(
+          'autocode is bundled with Automax — V6 manages updates via Velopack.\n',
+        );
+        process.exit(2);
+      }
+      const code = await runUpdate({
+        info: (t) => process.stdout.write(t + '\n'),
+        warn: (t) => process.stderr.write(t + '\n'),
+        error: (t) => process.stderr.write(t + '\n'),
+      });
+      process.exit(code);
     }
     // Resolve a resume target before building the session context. A session
     // is resumable only if it has both state.json and conversation.json.
@@ -99,6 +118,53 @@ program
     };
 
     const renderer = new ConsoleRenderer();
+    // Update pipeline: auto-update is opt-out — autocode is young and
+    // iterating fast, so leaving users on a stale buggy version hurts more
+    // than the rare surprise of a new release. Auto-update is disabled when
+    // bundled in V6 (Velopack owns it), in headless `-p` mode, on a
+    // prerelease version, or when the user opts out via config or env var.
+    // If an auto-install fails, we fall back silently to the notify banner
+    // and keep launching — a failed update must never break startup.
+    if (!headless && !isBundled()) {
+      const updateInfo = checkForUpdate();
+      if (updateInfo) {
+        const cfg = new ConfigStore().load();
+        const canAutoUpdate = shouldAutoUpdate({
+          bundled: false, // already gated above
+          headless: false,
+          currentVersion: readOwnPackage().version,
+          optedOutByConfig: cfg.autoUpdate === false,
+          optedOutByEnv: process.env.AUTOCODE_NO_UPDATE === '1',
+        });
+        if (canAutoUpdate) {
+          process.stdout.write(
+            pc.cyan(
+              `auto-updating autocode ${readOwnPackage().version} → ${updateInfo.latest}…\n`,
+            ),
+          );
+          const code = await runUpdate({
+            info: (t) => process.stdout.write(t + '\n'),
+            warn: (t) => process.stderr.write(t + '\n'),
+            error: (t) => process.stderr.write(t + '\n'),
+          });
+          if (code === 0) {
+            process.stdout.write(
+              pc.green(
+                `✓ updated to ${updateInfo.latest} — restart autocode to use the new version.\n`,
+              ),
+            );
+            process.stdout.write(
+              pc.dim('(to disable auto-updates: set autoUpdate:false in ~/.autocode/config.json or AUTOCODE_NO_UPDATE=1)\n'),
+            );
+            process.exit(0);
+          }
+          process.stderr.write(
+            pc.yellow('(auto-update failed — continuing on the current version)\n'),
+          );
+        }
+        renderer.setUpdateBanner(updateInfo.banner);
+      }
+    }
     const store = new TranscriptStore(ctx);
     const checkpoints = new CheckpointStore(ctx.sessionDir);
     checkpoints.sweep();
