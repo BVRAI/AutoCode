@@ -49,6 +49,9 @@ export class LiveAgent implements AgentHandler {
       autoVerify: config.autoVerify !== false,
       verifyCommand: config.verifyCommand,
       emitter: opts.emitter ?? new NullEventEmitter(),
+      hooks: config.hooks
+        ? { pre_tool: config.hooks.pre_tool, post_tool: config.hooks.post_tool }
+        : undefined,
     });
   }
 

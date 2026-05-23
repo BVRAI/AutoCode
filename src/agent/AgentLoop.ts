@@ -16,6 +16,7 @@ import type { ApproveVerdict } from '../repl/Prompter.js';
 import { resolveVerifyCommand, runVerification } from './Verify.js';
 import type { EventEmitter } from '../repl/EventEmitter.js';
 import { runSessionReflection, type Proposal, type SessionSnapshot } from './SessionReflection.js';
+import { blockingReason, runHooksForEvent, type HookSpec } from './HookRunner.js';
 
 const MAX_ITERATIONS = 40;
 const LOOP_DETECT_WINDOW = 10;
@@ -74,6 +75,10 @@ export interface AgentDeps {
   // Machine-readable activity stream for the Automax V6 host. NullEventEmitter
   // when --automax is off; StdoutEventEmitter when it is on.
   emitter: EventEmitter;
+  // User-defined event hooks loaded from ~/.autocode/config.json. Fire at
+  // PreToolUse + PostToolUse. Stop-event hooks are fired by TerminalMode
+  // at /exit time (not here). Optional — absent means no hooks configured.
+  hooks?: { pre_tool?: HookSpec[]; post_tool?: HookSpec[] };
 }
 
 export class AgentLoop {
@@ -505,6 +510,35 @@ export class AgentLoop {
           }
         }
 
+        // PreToolUse hooks — user-defined gates that can refuse this call by
+        // exiting with code 2 (the canonical Claude Code semantics). Other
+        // non-zero codes are advisory; output is surfaced to the user either
+        // way. The block path injects a synthetic tool_result so the model
+        // sees why and can adapt.
+        const preOutcomes = await runHooksForEvent(this.deps.hooks?.pre_tool, {
+          event: 'pre_tool',
+          toolName: tu.name,
+          toolArgs: tu.input,
+          projectRoot: ctx.projectRoot,
+          sessionId: ctx.sessionId,
+        });
+        for (const o of preOutcomes) {
+          if (o.stdout.trim().length > 0) this.deps.renderer.dim(`  hook[pre]: ${o.stdout.trim()}`);
+          if (o.stderr.trim().length > 0 && !o.blocked) this.deps.renderer.dim(`  hook[pre]: ${o.stderr.trim()}`);
+        }
+        const blockReason = blockingReason(preOutcomes);
+        if (blockReason !== null) {
+          this.deps.renderer.warn(`  ✗ ${tu.name} blocked by pre_tool hook`);
+          toolResults.push({
+            type: 'tool_result',
+            toolUseId: tu.id,
+            content: blockReason,
+            isError: true,
+          });
+          consecutiveFailures.set(tu.name, (consecutiveFailures.get(tu.name) ?? 0) + 1);
+          continue;
+        }
+
         this.deps.renderer.spinner.start(`${tu.name}`);
         const t0 = Date.now();
         // One step per tool execution — any snapshots the tool takes land
@@ -554,6 +588,27 @@ export class AgentLoop {
         const img = (result.metadata as { image?: unknown } | undefined)?.image;
         if (img && typeof img === 'object' && (img as { type?: string }).type === 'image') {
           toolImages.push(img as ImageBlock);
+        }
+
+        // PostToolUse hooks — advisory only. Lint after edits, audit log,
+        // formatter, etc. Non-zero exit codes surface as warnings but never
+        // change the tool's verdict.
+        const postOutcomes = await runHooksForEvent(this.deps.hooks?.post_tool, {
+          event: 'post_tool',
+          toolName: tu.name,
+          toolArgs: tu.input,
+          toolResultText: result.content,
+          toolResultIsError: result.isError,
+          projectRoot: ctx.projectRoot,
+          sessionId: ctx.sessionId,
+        });
+        for (const o of postOutcomes) {
+          if (o.timedOut) this.deps.renderer.warn(`  hook[post] ${o.command} → timed out`);
+          else if (o.exitCode !== 0) this.deps.renderer.warn(`  hook[post] ${o.command} → exit ${o.exitCode ?? '?'}`);
+          if (o.stdout.trim().length > 0) this.deps.renderer.dim(`  hook[post]: ${o.stdout.trim()}`);
+          if (o.stderr.trim().length > 0 && o.exitCode !== 0) {
+            this.deps.renderer.dim(`  hook[post]: ${o.stderr.trim()}`);
+          }
         }
       }
 

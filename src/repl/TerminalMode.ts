@@ -23,6 +23,7 @@ import { runUpdate } from '../update/UpdateChecker.js';
 import { isBundled } from '../util/host.js';
 import { applyProposal, type Proposal } from '../agent/SessionReflection.js';
 import { ConfigStore } from '../auth/ConfigStore.js';
+import { runHooksForEvent } from '../agent/HookRunner.js';
 import { relative } from 'node:path';
 import { type EventEmitter, NullEventEmitter } from './EventEmitter.js';
 
@@ -395,7 +396,32 @@ export class TerminalMode {
   // is for "get me out fast."
   private async handleExit(): Promise<void> {
     await this.maybeReflectAtExit();
+    await this.fireStopHooks();
     this.exit(0);
+  }
+
+  // Run user-defined `stop` hooks at /exit time. Advisory only — failures
+  // are logged but the process exits regardless.
+  private async fireStopHooks(): Promise<void> {
+    let cfg: { hooks?: { stop?: Array<{ match?: string; command: string; timeoutMs?: number }> } } = {};
+    try {
+      cfg = new ConfigStore().load();
+    } catch {
+      /* default */
+    }
+    const stopHooks = cfg.hooks?.stop;
+    if (!stopHooks || stopHooks.length === 0) return;
+    const outcomes = await runHooksForEvent(stopHooks, {
+      event: 'stop',
+      projectRoot: this.ctx.projectRoot,
+      sessionId: this.ctx.sessionId,
+    });
+    for (const o of outcomes) {
+      if (o.timedOut) this.renderer.warn(`hook[stop] ${o.command} → timed out`);
+      else if (o.exitCode !== 0) this.renderer.warn(`hook[stop] ${o.command} → exit ${o.exitCode ?? '?'}`);
+      if (o.stdout.trim().length > 0) this.renderer.dim(`hook[stop]: ${o.stdout.trim()}`);
+      if (o.stderr.trim().length > 0 && o.exitCode !== 0) this.renderer.dim(`hook[stop]: ${o.stderr.trim()}`);
+    }
   }
 
   private async maybeReflectAtExit(): Promise<void> {

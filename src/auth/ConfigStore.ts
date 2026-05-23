@@ -39,6 +39,22 @@ export interface AutocodeConfig {
   // to AUTOCODE.md. Default true; set to false to skip the auto-trigger
   // (the explicit /reflect command still works either way).
   reflectAfterSession?: boolean;
+  // User-defined event hooks. Each entry is a shell command that fires at the
+  // named event. `pre_tool` exit code 2 BLOCKS the tool call (stderr fed back
+  // to the model); other non-zero codes (and post_tool / stop entirely) are
+  // advisory. Optional `match` is a `|`-separated list of exact tool names,
+  // or `*` for all (default).
+  hooks?: {
+    pre_tool?: HookSpec[];
+    post_tool?: HookSpec[];
+    stop?: HookSpec[];
+  };
+}
+
+export interface HookSpec {
+  match?: string;
+  command: string;
+  timeoutMs?: number;
 }
 
 export class ConfigStore {
