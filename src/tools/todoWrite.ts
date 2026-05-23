@@ -6,7 +6,7 @@ import {
   type ToolResult,
 } from './types.js';
 
-export type TodoStatus = 'pending' | 'in_progress' | 'completed';
+export type TodoStatus = 'pending' | 'in_progress' | 'completed' | 'interrupted';
 export interface TodoItem {
   id: string;
   text: string;
@@ -18,6 +18,23 @@ const sessionLists = new Map<string, TodoItem[]>();
 
 export function currentTodos(sessionId: string): readonly TodoItem[] {
   return sessionLists.get(sessionId) ?? [];
+}
+
+// Flip any in-progress todos to 'interrupted'. Called from AgentLoop when the
+// user cancels mid-turn, so the active step is visibly marked as stopped
+// (instead of leaving it sitting in_progress, indistinguishable from work
+// the agent is actively pushing on).
+export function markInProgressInterrupted(sessionId: string): number {
+  const list = sessionLists.get(sessionId);
+  if (!list) return 0;
+  let flipped = 0;
+  for (const t of list) {
+    if (t.status === 'in_progress') {
+      t.status = 'interrupted';
+      flipped += 1;
+    }
+  }
+  return flipped;
 }
 
 const DEFINITION: ToolDefinition = {
@@ -41,7 +58,7 @@ const DEFINITION: ToolDefinition = {
       },
       id: { type: 'string', description: 'Required for action="update".' },
       text: { type: 'string', description: 'Optional new text (update).' },
-      status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] },
+      status: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'interrupted'] },
     },
     required: ['action'],
   },
@@ -86,7 +103,7 @@ export class TodoWriteTool implements Tool {
       const text = typeof args.text === 'string' ? args.text : existing.text;
       const statusRaw = args.status;
       const status =
-        typeof statusRaw === 'string' && (['pending', 'in_progress', 'completed'] as const).includes(statusRaw as TodoStatus)
+        typeof statusRaw === 'string' && (['pending', 'in_progress', 'completed', 'interrupted'] as const).includes(statusRaw as TodoStatus)
           ? (statusRaw as TodoStatus)
           : existing.status;
       list[idx] = { id, text, status };
@@ -117,10 +134,12 @@ function symbol(s: TodoStatus): string {
       return '[~]';
     case 'completed':
       return '[x]';
+    case 'interrupted':
+      return '[!]';
   }
 }
 
 function normalizeStatus(raw: unknown): TodoStatus {
-  if (raw === 'in_progress' || raw === 'completed') return raw;
+  if (raw === 'in_progress' || raw === 'completed' || raw === 'interrupted') return raw;
   return 'pending';
 }

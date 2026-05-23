@@ -87,6 +87,87 @@ describe('CheckpointStore', () => {
     expect(new CheckpointStore(sessionDir).undoLastTurn()).toBeNull();
   });
 
+  it('undoLastStep reverts only the most recent step (earlier steps in same turn survive)', () => {
+    const f1 = join(proj, 'step-a.txt');
+    const f2 = join(proj, 'step-b.txt');
+    writeFileSync(f1, 'a-v1');
+    writeFileSync(f2, 'b-v1');
+    const cp = new CheckpointStore(sessionDir);
+    cp.beginTurn();
+    // step 1 — touch f1
+    cp.beginStep();
+    cp.snapshotBeforeWrite(f1);
+    writeFileSync(f1, 'a-v2');
+    // step 2 — touch f2
+    cp.beginStep();
+    cp.snapshotBeforeWrite(f2);
+    writeFileSync(f2, 'b-v2');
+
+    const r = cp.undoLastStep();
+    expect(r?.restored).toBe(1);
+    expect(r?.step).toBe(2);
+    expect(readFileSync(f1, 'utf8')).toBe('a-v2'); // earlier step survives
+    expect(readFileSync(f2, 'utf8')).toBe('b-v1'); // last step reverted
+  });
+
+  it('undoLastStep can be called repeatedly to walk back through a turn', () => {
+    const f1 = join(proj, 'walk-a.txt');
+    const f2 = join(proj, 'walk-b.txt');
+    writeFileSync(f1, 'a-v1');
+    writeFileSync(f2, 'b-v1');
+    const cp = new CheckpointStore(sessionDir);
+    cp.beginTurn();
+    cp.beginStep();
+    cp.snapshotBeforeWrite(f1);
+    writeFileSync(f1, 'a-v2');
+    cp.beginStep();
+    cp.snapshotBeforeWrite(f2);
+    writeFileSync(f2, 'b-v2');
+
+    cp.undoLastStep(); // reverts step 2
+    cp.undoLastStep(); // reverts step 1
+    expect(readFileSync(f1, 'utf8')).toBe('a-v1');
+    expect(readFileSync(f2, 'utf8')).toBe('b-v1');
+    expect(cp.undoLastStep()).toBeNull(); // nothing left
+  });
+
+  it('beginTurn resets the step counter so step numbers stay scoped within a turn', () => {
+    const f1 = join(proj, 'scope-a.txt');
+    const f2 = join(proj, 'scope-b.txt');
+    writeFileSync(f1, 'a');
+    writeFileSync(f2, 'b');
+    const cp = new CheckpointStore(sessionDir);
+    cp.beginTurn();
+    cp.beginStep();
+    cp.snapshotBeforeWrite(f1);
+    cp.beginTurn();
+    cp.beginStep();
+    cp.snapshotBeforeWrite(f2);
+    const r = cp.undoLastStep();
+    // After beginTurn the step counter reset, so the second turn's step is 1
+    // (not 2) — proves the reset.
+    expect(r?.step).toBe(1);
+  });
+
+  it('undoLastTurn still reverts a whole turn (step grouping does not break it)', () => {
+    const f1 = join(proj, 'whole-a.txt');
+    const f2 = join(proj, 'whole-b.txt');
+    writeFileSync(f1, 'a-v1');
+    writeFileSync(f2, 'b-v1');
+    const cp = new CheckpointStore(sessionDir);
+    cp.beginTurn();
+    cp.beginStep();
+    cp.snapshotBeforeWrite(f1);
+    writeFileSync(f1, 'a-v2');
+    cp.beginStep();
+    cp.snapshotBeforeWrite(f2);
+    writeFileSync(f2, 'b-v2');
+    const r = cp.undoLastTurn();
+    expect(r?.restored).toBe(2);
+    expect(readFileSync(f1, 'utf8')).toBe('a-v1');
+    expect(readFileSync(f2, 'utf8')).toBe('b-v1');
+  });
+
   it('sweep removes trash older than the retention window', () => {
     const f = join(proj, 'old.txt');
     writeFileSync(f, 'x');

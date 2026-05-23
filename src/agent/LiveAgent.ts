@@ -114,8 +114,9 @@ export class LiveAgent implements AgentHandler {
     return this.mcp.discoveredTools().map((d) => `mcp__${d.serverName}__${d.toolName}`);
   }
 
-  undo(): { turn: number; restored: number } | null {
-    return this.checkpoints?.undoLastTurn() ?? null;
+  undo(grain: 'step' | 'turn' = 'step'): { turn: number; restored: number; step?: number } | null {
+    if (!this.checkpoints) return null;
+    return grain === 'turn' ? this.checkpoints.undoLastTurn() : this.checkpoints.undoLastStep();
   }
 
   trashList(): ReturnType<CheckpointStore['listTrash']> {

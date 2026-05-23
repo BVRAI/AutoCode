@@ -16,6 +16,10 @@ export type CheckpointOp = 'modify' | 'create' | 'delete';
 export interface CheckpointEntry {
   id: string;
   turn: number;
+  // Step counter within a turn — each tool execution that touches files is one
+  // step, so /undo can rewind to right before the last step (the natural
+  // boundary after an interrupt) instead of always reverting the whole turn.
+  step: number;
   op: CheckpointOp;
   originalPath: string;
   kind: 'file' | 'dir';
@@ -42,6 +46,7 @@ export class CheckpointStore {
   private readonly trashDir: string; // <dataDir>/trash — global, cross-session
   private readonly entries: CheckpointEntry[] = [];
   private turn = 0;
+  private step = 0;
   private seq = 0;
 
   constructor(sessionDir: string) {
@@ -51,9 +56,18 @@ export class CheckpointStore {
     mkdirSync(this.trashDir, { recursive: true });
   }
 
-  // Called by AgentLoop at the start of each user turn.
+  // Called by AgentLoop at the start of each user turn. Resets the step
+  // counter so steps are scoped within a turn.
   beginTurn(): void {
     this.turn += 1;
+    this.step = 0;
+  }
+
+  // Called by AgentLoop immediately before each tool execution that may
+  // mutate files. Groups all snapshots from that tool call under one step
+  // number so step-level undo rewinds exactly one tool's worth of work.
+  beginStep(): void {
+    this.step += 1;
   }
 
   private nextId(): string {
@@ -67,13 +81,13 @@ export class CheckpointStore {
     const id = this.nextId();
     const at = new Date().toISOString();
     if (!existsSync(absPath)) {
-      this.entries.push({ id, turn: this.turn, op: 'create', originalPath: absPath, kind: 'file', backup: null, at, undone: false });
+      this.entries.push({ id, turn: this.turn, step: this.step, op: 'create', originalPath: absPath, kind: 'file', backup: null, at, undone: false });
       return;
     }
     const backup = join(this.blobsDir, id);
     cpSync(absPath, backup, { recursive: true });
     const kind = statSync(absPath).isDirectory() ? 'dir' : 'file';
-    this.entries.push({ id, turn: this.turn, op: 'modify', originalPath: absPath, kind, backup, at, undone: false });
+    this.entries.push({ id, turn: this.turn, step: this.step, op: 'modify', originalPath: absPath, kind, backup, at, undone: false });
   }
 
   // Move a path into the global trash (used by delete_path). The original is
@@ -86,8 +100,32 @@ export class CheckpointStore {
     const meta: TrashItem = { id, originalPath: absPath, kind, deletedAt: new Date().toISOString() };
     writeFileSync(join(this.trashDir, `${id}.meta.json`), JSON.stringify(meta, null, 2), 'utf8');
     rmSync(absPath, { recursive: true, force: true });
-    this.entries.push({ id, turn: this.turn, op: 'delete', originalPath: absPath, kind, backup: dest, at: meta.deletedAt, undone: false });
+    this.entries.push({ id, turn: this.turn, step: this.step, op: 'delete', originalPath: absPath, kind, backup: dest, at: meta.deletedAt, undone: false });
     return id;
+  }
+
+  // Revert just the most recent live step — the natural rewind point after an
+  // interrupt, so earlier good steps from the same turn stay on disk.
+  undoLastStep(): { turn: number; step: number; restored: number } | null {
+    let t = -1;
+    let s = -1;
+    for (const e of this.entries) {
+      if (e.undone) continue;
+      if (e.turn > t || (e.turn === t && e.step > s)) {
+        t = e.turn;
+        s = e.step;
+      }
+    }
+    if (t < 0) return null;
+    let restored = 0;
+    for (let i = this.entries.length - 1; i >= 0; i--) {
+      const e = this.entries[i]!;
+      if (e.undone || e.turn !== t || e.step !== s) continue;
+      this.applyUndo(e);
+      e.undone = true;
+      restored += 1;
+    }
+    return { turn: t, step: s, restored };
   }
 
   // Revert every change from the most recent turn that still has live entries.

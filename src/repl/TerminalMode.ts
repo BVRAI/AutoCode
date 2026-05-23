@@ -32,7 +32,7 @@ export interface AgentHandler {
   compactConversation(ctx: SessionContext): Promise<{ before: number; after: number; summarized: boolean }>;
   cumulativeUsage(): { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
   loadState?(state: { messages: Message[]; usage: CumulativeUsage }): void;
-  undo?(): { turn: number; restored: number } | null;
+  undo?(grain?: 'step' | 'turn'): { turn: number; restored: number; step?: number } | null;
   trashList?(): TrashItem[];
   restore?(id: string): TrashItem | null;
   mcpStatus?(): Array<{ name: string; connected: boolean; toolCount: number; error?: string }>;
@@ -363,7 +363,7 @@ export class TerminalMode {
         this.handleMode(args);
         return;
       case 'undo':
-        this.handleUndo();
+        this.handleUndo(args);
         return;
       case 'trash':
         this.handleTrash();
@@ -387,13 +387,19 @@ export class TerminalMode {
     await runUpdate(this.renderer);
   }
 
-  private handleUndo(): void {
-    const r = this.agent.undo?.();
+  private handleUndo(args: string[]): void {
+    const grain: 'step' | 'turn' = args[0] === 'turn' ? 'turn' : 'step';
+    const r = this.agent.undo?.(grain);
     if (!r || r.restored === 0) {
       this.renderer.dim('(nothing to undo)');
       return;
     }
-    this.renderer.info(`undid turn ${r.turn} — restored ${r.restored} file${r.restored === 1 ? '' : 's'}`);
+    const files = `${r.restored} file${r.restored === 1 ? '' : 's'}`;
+    if (grain === 'turn') {
+      this.renderer.info(`undid turn ${r.turn} — restored ${files}`);
+    } else {
+      this.renderer.info(`undid step ${r.step} of turn ${r.turn} — restored ${files}`);
+    }
   }
 
   private handleTrash(): void {
@@ -451,7 +457,7 @@ export class TerminalMode {
       '/diff                          Show uncommitted git changes',
       '/auth                          Configure an API key',
       '/mode [planning|default|autocode]  Show or set the workflow mode (or shift+tab)',
-      '/undo                          Revert the file changes from the last turn',
+      '/undo [turn]                   Revert last tool step (or last whole turn with `/undo turn`)',
       '/trash                         List recently deleted files (recoverable)',
       '/restore <id>                  Restore a deleted file from the trash',
       '/mcp                           List configured MCP servers and their tools',

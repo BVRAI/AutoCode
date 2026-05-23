@@ -7,7 +7,7 @@ import type { ContentBlock, ImageBlock, Message, StreamEvent } from '../llm/type
 import { LlmRouter, type ProviderName } from '../llm/Router.js';
 import { ToolRegistry } from './ToolRegistry.js';
 import { buildSystemPrompt } from './PromptBuilder.js';
-import { currentTodos } from '../tools/todoWrite.js';
+import { currentTodos, markInProgressInterrupted } from '../tools/todoWrite.js';
 import { renderUnifiedDiff } from '../util/diff.js';
 import { estimateCost, formatUsd } from '../util/pricing.js';
 import { shouldAutoCompact } from '../util/contextWindow.js';
@@ -297,6 +297,9 @@ export class AgentLoop {
         this.deps.renderer.spinner.stop();
         this.deps.renderer.dim('(cancelled)');
         this.conversation.push({ role: 'user', content: '[user cancelled the task]' });
+        // Mark any in-progress todo as 'interrupted' so the user can see at
+        // a glance where we stopped.
+        markInProgressInterrupted(ctx.sessionId);
         return { mutated };
       }
       // Auto-compact before the call if the live context is getting large.
@@ -431,6 +434,10 @@ export class AgentLoop {
 
         this.deps.renderer.spinner.start(`${tu.name}`);
         const t0 = Date.now();
+        // One step per tool execution — any snapshots the tool takes land
+        // under one step number so step-level /undo rewinds exactly one
+        // tool's worth of work.
+        this.deps.checkpoints?.beginStep();
         const result = await this.deps.registry.execute(tu.name, tu.input, toolExecCtx);
         const dt = Date.now() - t0;
         this.deps.renderer.spinner.stop();
@@ -528,11 +535,13 @@ export class AgentLoop {
     const cachePct = inT > 0 ? Math.round((cacheRead / Math.max(1, inT)) * 100) : 0;
     const todos = currentTodos(ctx.sessionId);
     const done = todos.filter((t) => t.status === 'completed').length;
+    const interrupted = todos.filter((t) => t.status === 'interrupted').length;
     const usage = { inputTokens: inT, outputTokens: outT, cacheReadTokens: cacheRead, cacheWriteTokens: cacheWrite };
     const { cost } = estimateCost(usage, ctx.model.provider, ctx.model.model);
     const parts = [`in: ${inT}`, `out: ${outT}`];
     if (cacheTotal > 0) parts.push(`cache: ${cachePct}%`);
     if (todos.length > 0) parts.push(`${done}/${todos.length} todos`);
+    if (interrupted > 0) parts.push(`${interrupted} interrupted`);
     if (cost > 0) parts.push(formatUsd(cost));
     this.deps.renderer.status(`  (${parts.join(' · ')})`);
   }
