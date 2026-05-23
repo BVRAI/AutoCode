@@ -33,10 +33,15 @@ export class ConsoleRenderer {
       `${pc.dim('mode:   ')} ${this.modeLabel(ctx.mode)}${pc.dim('  ·  shift+tab to cycle')}`,
     ];
     if (instructions.length > 0) {
-      const names = instructions.map((inst) =>
-        inst.isAuthoritative ? pc.yellow(`⚠ ${inst.fileName}`) : inst.fileName,
-      );
-      lines.push(pc.dim(`loaded ${names.join(', ')}`));
+      const labels = instructions.map((inst) => {
+        const scope = inst.relativeDir === '' ? inst.fileName : `${inst.relativeDir}/${inst.fileName}`;
+        return inst.isAuthoritative ? pc.yellow(`⚠ ${scope}`) : scope;
+      });
+      const shown =
+        labels.length > 5
+          ? `${labels.slice(0, 5).join(', ')} (+${labels.length - 5} more)`
+          : labels.join(', ');
+      lines.push(pc.dim(`loaded ${shown}`));
     }
     const repoMap = getRepoMap(ctx.projectRoot);
     if (repoMap) {

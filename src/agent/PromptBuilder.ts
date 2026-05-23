@@ -84,21 +84,32 @@ ${repoMap}`,
   }
 
   // Append loaded project-instruction files in priority order. Layered: each
-  // file gets its own section; later sections override earlier ones on conflict.
+  // file gets its own section; later sections override earlier ones on
+  // conflict. Files from deeper subdirectories appear later, so their
+  // conventions win when work happens inside that subtree.
   for (const inst of instructions) {
+    const scope = inst.relativeDir === '' ? inst.fileName : `${inst.relativeDir}/${inst.fileName}`;
     if (inst.isAuthoritative) {
       sections.push(
-        `\n# Authoritative overrides (from ${inst.fileName})
+        `\n# Authoritative overrides (from ${scope})
 
 The following instructions take precedence over any earlier project instructions when they conflict — treat them as authoritative for this session. They are typically injected by the host process (Automax) to apply deployment-specific constraints.
 
 ${inst.content}`,
       );
+    } else if (inst.relativeDir === '') {
+      sections.push(
+        `\n# Project instructions (from ${scope})
+
+The following come from \`${scope}\` at the project root. Treat them as authoritative for this project — they override the generic guidance above when they conflict.
+
+${inst.content}`,
+      );
     } else {
       sections.push(
-        `\n# Project instructions (from ${inst.fileName})
+        `\n# Project instructions (from ${scope})
 
-The following come from \`${inst.fileName}\` at the project root. Treat them as authoritative for this project — they override the generic guidance above when they conflict.
+The following come from \`${scope}\` and apply to the \`${inst.relativeDir}/\` subtree of this project. They override any project-instruction files higher up the tree when work happens inside that subtree.
 
 ${inst.content}`,
       );
