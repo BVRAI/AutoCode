@@ -17,6 +17,7 @@ import { OpenInBrowserTool } from '../tools/openInBrowser.js';
 import { CaptureScreenshotTool } from '../tools/captureScreenshot.js';
 import { AskUserTool } from '../tools/askUser.js';
 import { TaskTool } from '../tools/task.js';
+import { UseSkillTool } from '../tools/useSkill.js';
 
 export class ToolRegistry {
   private readonly tools = new Map<string, Tool>();
@@ -38,6 +39,7 @@ export class ToolRegistry {
     this.register(new CaptureScreenshotTool());
     this.register(new AskUserTool());
     this.register(new TaskTool());
+    this.register(new UseSkillTool());
   }
 
   // Factory for constrained subagent registries. Returns a registry that

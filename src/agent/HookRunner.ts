@@ -14,7 +14,7 @@
 // and run SERIALLY in declared order — keeps determinism and lets the
 // model see hook output in a predictable sequence.
 
-import { spawn } from 'node:child_process';
+import { execSync, spawn } from 'node:child_process';
 
 export type HookEvent = 'pre_tool' | 'post_tool' | 'stop';
 
@@ -93,15 +93,19 @@ function runOne(spec: HookSpec, ctx: HookContext): Promise<HookOutcome> {
       shell: true,
       env: { ...process.env, ...env },
       stdio: ['ignore', 'pipe', 'pipe'],
+      // On POSIX, become process-group leader so we can kill the whole tree
+      // with kill(-pid). Windows uses `taskkill /T` instead (see treeKill).
+      detached: process.platform !== 'win32',
     });
 
     const timer = setTimeout(() => {
       timedOut = true;
-      try {
-        child.kill('SIGKILL');
-      } catch {
-        /* ignore */
-      }
+      treeKill(child.pid);
+      // Belt-and-suspenders: if `close` doesn't fire within a short grace
+      // period after the kill (can happen if the shell's child descendants
+      // hold the pipes open even after the shell dies), resolve anyway so
+      // the run doesn't hang on a runaway hook.
+      setTimeout(() => finish(null), 1500);
     }, timeoutMs);
 
     const cap = (chunk: Buffer, sink: (s: string) => void): void => {
@@ -142,6 +146,33 @@ function runOne(spec: HookSpec, ctx: HookContext): Promise<HookOutcome> {
     });
     child.on('close', (code) => finish(code));
   });
+}
+
+// Kill the spawned shell AND any descendants. Plain SIGKILL on the shell
+// leaves its children (e.g. the actual `node` process the user's hook
+// invoked) running with the pipes still open — so the parent's `close`
+// event never fires and we'd hang. Tree-kill avoids that.
+function treeKill(pid: number | undefined): void {
+  if (pid === undefined) return;
+  if (process.platform === 'win32') {
+    try {
+      execSync(`taskkill /pid ${pid} /T /F`, { stdio: 'ignore', windowsHide: true });
+    } catch {
+      /* may already be dead — that's fine */
+    }
+    return;
+  }
+  // POSIX — kill the whole process group (we spawned with detached:true so
+  // pid is the group leader; -pid addresses the group).
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch {
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 function buildHookEnv(ctx: HookContext): Record<string, string> {

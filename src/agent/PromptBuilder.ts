@@ -3,6 +3,7 @@ import type { SessionContext } from '../session/SessionContext.js';
 import { detectProjectContext, formatContextLine } from './ProjectContext.js';
 import { loadProjectInstructions } from './ProjectInstructions.js';
 import { getRepoMap } from './RepoMap.js';
+import { getSkills, renderSkillsSection } from './Skills.js';
 
 export function buildSystemPrompt(ctx: SessionContext): string {
   const os = `${platform()} ${release()}`;
@@ -62,6 +63,7 @@ You have these tools (the exact schemas are provided separately). Pick the small
 - \`capture_screenshot\` — screenshot a URL (e.g. the local dev server) and see it as an image; use it to visually check and iterate on a website (Automax-hosted only).
 - \`ask_user\` — ask the user a multiple-choice question (single or multi-select). Use it to clarify an ambiguous requirement or let the user pick an approach instead of guessing.
 - \`task\` — delegate a focused research question to an Explore subagent (read-only). Use this when a question would otherwise require many file reads or greps — the subagent gathers the info and returns one summary, keeping your context clean. Don't use it for single-file lookups or anything that requires editing.
+- \`use_skill\` — load the full body of a named skill into context. Skills are reusable expertise modules (their names + descriptions appear under "Skills available" below); pull one in only when its description matches the task. Pay-as-you-go knowledge.
 
 # Output rules
 - Do not paste large file contents back to the user — they already saw them in the read_file output.
@@ -115,6 +117,12 @@ ${inst.content}`,
       );
     }
   }
+
+  // Skills — name+description table only; bodies load on demand via the
+  // `use_skill` tool. Section is empty (and the join skips it cleanly)
+  // when no skills are configured.
+  const skillsSection = renderSkillsSection(getSkills(ctx.projectRoot));
+  if (skillsSection) sections.push(skillsSection);
 
   return sections.join('\n');
 }
