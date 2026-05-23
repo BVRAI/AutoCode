@@ -53,6 +53,9 @@ export class TerminalMode {
   // until the first prompt is submitted.
   private bannerTimer: ReturnType<typeof setInterval> | null = null;
   private lastBannerId = 1; // banner 1 is the static draw from printHeader
+  // Debounce coalesces the burst of resize events a terminal fires while the
+  // user is dragging the window into a single repaint at the end.
+  private resizeDebounce: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly ctx: SessionContext,
@@ -82,7 +85,7 @@ export class TerminalMode {
     this.screen.moveToOutputBottom();
 
     this.bar = new BottomBar(this.screen);
-    this.screen.onResize = () => this.redrawBar();
+    this.screen.onResize = () => this.handleResize();
     this.prompter.use(new TuiPrompter(this.editor, this.renderer, this.screen));
     this.editor.start();
     this.redrawBar();
@@ -108,6 +111,36 @@ export class TerminalMode {
       clearInterval(this.bannerTimer);
       this.bannerTimer = null;
     }
+  }
+
+  // ── Resize handling ───────────────────────────────────────────────────
+  // Terminal resize fires many events while the window is being dragged;
+  // debounce so we repaint once at the end. Two paths: idle → full repaint
+  // (header + scroll region + footer all re-rendered cleanly under the new
+  // geometry, on-screen visible area wiped — terminal scrollback preserved);
+  // busy mid-turn → just realign the footer (don't trash live output).
+  private handleResize(): void {
+    if (this.resizeDebounce) clearTimeout(this.resizeDebounce);
+    this.resizeDebounce = setTimeout(() => {
+      this.resizeDebounce = null;
+      this.performResize();
+    }, 150);
+  }
+
+  private performResize(): void {
+    if (!this.bar || this.exiting) return;
+    if (this.busy) {
+      this.redrawBar();
+      return;
+    }
+    const wasRotating = this.bannerTimer !== null;
+    this.stopBannerRotation();
+    this.screen.clearVisible();
+    this.renderer.printHeader(this.ctx);
+    this.screen.enter(renderBar(this.barState()).footerHeight);
+    this.screen.moveToOutputBottom();
+    this.redrawBar();
+    if (wasRotating) this.startBannerRotation();
   }
 
   private rotateBanner(): void {
@@ -211,6 +244,10 @@ export class TerminalMode {
     if (this.exiting) return;
     this.exiting = true;
     this.stopBannerRotation();
+    if (this.resizeDebounce) {
+      clearTimeout(this.resizeDebounce);
+      this.resizeDebounce = null;
+    }
     this.editor.stop();
     this.screen.exit();
     this.resolveExit?.(code);

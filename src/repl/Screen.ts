@@ -47,6 +47,14 @@ export class Screen {
     if (this.isTty) this.out.write(`${ESC}[2J${ESC}[3J${ESC}[H`);
   }
 
+  // Wipe the visible region only (NOT scrollback) and home the cursor. Used
+  // on terminal resize: gives a clean canvas to repaint header + footer at
+  // the new geometry, while the user's terminal-emulator scrollback still
+  // holds the session's prior output for them to scroll back through.
+  clearVisible(): void {
+    if (this.isTty) this.out.write(`${ESC}[2J${ESC}[H`);
+  }
+
   enter(footerHeight: number): void {
     if (!this.isTty) return;
     this.footerHeight = footerHeight;
