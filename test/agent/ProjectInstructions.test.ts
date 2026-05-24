@@ -121,4 +121,32 @@ describe('loadProjectInstructions', () => {
     expect(r[0]!.isAuthoritative).toBe(true);
     expect(r[0]!.relativeDir).toBe('deploy');
   });
+
+  it('parses an optional `verify:` directive from frontmatter and strips it from the body', () => {
+    writeFileSync(
+      join(dir, 'AUTOCODE.md'),
+      '---\nverify: pytest -xvs tests/\n---\n\n# Conventions\nThe body content.\n',
+    );
+    const r = loadProjectInstructions(dir);
+    expect(r).toHaveLength(1);
+    expect(r[0]!.verify).toBe('pytest -xvs tests/');
+    // The frontmatter must not leak into the prompt content.
+    expect(r[0]!.content).not.toContain('verify:');
+    expect(r[0]!.content).not.toContain('---');
+    expect(r[0]!.content).toContain('The body content.');
+  });
+
+  it('leaves verify undefined when there is no frontmatter', () => {
+    writeFileSync(join(dir, 'AUTOCODE.md'), 'just plain conventions');
+    const r = loadProjectInstructions(dir);
+    expect(r[0]!.verify).toBeUndefined();
+    expect(r[0]!.content).toBe('just plain conventions');
+  });
+
+  it('handles frontmatter with no `verify:` key (other keys present)', () => {
+    writeFileSync(join(dir, 'AUTOCODE.md'), '---\nowner: api-team\n---\nbody');
+    const r = loadProjectInstructions(dir);
+    expect(r[0]!.verify).toBeUndefined();
+    expect(r[0]!.content).toBe('body');
+  });
 });

@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { NOISE_DIRS } from '../tools/listDirectory.js';
+import { parseFrontmatter } from '../util/frontmatter.js';
 
 // Project-instruction files in priority order (lowest → highest) — applied
 // *within* each directory the loader visits. All present files at every level
@@ -37,6 +38,10 @@ export interface ProjectInstructions {
   bytes: number;
   priorityLabel: string;
   isAuthoritative: boolean;
+  // Optional `verify:` directive from the file's frontmatter (Phase 28).
+  // When set, the post-edit verification loop uses this command for any
+  // file changed under this directory (deepest-ancestor wins).
+  verify?: string;
 }
 
 // Returns ALL instruction files that exist anywhere in the project tree
@@ -72,9 +77,14 @@ export function loadProjectInstructions(root: string): ProjectInstructions[] {
     } catch {
       continue;
     }
+    // Strip optional `---`-delimited frontmatter (carrying directives like
+    // `verify:`) before the content reaches the system prompt — the agent
+    // should not see the directive as an instruction.
+    const fm = parseFrontmatter(raw);
+    const stripped = fm.hasFrontmatter ? fm.body : raw;
     const remaining = Math.max(0, TOTAL_BYTE_CAP - totalBytes);
-    const truncated = raw.length > remaining;
-    const content = truncated ? raw.slice(0, remaining) + '\n[…truncated]' : raw;
+    const truncated = stripped.length > remaining;
+    const content = truncated ? stripped.slice(0, remaining) + '\n[…truncated]' : stripped;
     totalBytes += content.length;
     const cand = CANDIDATES[f.candidateIndex]!;
     out.push({
@@ -87,6 +97,7 @@ export function loadProjectInstructions(root: string): ProjectInstructions[] {
       bytes: stat.size,
       priorityLabel: cand.priorityLabel,
       isAuthoritative: cand.name === 'master.md',
+      ...(fm.meta.verify ? { verify: fm.meta.verify } : {}),
     });
   }
   if (truncatedTail > 0 && out.length > 0) {

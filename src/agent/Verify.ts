@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { detectProjectContext } from './ProjectContext.js';
+import type { ProjectInstructions } from './ProjectInstructions.js';
 
 export interface VerifyResult {
   ok: boolean;
@@ -13,12 +14,58 @@ export interface VerifyResult {
 const OUTPUT_CAP = 16 * 1024; // keep the tail — failures cluster at the end
 const TIMEOUT_MS = 180_000;
 
-// Resolve the command the harness runs to verify a project after file edits.
-// An explicit override always wins. Otherwise the command is inferred
-// conservatively — `null` means "no reliable command", and verification is
-// then skipped rather than risk a false failure on an unrelated command.
+// Resolve the verification command given the files actually touched this
+// turn. Priority (narrowest match wins, broadest fallback last):
+//   1. explicit `override` (config.verifyCommand) — always wins
+//   2. the deepest AUTOCODE.md `verify:` directive that is a common
+//      ancestor of every changed file
+//   3. a root-level AUTOCODE.md `verify:` directive (fallback when changes
+//      are scattered and no narrower ancestor matches all of them)
+//   4. inferred command per project type (Phase 19 behaviour)
+export function resolveVerifyCommandForFiles(
+  root: string,
+  override: string | undefined,
+  instructions: ProjectInstructions[],
+  changedFiles: string[],
+): string | null {
+  if (override && override.trim().length > 0) return override.trim();
+
+  const withVerify = instructions.filter((i): i is ProjectInstructions & { verify: string } => {
+    return typeof i.verify === 'string' && i.verify.trim().length > 0;
+  });
+
+  if (withVerify.length > 0 && changedFiles.length > 0) {
+    // Find the deepest `verify` directive that is an ancestor of EVERY
+    // changed file. Empty relativeDir ("") is the project-root catch-all
+    // and is an ancestor of everything.
+    let best: (ProjectInstructions & { verify: string }) | null = null;
+    for (const inst of withVerify) {
+      if (!changedFiles.every((p) => isUnderRelativeDir(p, inst.relativeDir))) continue;
+      if (best === null || inst.depth > best.depth) best = inst;
+    }
+    if (best !== null) return best.verify.trim();
+  }
+
+  return inferVerifyCommand(root);
+}
+
+// Backward-compatible thin wrapper for callers that don't have file context
+// (e.g. older code paths or tests). Skips the per-subdir directive lookup.
 export function resolveVerifyCommand(root: string, override?: string): string | null {
   if (override && override.trim().length > 0) return override.trim();
+  return inferVerifyCommand(root);
+}
+
+// True iff the project-relative file path lives under the given
+// relativeDir. "" matches every file (project root).
+function isUnderRelativeDir(filePath: string, relativeDir: string): boolean {
+  if (relativeDir === '') return true;
+  const dir = relativeDir.replace(/\\/g, '/').replace(/\/+$/, '');
+  const file = filePath.replace(/\\/g, '/');
+  return file === dir || file.startsWith(dir + '/');
+}
+
+function inferVerifyCommand(root: string): string | null {
 
   const { types } = detectProjectContext(root);
   if (types.includes('node') || types.includes('typescript')) {

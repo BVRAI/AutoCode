@@ -12,6 +12,7 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { parseFrontmatter } from '../util/frontmatter.js';
 
 export interface Skill {
   name: string;
@@ -98,45 +99,13 @@ function safeIsDir(p: string): boolean {
 /** Pure: parse a skill markdown file. Returns null when the required
  *  frontmatter fields (name + description) are missing. Tested in isolation. */
 export function parseSkill(content: string): ParsedSkill | null {
-  // Frontmatter must be the first thing in the file: `---\n…\n---\n`.
-  if (!content.startsWith('---')) return null;
-  // Find the closing `---` on its own line.
-  const lines = content.split(/\r?\n/);
-  if (lines[0] !== '---') return null;
-  let endIdx = -1;
-  for (let i = 1; i < lines.length; i++) {
-    if (lines[i] === '---') {
-      endIdx = i;
-      break;
-    }
-  }
-  if (endIdx < 0) return null;
-
-  const meta: Record<string, string> = {};
-  for (let i = 1; i < endIdx; i++) {
-    const line = lines[i]!;
-    const colon = line.indexOf(':');
-    if (colon < 0) continue;
-    const key = line.slice(0, colon).trim().toLowerCase();
-    let value = line.slice(colon + 1).trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-    if (key && value) meta[key] = value;
-  }
-
-  if (!meta.name || !meta.description) return null;
-  const body = lines.slice(endIdx + 1).join('\n').trim();
+  const fm = parseFrontmatter(content);
+  if (!fm.hasFrontmatter) return null;
+  const { name, description, match } = fm.meta;
+  if (!name || !description) return null;
   return {
-    meta: {
-      name: meta.name,
-      description: meta.description,
-      ...(meta.match ? { match: meta.match } : {}),
-    },
-    body,
+    meta: { name, description, ...(match ? { match } : {}) },
+    body: fm.body,
   };
 }
 

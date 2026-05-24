@@ -13,7 +13,8 @@ import { estimateCost, formatUsd } from '../util/pricing.js';
 import { shouldAutoCompact } from '../util/contextWindow.js';
 import type { SubagentFactory } from '../tools/types.js';
 import type { ApproveVerdict } from '../repl/Prompter.js';
-import { resolveVerifyCommand, runVerification } from './Verify.js';
+import { resolveVerifyCommandForFiles, runVerification } from './Verify.js';
+import { loadProjectInstructions } from './ProjectInstructions.js';
 import type { EventEmitter } from '../repl/EventEmitter.js';
 import { runSessionReflection, type Proposal, type SessionSnapshot } from './SessionReflection.js';
 import { blockingReason, runHooksForEvent, type HookSpec } from './HookRunner.js';
@@ -303,7 +304,16 @@ export class AgentLoop {
         mutated = mutated || r.mutated;
         if (this.cancelled || !mutated || ctx.mode === 'planning' || !this.deps.autoVerify) break;
 
-        const cmd = resolveVerifyCommand(ctx.projectRoot, this.deps.verifyCommand);
+        // Re-load instructions per round — the agent may have just written
+        // (or edited) an AUTOCODE.md with a new `verify:` directive, and we
+        // want the next verification round to pick it up.
+        const instructions = loadProjectInstructions(ctx.projectRoot);
+        const cmd = resolveVerifyCommandForFiles(
+          ctx.projectRoot,
+          this.deps.verifyCommand,
+          instructions,
+          [...filesChanged],
+        );
         if (!cmd) break;
 
         this.deps.renderer.spinner.start(`verifying — $ ${cmd}`);
