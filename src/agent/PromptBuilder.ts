@@ -4,6 +4,7 @@ import { detectProjectContext, formatContextLine } from './ProjectContext.js';
 import { loadProjectInstructions } from './ProjectInstructions.js';
 import { getRepoMap } from './RepoMap.js';
 import { getSkills, renderSkillsSection } from './Skills.js';
+import { getGitWorkingState, renderSessionStateSection } from './SessionState.js';
 
 export function buildSystemPrompt(ctx: SessionContext): string {
   const os = `${platform()} ${release()}`;
@@ -73,6 +74,13 @@ You have these tools (the exact schemas are provided separately). Pick the small
 
 # When the user gives a vague request
 Make a reasonable interpretation and act on it. Use \`todo_write\` to make your plan visible. If the request really cannot be acted on without more information, ask one focused question — don't ask three at once.`);
+
+  // Live working-state snapshot — branch, modified files, recent commits,
+  // mid-rebase/merge flags. Refreshed every turn (cached briefly inside
+  // SessionState.ts). Sits right after the static Environment so the agent
+  // sees the live state of the repo before anything else.
+  const workingState = renderSessionStateSection(getGitWorkingState(ctx.projectRoot));
+  if (workingState) sections.push(workingState);
 
   // Repository map — a digest of files + top-level symbols for navigation.
   const repoMap = getRepoMap(ctx.projectRoot);
