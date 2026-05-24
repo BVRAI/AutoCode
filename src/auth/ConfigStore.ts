@@ -49,6 +49,28 @@ export interface AutocodeConfig {
     post_tool?: HookSpec[];
     stop?: HookSpec[];
   };
+  // Spinner picker for the Ink Bridge TUI. `default` is what shows for any
+  // in-flight LLM/tool call; `longOps` auto-engages for ops running >4s.
+  // Valid ids: braille (default), pulse, orbit, arc, dots, heartbeat, bars,
+  // shimmer, pipeline, reactor.
+  spinner?: {
+    default?: string;
+    planning?: string;
+    autocode?: string;
+    longOps?: string;
+    speed?: number;
+  };
+  // Web-tool guard rails. See src/util/urlGuard.ts for the validation rules.
+  // Defaults are safe: https only, private IPs blocked, no extra entries.
+  // Set `enabled: false` to remove web_fetch + web_search from the tool
+  // list entirely (the LLM won't see them as options).
+  webTools?: {
+    enabled?: boolean;
+    allowHttp?: boolean;
+    blockPrivateIps?: boolean;
+    extraBlockedHosts?: string[];
+    extraAllowedHosts?: string[];
+  };
 }
 
 export interface HookSpec {

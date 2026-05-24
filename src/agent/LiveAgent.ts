@@ -78,6 +78,12 @@ export class LiveAgent implements AgentHandler {
     await this.mcp.closeAll();
   }
 
+  // Forward to AgentLoop — used by the Ink Bridge UI to install its own
+  // event emitter (wrapping the original).
+  setEmitter(emitter: EventEmitter): void {
+    this.loop.setEmitter(emitter);
+  }
+
   async submit(
     input: string | import('../llm/types.js').ContentBlock[],
     ctx: SessionContext,

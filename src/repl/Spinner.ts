@@ -13,8 +13,10 @@ export class Spinner {
   private readonly enabled: boolean;
 
   constructor(private readonly stream: NodeJS.WriteStream = process.stderr) {
-    // Disable in non-TTY environments (CI, pipes) — animation would spam logs.
-    this.enabled = Boolean(stream.isTTY);
+    // Disable in non-TTY environments (CI, pipes) — animation would spam
+    // logs. Also disable under --automax (Automax V6 owns the UI; the
+    // \r-overwrite frames corrupt V6's pty reader).
+    this.enabled = Boolean(stream.isTTY) && process.env['AUTOCODE_AUTOMAX'] !== '1';
   }
 
   start(label: string): void {

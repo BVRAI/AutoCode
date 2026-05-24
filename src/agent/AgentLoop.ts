@@ -110,6 +110,15 @@ export class AgentLoop {
     };
   }
 
+  // Swap the activity emitter at runtime. Used by the Ink Bridge UI to
+  // wrap whatever emitter was passed at construction with a fanout that
+  // also routes events into the React state store. The bridge emitter
+  // forwards to the original, so --automax JSON output still works when
+  // both are active.
+  setEmitter(emitter: EventEmitter): void {
+    this.deps.emitter = emitter;
+  }
+
   cancel(): void {
     this.cancelled = true;
   }
@@ -592,10 +601,23 @@ export class AgentLoop {
           this.deps.renderer.diff(md.path ?? tu.name, md.before, md.after);
         }
 
+        // Wrap web tool outputs in an explicit untrusted-content marker so
+        // the model treats embedded text as DATA, not as instructions.
+        // System prompt has a matching directive telling the model how to
+        // handle this marker. Doesn't fully defeat prompt injection but
+        // raises the bar meaningfully on weaker models.
+        let content = result.content;
+        if (!result.isError && (tu.name === 'web_fetch' || tu.name === 'web_search')) {
+          const url =
+            (tu.input as { url?: string; query?: string }).url ??
+            (tu.input as { url?: string; query?: string }).query ??
+            '';
+          content = `<external_untrusted_content tool="${tu.name}" source=${JSON.stringify(url)}>\n${content}\n</external_untrusted_content>`;
+        }
         toolResults.push({
           type: 'tool_result',
           toolUseId: tu.id,
-          content: result.content,
+          content,
           isError: result.isError,
         });
         // A tool may return an image (e.g. capture_screenshot) — collect it

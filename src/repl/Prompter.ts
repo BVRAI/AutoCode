@@ -29,6 +29,36 @@ export function parseYes(answer: string): boolean {
   return t === '' || t === 'y' || t === 'yes';
 }
 
+// Bridge (Ink TUI) interim prompter — auto-accepts all approvals so the
+// agent doesn't hang on `default` mode while we wait for proper inline
+// confirmation UI in the React tree. Effectively makes Bridge behave like
+// `autocode` mode regardless of the selected mode. Tracked as a known
+// limitation; Ink-side approval cards land in the next PR.
+export class AutoAcceptPrompter implements Prompter {
+  constructor(private readonly emitter: EventEmitter = new NullEventEmitter()) {}
+  async confirm(message: string): Promise<boolean> {
+    this.emitter.emit('picker_opened', { kind: 'confirm', message, options: ['Yes', 'No'] });
+    this.emitter.emit('picker_resolved', { choice: 'yes' });
+    return true;
+  }
+  async ask(message: string): Promise<string> {
+    this.emitter.emit('text_input_opened', { prompt: message });
+    this.emitter.emit('text_input_resolved', { answer: '' });
+    return '';
+  }
+  async choose(question: string, options: string[], multiSelect: boolean): Promise<number[]> {
+    this.emitter.emit('picker_opened', { kind: 'choose', question, options, multiSelect });
+    const picked = options.length > 0 ? [0] : [];
+    this.emitter.emit('picker_resolved', { choice: picked });
+    return picked;
+  }
+  async approve(label: string): Promise<ApproveVerdict> {
+    this.emitter.emit('picker_opened', { kind: 'approve', label, options: ['Accept', 'Decline', 'Revise'] });
+    this.emitter.emit('picker_resolved', { choice: 'accept' });
+    return { decision: 'accept' };
+  }
+}
+
 // Headless: no interactive user — decline confirms, return empty answers.
 // Still emits open/resolved events so the Automax host can see "autocode
 // reached a gate it can't satisfy" rather than guessing.

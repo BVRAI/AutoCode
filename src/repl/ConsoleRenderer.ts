@@ -8,6 +8,21 @@ import { renderUnifiedDiff } from '../util/diff.js';
 import { renderMarkdown, looksLikeMarkdown } from './MarkdownRenderer.js';
 import { getRepoMap } from '../agent/RepoMap.js';
 
+// Optional output sink. When set, ConsoleRenderer routes all writes to
+// this interface instead of stdout/stderr — used by the Ink Bridge UI to
+// pull text into React state without touching any caller.
+export interface RendererSink {
+  info(text: string): void;
+  assistant(text: string): void;
+  dim(text: string): void;
+  warn(text: string): void;
+  error(text: string): void;
+  status(text: string): void;
+  rule(): void;
+  diff(label: string, before: string, after: string): void;
+  user(text: string): void;
+}
+
 export class ConsoleRenderer {
   readonly spinner = new Spinner();
   private streaming = false;
@@ -15,12 +30,21 @@ export class ConsoleRenderer {
   // Optional one-line banner shown in the header — set by the update checker
   // at startup when a newer autocode version is available.
   private updateBanner: string | null = null;
+  private sink: RendererSink | null = null;
+
+  // Attach a sink. After this, every output method routes to the sink and
+  // stdout is left alone (the Ink TUI takes over the screen). printHeader
+  // is a no-op in this mode — the rail/banner render via Ink components.
+  setSink(sink: RendererSink | null): void {
+    this.sink = sink;
+  }
 
   setUpdateBanner(text: string | null): void {
     this.updateBanner = text;
   }
 
   printHeader(ctx: SessionContext): void {
+    if (this.sink) return; // Ink owns the screen — banner is rendered as a component
     printBanner();
     const project = detectProjectContext(ctx.projectRoot);
     const projLine = formatContextLine(project);
@@ -62,15 +86,18 @@ export class ConsoleRenderer {
   }
 
   info(text: string): void {
+    if (this.sink) { this.sink.info(text); return; }
     process.stdout.write(text + '\n');
   }
 
   // A full-width horizontal rule — separates a user prompt from the reply.
   rule(): void {
+    if (this.sink) { this.sink.rule(); return; }
     process.stdout.write(pc.dim('─'.repeat(process.stdout.columns || 80)) + '\n');
   }
 
   assistant(text: string): void {
+    if (this.sink) { this.sink.assistant(text); return; }
     const lines = text.split(/\r?\n/);
     let first = true;
     for (const line of lines) {
@@ -86,18 +113,22 @@ export class ConsoleRenderer {
   }
 
   dim(text: string): void {
+    if (this.sink) { this.sink.dim(text); return; }
     process.stdout.write(pc.dim(text) + '\n');
   }
 
   warn(text: string): void {
+    if (this.sink) { this.sink.warn(text); return; }
     process.stderr.write(pc.yellow(text) + '\n');
   }
 
   error(text: string): void {
+    if (this.sink) { this.sink.error(text); return; }
     process.stderr.write(pc.red(text) + '\n');
   }
 
   status(text: string): void {
+    if (this.sink) { this.sink.status(text); return; }
     process.stdout.write(pc.dim(text) + '\n');
   }
 
@@ -120,6 +151,7 @@ export class ConsoleRenderer {
     const text = this.streamBuffer;
     this.streamBuffer = '';
     if (text.trim().length === 0) return;
+    if (this.sink) { this.sink.assistant(text); return; }
     const rendered = looksLikeMarkdown(text) ? renderMarkdown(text) : text;
     const lines = rendered.split(/\r?\n/);
     let first = true;
@@ -138,6 +170,7 @@ export class ConsoleRenderer {
   // Render a colored inline unified diff. Truncates extremely long diffs.
   diff(label: string, before: string, after: string): void {
     if (before === after) return;
+    if (this.sink) { this.sink.diff(label, before, after); return; }
     const out = renderUnifiedDiff(before, after);
     if (out === '(no textual change)') return;
     process.stdout.write(pc.dim(`  ${label}`) + '\n');

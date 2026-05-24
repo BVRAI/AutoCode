@@ -44,6 +44,8 @@ export interface AgentHandler {
   restore?(id: string): TrashItem | null;
   mcpStatus?(): Array<{ name: string; connected: boolean; toolCount: number; error?: string }>;
   mcpTools?(): string[];
+  // Optional — Ink Bridge mode wraps the event emitter at runtime.
+  setEmitter?(emitter: EventEmitter): void;
 }
 
 // The interactive REPL — a pinned bottom bar (input + status) with output
@@ -81,7 +83,138 @@ export class TerminalMode {
   }
 
   run(): Promise<number> {
-    return this.screen.isTty ? this.runTui() : this.runPlain();
+    // V6 / --automax: when autocode is hosted by Automax V6, the V6 UI
+    // owns the chat panel + input bar + spinner. We must not mount any
+    // visual TUI; V6 only wants a line-oriented stdin and the JSON
+    // event stream on stdout. Use runPlain regardless of TTY.
+    if (process.env['AUTOCODE_AUTOMAX'] === '1') return this.runPlain();
+    if (!this.screen.isTty) return this.runPlain();
+    // Bridge (Ink) is the default TTY experience. Opt out via env var to
+    // fall back to the legacy pinned-bar TUI in case of regressions.
+    if (process.env['AUTOCODE_LEGACY_TUI'] === '1') return this.runTui();
+    return this.runBridge();
+  }
+
+  // ── Ink Bridge TUI ────────────────────────────────────────────────────
+  //
+  // Full-bleed alt-screen React app. Reuses every dispatch / queue / slash-
+  // command handler from this class — we just swap the rendering surface.
+  // The agent's event emitter is wrapped (BridgeEventEmitter → React store)
+  // and the renderer's sink is set so all `renderer.info/assistant/diff/…`
+  // calls accumulate in the same store. Nothing in agent/loop/tools sees
+  // any of this.
+  private inkInstance: { unmount: () => void; waitUntilExit: () => Promise<void> } | null = null;
+
+  private async runBridge(): Promise<number> {
+    const { BridgeStore } = await import('./ink/store.js');
+    const { createRendererSink, createBridgeEventEmitter } = await import('./ink/bridge.js');
+    const { mountInkApp } = await import('./ink/InkApp.js');
+    const { AutoAcceptPrompter } = await import('./Prompter.js');
+
+    const store = new BridgeStore();
+    this.renderer.setSink(createRendererSink(store));
+    // Interim: Bridge has no inline approval UI yet, so wire an auto-accept
+    // prompter — the agent does not hang waiting for confirmations the
+    // React tree can't render. Tracked for a follow-up PR.
+    this.prompter.use(new AutoAcceptPrompter(this.emitter));
+
+    // Wrap the existing emitter — preserves --automax JSON output.
+    const innerEmitter = this.emitter;
+    const bridgeEmitter = createBridgeEventEmitter(store, innerEmitter);
+    this.agent.setEmitter?.(bridgeEmitter);
+
+    store.setMode(this.ctx.mode);
+    // Snapshot MCP status into the rail (refreshed every 5s).
+    const refreshMcp = (): void => {
+      const s = this.agent.mcpStatus?.() ?? [];
+      store.setMcpStatus(s);
+    };
+    refreshMcp();
+    const mcpTimer = setInterval(refreshMcp, 5_000);
+
+    // Poll cumulative usage every 1500ms to keep the rail's context meter
+    // alive between events. Cheap — just reads in-memory counters. The
+    // store dedupes identical values, so steady-state cycles cost nothing.
+    // Was 500ms originally — that produced ~8 React re-renders per second
+    // and a visible flicker in the Ink tree.
+    const { estimateCost } = await import('../util/pricing.js');
+    const usageTimer = setInterval(() => {
+      const u = this.agent.cumulativeUsage();
+      const { cost } = estimateCost(u, this.ctx.model.provider, this.ctx.model.model);
+      store.setUsage({
+        inputTokens: u.inputTokens,
+        outputTokens: u.outputTokens,
+        cacheReadTokens: u.cacheReadTokens,
+        cacheWriteTokens: u.cacheWriteTokens,
+        costUsd: cost,
+      });
+      store.setQueueDepth(this.queue.length);
+      store.setBusy(this.busy);
+      store.setMode(this.ctx.mode);
+    }, 1500);
+
+    const version = await this.readVersion();
+
+    this.inkInstance = await mountInkApp({
+      store,
+      sessionId: this.ctx.sessionId,
+      projectRoot: this.ctx.projectRoot,
+      modelProvider: this.ctx.model.provider,
+      modelName: this.ctx.model.model,
+      version,
+      onSubmit: (text) => this.handleSubmit(text),
+      onCycleMode: () => {
+        this.handleCycle();
+        store.setMode(this.ctx.mode);
+      },
+      onInterrupt: () => this.handleInterrupt(),
+      onExit: () => this.exitInk(),
+    });
+
+    return new Promise<number>((resolve) => {
+      this.resolveExit = (code) => {
+        clearInterval(mcpTimer);
+        clearInterval(usageTimer);
+        try {
+          this.renderer.setSink(null);
+          if (innerEmitter) this.agent.setEmitter?.(innerEmitter);
+        } catch {
+          /* nothing */
+        }
+        try {
+          this.inkInstance?.unmount();
+        } catch {
+          /* nothing */
+        }
+        this.inkInstance = null;
+        resolve(code);
+      };
+    });
+  }
+
+  private exitInk(): void {
+    if (this.exiting) return;
+    this.exit(0);
+  }
+
+  private async readVersion(): Promise<string> {
+    try {
+      const { readFileSync } = await import('node:fs');
+      const { fileURLToPath } = await import('node:url');
+      const { dirname, resolve } = await import('node:path');
+      const here = dirname(fileURLToPath(import.meta.url));
+      // dist/repl → ../package.json (when running the built bundle)
+      // src/repl → ../../package.json (during dev)
+      for (const p of [resolve(here, '../../package.json'), resolve(here, '../package.json')]) {
+        try {
+          const pkg = JSON.parse(readFileSync(p, 'utf8')) as { version?: string };
+          if (pkg.version) return `v${pkg.version}`;
+        } catch { /* try next */ }
+      }
+    } catch {
+      /* default */
+    }
+    return 'v0.1.0-dev';
   }
 
   // ── TUI mode ──────────────────────────────────────────────────────────
@@ -328,7 +461,8 @@ export class TerminalMode {
       | 'mcp'
       | 'update'
       | 'reflect'
-      | 'plugins',
+      | 'plugins'
+      | 'spinner',
     args: string[],
   ): Promise<void> {
     switch (name) {
@@ -388,6 +522,36 @@ export class TerminalMode {
         return this.handleReflect();
       case 'plugins':
         return this.handlePlugins();
+      case 'spinner':
+        return this.handleSpinner(args);
+    }
+  }
+
+  private handleSpinner(args: string[]): void {
+    const valid = ['braille', 'pulse', 'orbit', 'arc', 'dots', 'heartbeat', 'bars', 'shimmer', 'pipeline', 'reactor'];
+    if (args.length === 0) {
+      this.renderer.info(`spinners: ${valid.join(', ')}`);
+      try {
+        const cfg = new ConfigStore().load();
+        const current = cfg.spinner?.default ?? 'braille';
+        this.renderer.dim(`current: ${current} · set with /spinner <name>`);
+      } catch {
+        this.renderer.dim('current: braille (default)');
+      }
+      return;
+    }
+    const id = args[0]!.toLowerCase();
+    if (!valid.includes(id)) {
+      this.renderer.error(`unknown spinner '${id}'. valid: ${valid.join(', ')}`);
+      return;
+    }
+    try {
+      const cs = new ConfigStore();
+      const cfg = cs.load();
+      cs.save({ ...cfg, spinner: { ...(cfg.spinner ?? {}), default: id } });
+      this.renderer.dim(`spinner → ${id} (saved; takes effect on next restart for now)`);
+    } catch (e) {
+      this.renderer.error(`failed to save spinner: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
@@ -599,6 +763,7 @@ export class TerminalMode {
       '/plugins                       List installed autocode plugins (skills + hooks)',
       '/update                        Check for and install the latest autocode (npm)',
       '/reflect                       Propose AUTOCODE.md additions based on this session',
+      '/spinner [name]                Show or set the active spinner (braille, pulse, orbit, …)',
       '/stop                          Cancel current task (or Ctrl+C)',
       '/exit                          Close autocode',
     ];

@@ -6,6 +6,8 @@ import {
   type ToolExecutionContext,
   type ToolResult,
 } from './types.js';
+import { validateUrl } from '../util/urlGuard.js';
+import { ConfigStore } from '../auth/ConfigStore.js';
 
 const DEFAULT_MAX_BYTES = 100_000;
 const DEFAULT_TIMEOUT_MS = 20_000;
@@ -32,14 +34,23 @@ export class WebFetchTool implements Tool {
   async execute(args: Record<string, unknown>, _ctx: ToolExecutionContext): Promise<ToolResult> {
     const url = requireString(args, 'url');
     const maxBytes = optionalNumber(args, 'max_bytes') ?? DEFAULT_MAX_BYTES;
+    // SSRF + scheme guard — refuse private IPs, localhost, AWS metadata,
+    // file:// etc. before any network call. Config from ~/.autocode/config.json.
+    let cfg: { allowHttp?: boolean; blockPrivateIps?: boolean; extraBlockedHosts?: string[]; extraAllowedHosts?: string[] } = {};
+    try {
+      cfg = new ConfigStore().load().webTools ?? {};
+    } catch {
+      /* default to safe defaults */
+    }
+    const verdict = await validateUrl(url, cfg);
+    if (!verdict.ok) {
+      return { summary: 'blocked', content: `blocked: ${verdict.reason}`, isError: true };
+    }
     let parsed: URL;
     try {
       parsed = new URL(url);
     } catch {
       return { summary: 'bad url', content: `invalid URL: ${url}`, isError: true };
-    }
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      return { summary: 'bad protocol', content: `only http/https supported`, isError: true };
     }
 
     const controller = new AbortController();

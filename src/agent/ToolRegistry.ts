@@ -19,6 +19,18 @@ import { AskUserTool } from '../tools/askUser.js';
 import { TaskTool } from '../tools/task.js';
 import { UseSkillTool } from '../tools/useSkill.js';
 import { FindSymbolTool } from '../tools/findSymbol.js';
+import { ConfigStore } from '../auth/ConfigStore.js';
+
+// Honor the `webTools.enabled` config flag — when false, web_fetch and
+// web_search aren't registered at all (LLM doesn't see them).
+function webToolsEnabled(): boolean {
+  try {
+    const cfg = new ConfigStore().load();
+    return cfg.webTools?.enabled !== false;
+  } catch {
+    return true;
+  }
+}
 
 export class ToolRegistry {
   private readonly tools = new Map<string, Tool>();
@@ -34,8 +46,10 @@ export class ToolRegistry {
     this.register(new GlobTool());
     this.register(new GrepTool());
     this.register(new TodoWriteTool());
-    this.register(new WebFetchTool());
-    this.register(new WebSearchTool());
+    if (webToolsEnabled()) {
+      this.register(new WebFetchTool());
+      this.register(new WebSearchTool());
+    }
     this.register(new OpenInBrowserTool());
     this.register(new CaptureScreenshotTool());
     this.register(new AskUserTool());
@@ -58,8 +72,10 @@ export class ToolRegistry {
         r.register(new GlobTool());
         r.register(new GrepTool());
         r.register(new FindSymbolTool());
-        r.register(new WebFetchTool());
-        r.register(new WebSearchTool());
+        if (webToolsEnabled()) {
+          r.register(new WebFetchTool());
+          r.register(new WebSearchTool());
+        }
         break;
     }
     return r;
