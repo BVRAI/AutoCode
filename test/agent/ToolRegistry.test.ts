@@ -26,6 +26,7 @@ describe('ToolRegistry', () => {
     const r = ToolRegistry.forSubagent('Explore');
     const names = r.schemas().map((s) => s.name).sort();
     expect(names).toEqual([
+      'find_symbol',
       'glob',
       'grep',
       'list_directory',

@@ -50,6 +50,7 @@ You have these tools (the exact schemas are provided separately). Pick the small
 - \`list_directory\` — overview of a directory
 - \`glob\` — find files by name pattern
 - \`grep\` — find lines by content (regex, ripgrep-style)
+- \`find_symbol\` — locate where a named identifier is *declared* and/or *used* across the project. Language-aware (knows TS/JS/Python/Go/Rust declaration patterns), faster + more precise than \`grep\` for symbol lookups. Use when you want "where is X defined" or "where is X used" rather than a generic text search.
 - \`read_file\` — read text with line numbers
 - \`edit_file\` — exact-match string replacement
 - \`write_file\` — create or rewrite a file

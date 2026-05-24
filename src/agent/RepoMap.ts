@@ -75,6 +75,25 @@ function collect(dir: string, out: string[], depth: number): void {
   }
 }
 
+// Per-language regex for matching a top-level declaration of a *named*
+// identifier. The pattern always captures the bound name in group 1 (or 2
+// for the TS `export const X` branch). Anchored to start-of-line so indented
+// / nested declarations are skipped. Shared between RepoMap (which extracts
+// ALL declared symbols in a file) and the find_symbol tool (which searches
+// for a specific name).
+export function declarationPatternForExt(ext: string): RegExp | null {
+  if (['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'].includes(ext)) {
+    return /^(?:export\s+(?:default\s+)?)?(?:async\s+)?(?:function|class|interface|type|enum)\s+([\w$]+)|^export\s+const\s+([\w$]+)/gm;
+  }
+  if (ext === '.py') return /^\s*(?:def|class)\s+([A-Za-z_]\w*)/gm;
+  if (ext === '.go') return /^(?:func|type)\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)/gm;
+  if (ext === '.rs') return /^\s*(?:pub\s+)?(?:fn|struct|enum|trait)\s+([A-Za-z_]\w*)/gm;
+  return null;
+}
+
+// The set of source extensions both RepoMap and find_symbol scan.
+export const SCANNED_SOURCE_EXT = SOURCE_EXT;
+
 // Cheap, per-language extraction of top-level declaration names. Anchored to
 // the start of a line so indented (local / member) declarations are skipped.
 function extractSymbols(absPath: string): string[] {
@@ -86,17 +105,7 @@ function extractSymbols(absPath: string): string[] {
   }
   if (text.length > MAX_READ_BYTES) text = text.slice(0, MAX_READ_BYTES);
 
-  const ext = extname(absPath);
-  let re: RegExp | null = null;
-  if (['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'].includes(ext)) {
-    re = /^(?:export\s+(?:default\s+)?)?(?:async\s+)?(?:function|class|interface|type|enum)\s+([\w$]+)|^export\s+const\s+([\w$]+)/gm;
-  } else if (ext === '.py') {
-    re = /^\s*(?:def|class)\s+([A-Za-z_]\w*)/gm;
-  } else if (ext === '.go') {
-    re = /^(?:func|type)\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)/gm;
-  } else if (ext === '.rs') {
-    re = /^\s*(?:pub\s+)?(?:fn|struct|enum|trait)\s+([A-Za-z_]\w*)/gm;
-  }
+  const re = declarationPatternForExt(extname(absPath));
   if (!re) return [];
 
   const names: string[] = [];
