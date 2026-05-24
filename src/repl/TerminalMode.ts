@@ -24,6 +24,7 @@ import { isBundled } from '../util/host.js';
 import { applyProposal, type Proposal } from '../agent/SessionReflection.js';
 import { ConfigStore } from '../auth/ConfigStore.js';
 import { runHooksForEvent } from '../agent/HookRunner.js';
+import { getPlugins, pluginHooksForEvent } from '../agent/Plugins.js';
 import { relative } from 'node:path';
 import { type EventEmitter, NullEventEmitter } from './EventEmitter.js';
 
@@ -326,7 +327,8 @@ export class TerminalMode {
       | 'restore'
       | 'mcp'
       | 'update'
-      | 'reflect',
+      | 'reflect'
+      | 'plugins',
     args: string[],
   ): Promise<void> {
     switch (name) {
@@ -384,6 +386,31 @@ export class TerminalMode {
         return this.handleUpdate();
       case 'reflect':
         return this.handleReflect();
+      case 'plugins':
+        return this.handlePlugins();
+    }
+  }
+
+  private handlePlugins(): void {
+    const plugins = getPlugins(this.ctx.projectRoot);
+    if (plugins.length === 0) {
+      this.renderer.dim(
+        '(no plugins installed — drop a directory with plugin.json into ~/.autocode/plugins/<name>/ or <project>/.autocode/plugins/<name>/)',
+      );
+      return;
+    }
+    for (const p of plugins) {
+      const counts: string[] = [];
+      if (p.skills.length > 0) counts.push(`${p.skills.length} skill${p.skills.length === 1 ? '' : 's'}`);
+      const hookTotal =
+        (p.hooks.pre_tool?.length ?? 0) +
+        (p.hooks.post_tool?.length ?? 0) +
+        (p.hooks.stop?.length ?? 0);
+      if (hookTotal > 0) counts.push(`${hookTotal} hook${hookTotal === 1 ? '' : 's'}`);
+      const tag = `[${p.source}${p.version ? ` ${p.version}` : ''}]`;
+      this.renderer.info(
+        `${p.name}  ${tag}${p.description ? '  · ' + p.description : ''}${counts.length > 0 ? '  · ' + counts.join(', ') : ''}`,
+      );
     }
   }
 
@@ -409,8 +436,11 @@ export class TerminalMode {
     } catch {
       /* default */
     }
-    const stopHooks = cfg.hooks?.stop;
-    if (!stopHooks || stopHooks.length === 0) return;
+    const stopHooks = [
+      ...(cfg.hooks?.stop ?? []),
+      ...pluginHooksForEvent(getPlugins(this.ctx.projectRoot), 'stop'),
+    ];
+    if (stopHooks.length === 0) return;
     const outcomes = await runHooksForEvent(stopHooks, {
       event: 'stop',
       projectRoot: this.ctx.projectRoot,
@@ -566,6 +596,7 @@ export class TerminalMode {
       '/trash                         List recently deleted files (recoverable)',
       '/restore <id>                  Restore a deleted file from the trash',
       '/mcp                           List configured MCP servers and their tools',
+      '/plugins                       List installed autocode plugins (skills + hooks)',
       '/update                        Check for and install the latest autocode (npm)',
       '/reflect                       Propose AUTOCODE.md additions based on this session',
       '/stop                          Cancel current task (or Ctrl+C)',

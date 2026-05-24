@@ -142,6 +142,57 @@ describe('discoverSkills', () => {
   });
 });
 
+describe('discoverSkills — plugin contributions', () => {
+  let projectRoot: string;
+  let userHome: string;
+
+  beforeEach(() => {
+    _resetSkillCacheForTests();
+    projectRoot = mkdtempSync(join(tmpdir(), 'autocode-skills-plug-proj-'));
+    userHome = mkdtempSync(join(tmpdir(), 'autocode-skills-plug-user-'));
+  });
+  afterEach(() => {
+    rmSync(projectRoot, { recursive: true, force: true });
+    rmSync(userHome, { recursive: true, force: true });
+  });
+
+  function writePlugin(root: string, pluginName: string, skillFile: string, skillContent: string): void {
+    const dir = join(root, '.autocode', 'plugins', pluginName);
+    mkdirSync(join(dir, 'skills'), { recursive: true });
+    writeFileSync(join(dir, 'plugin.json'), JSON.stringify({ name: pluginName }), 'utf8');
+    writeFileSync(join(dir, 'skills', skillFile), skillContent, 'utf8');
+  }
+
+  it('discovers a skill contributed by a user-global plugin', () => {
+    writePlugin(userHome, 'plug-a', 'hello.md', '---\nname: hello\ndescription: hi\n---\nbody');
+    const r = discoverSkills(projectRoot, userHome);
+    expect(r).toHaveLength(1);
+    expect(r[0]!.name).toBe('hello');
+  });
+
+  it('project-local loose skill wins over a same-name plugin skill', () => {
+    writePlugin(userHome, 'plug', 'x.md', '---\nname: x\ndescription: plugin\n---\nplugin-body');
+    mkdirSync(join(projectRoot, '.autocode', 'skills'), { recursive: true });
+    writeFileSync(
+      join(projectRoot, '.autocode', 'skills', 'x.md'),
+      '---\nname: x\ndescription: project\n---\nproject-body',
+      'utf8',
+    );
+    const r = discoverSkills(projectRoot, userHome);
+    expect(r).toHaveLength(1);
+    expect(r[0]!.description).toBe('project');
+    expect(r[0]!.body).toBe('project-body');
+  });
+
+  it('project-plugin skill overrides a user-global plugin skill of the same name', () => {
+    writePlugin(userHome, 'shared', 'x.md', '---\nname: x\ndescription: user\n---\nuser-body');
+    writePlugin(projectRoot, 'shared', 'x.md', '---\nname: x\ndescription: project\n---\nproject-body');
+    const r = discoverSkills(projectRoot, userHome);
+    expect(r).toHaveLength(1);
+    expect(r[0]!.description).toBe('project');
+  });
+});
+
 describe('findSkill', () => {
   it('returns the matching skill', () => {
     const skills = [

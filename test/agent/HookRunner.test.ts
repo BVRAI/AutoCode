@@ -133,7 +133,9 @@ describe('runHooksForEvent', () => {
       ctx({ toolName: 'edit_file' }),
     );
     expect(r.map((o) => o.stdout.trim())).toEqual(['A', 'B', 'C']);
-  });
+    // Each `node -e` spawn on Windows + tree-kill setup adds ~1–1.5s of
+    // overhead; three serial hooks comfortably fit in 20s.
+  }, 20_000);
 
   it('does not require a toolName for stop-event hooks', async () => {
     const r = await runHooksForEvent(

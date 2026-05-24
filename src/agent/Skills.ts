@@ -13,6 +13,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { parseFrontmatter } from '../util/frontmatter.js';
+import { _resetPluginCacheForTests, discoverPlugins } from './Plugins.js';
 
 export interface Skill {
   name: string;
@@ -37,9 +38,9 @@ export interface ParsedSkill {
 
 const cache = new Map<string, Skill[]>();
 
-/** Discover skills from the project and the user-global locations, with
- *  project-local skills overriding user-global on name conflict. Memoized
- *  per projectRoot for the life of the process. */
+/** Discover skills from the project, user-global, and plugin locations.
+ *  Precedence (last wins for the same name): user plugins → user-global
+ *  skills → project plugins → project-local skills. Memoised per projectRoot. */
 export function getSkills(projectRoot: string): Skill[] {
   const cached = cache.get(projectRoot);
   if (cached !== undefined) return cached;
@@ -53,10 +54,23 @@ export function getSkills(projectRoot: string): Skill[] {
 export function discoverSkills(projectRoot: string, userHome: string): Skill[] {
   const byName = new Map<string, Skill>();
 
-  // User-global first, so project-local overrides.
+  // Plugins import Skill as a type-only — no runtime cycle.
+  const plugins = discoverPlugins(projectRoot, userHome);
+
+  // Precedence cascade — later set() calls overwrite earlier ones.
+  // 1. user-global plugins
+  for (const p of plugins.filter((p) => p.source === 'user')) {
+    for (const s of p.skills) byName.set(s.name, s);
+  }
+  // 2. user-global skills (loose files)
   for (const s of readSkillDir(join(userHome, '.autocode', 'skills'), 'user')) {
     byName.set(s.name, s);
   }
+  // 3. project plugins
+  for (const p of plugins.filter((p) => p.source === 'project')) {
+    for (const s of p.skills) byName.set(s.name, s);
+  }
+  // 4. project-local skills (loose files) — highest precedence
   for (const s of readSkillDir(join(projectRoot, '.autocode', 'skills'), 'project')) {
     byName.set(s.name, s);
   }
@@ -138,4 +152,5 @@ export function renderSkillsSection(skills: Skill[]): string {
  *  the test file imports it directly. */
 export function _resetSkillCacheForTests(): void {
   cache.clear();
+  _resetPluginCacheForTests();
 }

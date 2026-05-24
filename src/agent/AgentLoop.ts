@@ -18,6 +18,7 @@ import { loadProjectInstructions } from './ProjectInstructions.js';
 import type { EventEmitter } from '../repl/EventEmitter.js';
 import { runSessionReflection, type Proposal, type SessionSnapshot } from './SessionReflection.js';
 import { blockingReason, runHooksForEvent, type HookSpec } from './HookRunner.js';
+import { getPlugins, pluginHooksForEvent } from './Plugins.js';
 
 const MAX_ITERATIONS = 40;
 const LOOP_DETECT_WINDOW = 10;
@@ -525,7 +526,11 @@ export class AgentLoop {
         // non-zero codes are advisory; output is surfaced to the user either
         // way. The block path injects a synthetic tool_result so the model
         // sees why and can adapt.
-        const preOutcomes = await runHooksForEvent(this.deps.hooks?.pre_tool, {
+        const preHooks = [
+          ...(this.deps.hooks?.pre_tool ?? []),
+          ...pluginHooksForEvent(getPlugins(ctx.projectRoot), 'pre_tool'),
+        ];
+        const preOutcomes = await runHooksForEvent(preHooks, {
           event: 'pre_tool',
           toolName: tu.name,
           toolArgs: tu.input,
@@ -603,7 +608,11 @@ export class AgentLoop {
         // PostToolUse hooks — advisory only. Lint after edits, audit log,
         // formatter, etc. Non-zero exit codes surface as warnings but never
         // change the tool's verdict.
-        const postOutcomes = await runHooksForEvent(this.deps.hooks?.post_tool, {
+        const postHooks = [
+          ...(this.deps.hooks?.post_tool ?? []),
+          ...pluginHooksForEvent(getPlugins(ctx.projectRoot), 'post_tool'),
+        ];
+        const postOutcomes = await runHooksForEvent(postHooks, {
           event: 'post_tool',
           toolName: tu.name,
           toolArgs: tu.input,
