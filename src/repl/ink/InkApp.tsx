@@ -159,6 +159,14 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
       return;
     }
     if (key.escape) {
+      // When the agent is running, Esc is an interrupt (matches Ctrl+C
+      // for the busy case but is more discoverable). When idle, Esc
+      // clears the input field — pressing it never exits the app
+      // (Ctrl+C on empty input is the only "exit" keystroke).
+      if (state.busy) {
+        props.onInterrupt();
+        return;
+      }
       setInput('');
       setCursor(0);
       return;

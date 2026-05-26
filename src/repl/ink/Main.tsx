@@ -280,7 +280,7 @@ function Footer({ input, cursor, state }: { input: string; cursor: number; state
         {state.queueDepth > 0 && <Text color={BR.inkDim}>  ·  {state.queueDepth} queued</Text>}
         {state.busy && <Text color={BR.amber}>  ·  busy</Text>}
         <Box flexGrow={1}><Text> </Text></Box>
-        <Text color={BR.inkFaint}>enter send · shift+enter newline · esc cancel · ↑ history · ^c stop</Text>
+        <Text color={BR.inkFaint}>enter send · esc {state.busy ? 'interrupt' : 'clear'} · ↑ history · ^c stop</Text>
       </Box>
     </Box>
   );
