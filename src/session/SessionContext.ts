@@ -3,11 +3,17 @@ export interface ModelConfig {
   model: string;
 }
 
-// Workflow modes, cycled with Shift+Tab in the REPL:
+// Workflow modes:
 //  - planning:  read-only — edits/commands are disabled; the agent plans.
 //  - default:   the agent works, but each edit/command is shown for approval.
 //  - autocode:  auto-accept — edits/commands apply with no prompt.
-export type AgentMode = 'planning' | 'default' | 'autocode';
+//  - admin:     general computer admin tasks (file ops, scripting, Excel).
+//               Same auto-apply gate as `autocode`, but the system prompt
+//               is framed for results-not-process work and the post-edit
+//               verify-loop is skipped. Reached via `/mode admin` or the
+//               `--mode admin` CLI flag (Automax V6 uses this when routing
+//               admin tasks). Not in the Shift+Tab cycle — opt-in.
+export type AgentMode = 'planning' | 'default' | 'autocode' | 'admin';
 
 export interface SessionContext {
   sessionId: string;
@@ -20,6 +26,10 @@ export interface SessionContext {
 }
 
 // Shift+Tab cycle order: default → autocode → planning → default.
+// Admin mode is excluded from the cycle on purpose — it's opt-in via
+// `/mode admin` (in-session) or `--mode admin` (CLI). When admin is
+// active, the next cycle step pops back to `default` so the user can
+// rejoin the regular coding loop without typing `/mode default`.
 export function nextMode(mode: AgentMode): AgentMode {
   switch (mode) {
     case 'default':
@@ -27,6 +37,8 @@ export function nextMode(mode: AgentMode): AgentMode {
     case 'autocode':
       return 'planning';
     case 'planning':
+      return 'default';
+    case 'admin':
       return 'default';
   }
 }

@@ -28,7 +28,7 @@ export const COMMAND_DEFS: ReadonlyArray<CommandDef> = [
   { name: 'cost',     signature: '/cost',                                     summary: 'Show session cost estimate',                                args: 'none' },
   { name: 'diff',     signature: '/diff',                                     summary: 'Show uncommitted git changes',                              args: 'none' },
   { name: 'auth',     signature: '/auth',                                     summary: 'Configure an API key',                                      args: 'none' },
-  { name: 'mode',     signature: '/mode [planning|default|autocode]',         summary: 'Show or set the workflow mode',                             args: 'optional' },
+  { name: 'mode',     signature: '/mode [planning|default|autocode|admin]',   summary: 'Show or set the workflow mode',                             args: 'optional' },
   { name: 'undo',     signature: '/undo [turn]',                              summary: 'Revert last tool step (or whole turn)',                     args: 'optional' },
   { name: 'trash',    signature: '/trash',                                    summary: 'List recently deleted files (recoverable)',                 args: 'none' },
   { name: 'restore',  signature: '/restore <id>',                             summary: 'Restore a deleted file from the trash',                     args: 'required' },

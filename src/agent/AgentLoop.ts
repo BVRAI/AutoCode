@@ -49,6 +49,11 @@ export function gateFor(mode: AgentMode, toolName: string): 'block' | 'approve' 
       return 'approve';
     case 'autocode':
       return 'allow';
+    case 'admin':
+      // Admin work expects autonomous execution; gate is the same as
+      // autocode mode. The mode-specific differences (prompt framing,
+      // verify-loop skip) live elsewhere.
+      return 'allow';
   }
 }
 
@@ -312,7 +317,17 @@ export class AgentLoop {
       for (let round = 0; round <= MAX_VERIFY_ROUNDS; round++) {
         const r = await this.runIterations(ctx, toolExecCtx, userText, totals, filesChanged, turnState);
         mutated = mutated || r.mutated;
-        if (this.cancelled || !mutated || ctx.mode === 'planning' || !this.deps.autoVerify) break;
+        // Admin mode skips the verify-loop — admin tasks (rename CSVs,
+        // archive folders, run scripts) have no "test command" concept,
+        // and the existing project verify command (npm test / pytest /
+        // etc.) is meaningless after non-code file ops.
+        if (
+          this.cancelled ||
+          !mutated ||
+          ctx.mode === 'planning' ||
+          ctx.mode === 'admin' ||
+          !this.deps.autoVerify
+        ) break;
 
         // Re-load instructions per round — the agent may have just written
         // (or edited) an AUTOCODE.md with a new `verify:` directive, and we

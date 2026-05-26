@@ -37,6 +37,7 @@ program
   .option('--provider <name>', 'LLM provider (anthropic|xai|openai|openrouter)', process.env.AUTOMAX_PROVIDER ?? 'xai')
   .option('--model <name>', 'model id (defaults per provider)', process.env.AUTOMAX_MODEL)
   .option('--plan-mode', 'start in planning mode (read-only — agent plans, makes no changes)', false)
+  .option('--mode <name>', 'start in a specific workflow mode: planning | default | autocode | admin (overrides --plan-mode)')
   .option('-p, --print <prompt>', 'run a single task non-interactively and exit')
   .option('--resume <sessionId>', 'resume a specific prior session')
   .option('-c, --continue', 'resume the most recent prior session', false)
@@ -49,6 +50,7 @@ program
       provider: string;
       model?: string;
       planMode?: boolean;
+      mode?: string;
       print?: string;
       resume?: string;
       continue?: boolean;
@@ -103,9 +105,19 @@ program
       : (opts.model ?? defaultModelFor(opts.provider));
 
     // Headless runs auto-accept (no interactive approval is possible);
-    // --plan-mode starts in planning; otherwise default (review each change).
+    // --mode <name> takes precedence over --plan-mode if both are given.
+    // Falls back to: headless → autocode, --plan-mode → planning, else default.
     const headless = typeof opts.print === 'string';
-    const initialMode = headless ? 'autocode' : opts.planMode ? 'planning' : 'default';
+    const explicitMode = typeof opts.mode === 'string' ? opts.mode.toLowerCase() : null;
+    const validMode = (m: string | null): m is 'planning' | 'default' | 'autocode' | 'admin' =>
+      m === 'planning' || m === 'default' || m === 'autocode' || m === 'admin';
+    if (explicitMode !== null && !validMode(explicitMode)) {
+      process.stderr.write(
+        `unknown --mode value: ${explicitMode} (expected planning | default | autocode | admin)\n`,
+      );
+      process.exit(2);
+    }
+    const initialMode = explicitMode ?? (headless ? 'autocode' : opts.planMode ? 'planning' : 'default');
     // One interactive-input authority. Headless auto-denies; the interactive
     // path swaps in the pinned-bar prompter once TerminalMode starts.
     const prompter = new PrompterRef(headless ? new AutoDenyPrompter() : new PlainPrompter());

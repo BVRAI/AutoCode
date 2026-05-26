@@ -698,11 +698,11 @@ export class TerminalMode {
       return;
     }
     const arg = args[0]!.toLowerCase();
-    if (arg === 'planning' || arg === 'default' || arg === 'autocode') {
+    if (arg === 'planning' || arg === 'default' || arg === 'autocode' || arg === 'admin') {
       this.ctx.mode = arg as AgentMode;
       this.renderer.info(`mode → ${this.ctx.mode}`);
     } else {
-      this.renderer.error('usage: /mode [planning|default|autocode]');
+      this.renderer.error('usage: /mode [planning|default|autocode|admin]');
     }
   }
 }

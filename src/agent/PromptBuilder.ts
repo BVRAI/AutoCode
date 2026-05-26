@@ -151,6 +151,16 @@ function modeGuidance(mode: SessionContext['mode']): string {
       return 'DEFAULT — file edits and shell commands are shown to the user for approval before they run.';
     case 'autocode':
       return 'AUTOCODE — file edits and shell commands apply automatically without prompting.';
+    case 'admin':
+      return (
+        'ADMIN — general computer administration (file organization, scripting, batch ' +
+        'operations, Excel/CSV updates, archive ops). File edits and shell commands apply ' +
+        'automatically without prompting. Optimize for RESULTS, not process: batch operations ' +
+        'are fine; don\'t belabor inspection if the task is unambiguous; don\'t suggest test ' +
+        'files or verification scaffolding. Use run_shell liberally — this is a terminal-first ' +
+        'context, not a code-edit context. The post-edit verification loop is disabled in ' +
+        'this mode; finish when the operation is done, not after running tests.'
+      );
   }
 }
 

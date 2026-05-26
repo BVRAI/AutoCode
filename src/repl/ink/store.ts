@@ -67,7 +67,7 @@ export interface McpStatusEntry {
 export interface BridgeState {
   turn: number;
   busy: boolean;
-  mode: 'planning' | 'default' | 'autocode';
+  mode: 'planning' | 'default' | 'autocode' | 'admin';
   thinking: string | null;       // current spinner label, or null
   thinkingStartedAt: number | null;
   editsThisTurn: RailEditSummary[];
