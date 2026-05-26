@@ -1,8 +1,7 @@
 import { createInterface } from 'node:readline';
 import { execSync } from 'node:child_process';
-import { resolve } from 'node:path';
+import { resolve, relative } from 'node:path';
 import { existsSync, statSync } from 'node:fs';
-import pc from 'picocolors';
 
 import { nextMode, type SessionContext, type AgentMode } from '../session/SessionContext.js';
 import type { CumulativeUsage } from '../session/TranscriptStore.js';
@@ -14,18 +13,13 @@ import { ConsoleRenderer } from './ConsoleRenderer.js';
 import { parse, type ParsedInput } from './CommandParser.js';
 import { runInit } from './InitCommand.js';
 import { runAuth } from './AuthCommand.js';
-import { Screen } from './Screen.js';
-import { LineEditor } from './LineEditor.js';
-import { BottomBar, renderBar, type BarState } from './BottomBar.js';
-import { PrompterRef, TuiPrompter } from './Prompter.js';
-import { BANNER_GALLERY, bannerBlock } from './Banner.js';
+import { PrompterRef } from './Prompter.js';
 import { runUpdate } from '../update/UpdateChecker.js';
 import { isBundled } from '../util/host.js';
 import { applyProposal, type Proposal } from '../agent/SessionReflection.js';
 import { ConfigStore } from '../auth/ConfigStore.js';
 import { runHooksForEvent } from '../agent/HookRunner.js';
 import { getPlugins, pluginHooksForEvent } from '../agent/Plugins.js';
-import { relative } from 'node:path';
 import { type EventEmitter, NullEventEmitter } from './EventEmitter.js';
 
 const MAX_QUEUE = 5;
@@ -48,24 +42,19 @@ export interface AgentHandler {
   setEmitter?(emitter: EventEmitter): void;
 }
 
-// The interactive REPL — a pinned bottom bar (input + status) with output
-// scrolling above it via a terminal scroll region. Falls back to a plain
-// line loop when stdout is not a TTY.
+// The interactive REPL. Two render paths:
+//  - Ink Bridge (default for TTY) — full-screen alt-screen React app.
+//  - Plain readline (non-TTY, AUTOCODE_AUTOMAX=1, piped stdin) — the line
+//    loop the Automax V6 host bridges over.
+// The legacy pinned-bar TUI (raw ANSI scroll regions + Screen/BottomBar/
+// LineEditor) was removed in Phase 36 — Bridge supersedes it cleanly,
+// and `runPlain` handles every environment where Bridge can't render.
 export class TerminalMode {
-  private readonly screen = new Screen();
-  private readonly editor: LineEditor;
-  private bar: BottomBar | null = null;
   private exiting = false;
   private busy = false;
   private readonly queue: string[] = [];
   private resolveExit: ((code: number) => void) | null = null;
-  // Launch-banner rotation — flashes a new random gallery banner every 2s
-  // until the first prompt is submitted.
-  private bannerTimer: ReturnType<typeof setInterval> | null = null;
-  private lastBannerId = 1; // banner 1 is the static draw from printHeader
-  // Debounce coalesces the burst of resize events a terminal fires while the
-  // user is dragging the window into a single repaint at the end.
-  private resizeDebounce: ReturnType<typeof setTimeout> | null = null;
+  private inkInstance: { unmount: () => void; waitUntilExit: () => Promise<void> } | null = null;
 
   constructor(
     private readonly ctx: SessionContext,
@@ -73,14 +62,7 @@ export class TerminalMode {
     private readonly agent: AgentHandler,
     private readonly prompter: PrompterRef,
     private readonly emitter: EventEmitter = new NullEventEmitter(),
-  ) {
-    this.editor = new LineEditor({
-      onChange: () => this.redrawBar(),
-      onSubmit: (text) => this.handleSubmit(text),
-      onInterrupt: () => this.handleInterrupt(),
-      onCycleMode: () => this.handleCycle(),
-    });
-  }
+  ) {}
 
   run(): Promise<number> {
     // V6 / --automax: when autocode is hosted by Automax V6, the V6 UI
@@ -88,23 +70,19 @@ export class TerminalMode {
     // visual TUI; V6 only wants a line-oriented stdin and the JSON
     // event stream on stdout. Use runPlain regardless of TTY.
     if (process.env['AUTOCODE_AUTOMAX'] === '1') return this.runPlain();
-    if (!this.screen.isTty) return this.runPlain();
-    // Bridge (Ink) is the default TTY experience. Opt out via env var to
-    // fall back to the legacy pinned-bar TUI in case of regressions.
-    if (process.env['AUTOCODE_LEGACY_TUI'] === '1') return this.runTui();
+    // Bridge (Ink) for any real TTY; readline fallback otherwise.
+    if (!process.stdout.isTTY) return this.runPlain();
     return this.runBridge();
   }
 
   // ── Ink Bridge TUI ────────────────────────────────────────────────────
   //
   // Full-bleed alt-screen React app. Reuses every dispatch / queue / slash-
-  // command handler from this class — we just swap the rendering surface.
-  // The agent's event emitter is wrapped (BridgeEventEmitter → React store)
-  // and the renderer's sink is set so all `renderer.info/assistant/diff/…`
-  // calls accumulate in the same store. Nothing in agent/loop/tools sees
-  // any of this.
-  private inkInstance: { unmount: () => void; waitUntilExit: () => Promise<void> } | null = null;
-
+  // command handler from this class — Bridge just swaps the rendering
+  // surface. The agent's event emitter is wrapped (BridgeEventEmitter →
+  // React store) and the renderer's sink is set so all
+  // `renderer.info/assistant/diff/…` calls accumulate in the same store.
+  // Nothing in agent/loop/tools sees any of this.
   private async runBridge(): Promise<number> {
     const { BridgeStore } = await import('./ink/store.js');
     const { createRendererSink, createBridgeEventEmitter } = await import('./ink/bridge.js');
@@ -135,9 +113,6 @@ export class TerminalMode {
     // Poll cumulative usage every 1500ms to keep the rail's context meter
     // alive between events. Cheap — just reads in-memory counters. The
     // store dedupes identical values, so steady-state cycles cost nothing.
-    // Was 500ms originally — that produced ~8 React re-renders per second
-    // and a visible flicker in the Ink tree.
-    const { estimateCost } = await import('../util/pricing.js');
     const usageTimer = setInterval(() => {
       const u = this.agent.cumulativeUsage();
       const { cost } = estimateCost(u, this.ctx.model.provider, this.ctx.model.model);
@@ -217,148 +192,24 @@ export class TerminalMode {
     return 'v0.1.0-dev';
   }
 
-  // ── TUI mode ──────────────────────────────────────────────────────────
-  private runTui(): Promise<number> {
-    this.screen.clear(); // anchor the header (and banner) at row 1
-    this.renderer.printHeader(this.ctx);
-    this.screen.enter(renderBar(this.barState()).footerHeight);
-    // Park the output cursor at the bottom of the output region — output
-    // accumulates there and scrolls up.
-    this.screen.moveToOutputBottom();
-
-    this.bar = new BottomBar(this.screen);
-    this.screen.onResize = () => this.handleResize();
-    this.prompter.use(new TuiPrompter(this.editor, this.renderer, this.screen, this.emitter));
-    this.editor.start();
-    this.redrawBar();
-    this.startBannerRotation();
-
-    return new Promise<number>((resolve) => {
-      this.resolveExit = resolve;
-    });
-  }
-
-  // ── Launch-banner rotation ────────────────────────────────────────────
-  // The banner sits at fixed rows 1–6 (drawn by printHeader before the
-  // scroll region was installed). Until the first prompt, swap in a random
-  // gallery banner every 2s. Skipped on short terminals where the header
-  // may already have scrolled off.
-  private startBannerRotation(): void {
-    if (this.screen.outputRows < 14) return;
-    this.bannerTimer = setInterval(() => this.rotateBanner(), 2000);
-  }
-
-  private stopBannerRotation(): void {
-    if (this.bannerTimer) {
-      clearInterval(this.bannerTimer);
-      this.bannerTimer = null;
-    }
-  }
-
-  // ── Resize handling ───────────────────────────────────────────────────
-  // Terminal resize fires many events while the window is being dragged;
-  // debounce so we repaint once at the end. Two paths: idle → full repaint
-  // (header + scroll region + footer all re-rendered cleanly under the new
-  // geometry, on-screen visible area wiped — terminal scrollback preserved);
-  // busy mid-turn → just realign the footer (don't trash live output).
-  private handleResize(): void {
-    if (this.resizeDebounce) clearTimeout(this.resizeDebounce);
-    this.resizeDebounce = setTimeout(() => {
-      this.resizeDebounce = null;
-      this.performResize();
-    }, 150);
-  }
-
-  private performResize(): void {
-    if (!this.bar || this.exiting) return;
-    if (this.busy) {
-      this.redrawBar();
-      return;
-    }
-    const wasRotating = this.bannerTimer !== null;
-    this.stopBannerRotation();
-    this.screen.clearVisible();
-    this.renderer.printHeader(this.ctx);
-    this.screen.enter(renderBar(this.barState()).footerHeight);
-    this.screen.moveToOutputBottom();
-    this.redrawBar();
-    if (wasRotating) this.startBannerRotation();
-  }
-
-  private rotateBanner(): void {
-    if (!this.bar) return;
-    let pick = BANNER_GALLERY[Math.floor(Math.random() * BANNER_GALLERY.length)]!;
-    while (pick.id === this.lastBannerId && BANNER_GALLERY.length > 1) {
-      pick = BANNER_GALLERY[Math.floor(Math.random() * BANNER_GALLERY.length)]!;
-    }
-    this.lastBannerId = pick.id;
-    this.screen.hideCursor();
-    const block = bannerBlock(pick);
-    for (let i = 0; i < block.length; i++) {
-      this.screen.write(`\x1b[${i + 1};1H\x1b[2K` + block[i]!);
-    }
-    this.redrawBar(); // re-places the input cursor and shows it
-  }
-
-  private barState(): BarState {
-    const u = this.agent.cumulativeUsage();
-    const { cost } = estimateCost(u, this.ctx.model.provider, this.ctx.model.model);
-    return {
-      input: this.editor.text,
-      cursor: this.editor.cursorIndex,
-      columns: this.screen.columns,
-      mode: this.ctx.mode,
-      usage: {
-        inputTokens: u.inputTokens,
-        outputTokens: u.outputTokens,
-        cacheReadTokens: u.cacheReadTokens,
-        costText: cost > 0 ? formatUsd(cost) : '',
-      },
-      queued: this.queue.length,
-      busy: this.busy,
-      choice: this.editor.choiceState ?? undefined,
-    };
-  }
-
-  private redrawBar(): void {
-    if (!this.bar) return;
-    // Hide the cursor across the multi-row redraw so it does not flicker.
-    this.screen.hideCursor();
-    if (this.busy && !this.editor.answering && !this.editor.choosing) {
-      // Mid-turn keystroke — keep streaming output undisturbed.
-      this.screen.saveOutputCursor();
-      this.bar.draw(this.barState());
-      this.screen.restoreOutputCursor();
-    } else {
-      const layout = this.bar.draw(this.barState());
-      this.bar.placeCursor(layout);
-    }
-    this.screen.showCursor();
-  }
+  // ── Input plumbing (shared by Bridge callbacks) ───────────────────────
 
   private handleSubmit(text: string): void {
     if (this.busy) {
       if (this.queue.length < MAX_QUEUE) this.queue.push(text);
-      this.redrawBar();
       return;
     }
     void this.runTurn(text);
   }
 
   private async runTurn(text: string): Promise<void> {
-    this.stopBannerRotation(); // first prompt ends the banner flashing
     this.busy = true;
-    this.screen.moveToOutputBottom(); // cursor → output region
-    this.renderer.info(pc.cyan('=> ') + text); // echo the prompt into the log
-    this.renderer.rule(); // separate the prompt from the reply
-    this.redrawBar();
     try {
       await this.dispatch(parse(text));
     } catch (e) {
       this.renderer.error(e instanceof Error ? e.message : String(e));
     }
     this.busy = false;
-    this.redrawBar();
     const next = this.queue.shift();
     if (next && !this.exiting) void this.runTurn(next);
   }
@@ -369,29 +220,16 @@ export class TerminalMode {
       this.renderer.dim('(interrupted)');
       return;
     }
-    if (this.editor.text.length > 0) {
-      this.editor.clear();
-      this.redrawBar();
-      return;
-    }
     this.exit(0);
   }
 
   private handleCycle(): void {
     this.ctx.mode = nextMode(this.ctx.mode);
-    this.redrawBar();
   }
 
   private exit(code: number): void {
     if (this.exiting) return;
     this.exiting = true;
-    this.stopBannerRotation();
-    if (this.resizeDebounce) {
-      clearTimeout(this.resizeDebounce);
-      this.resizeDebounce = null;
-    }
-    this.editor.stop();
-    this.screen.exit();
     this.resolveExit?.(code);
   }
 
@@ -578,9 +416,6 @@ export class TerminalMode {
     }
   }
 
-  // Smart docs — run a reflection on the session and review proposals
-  // one at a time. Called explicitly via /reflect, and by exit() when
-  // the session has meaningful activity (unless disabled in config).
   // /exit handler — runs smart-docs reflection first (unless conditions
   // say no), then shuts the TUI down. Distinct from the Ctrl+C exit path
   // (handleInterrupt) which exits immediately without reflection — Ctrl+C
@@ -619,7 +454,7 @@ export class TerminalMode {
   }
 
   private async maybeReflectAtExit(): Promise<void> {
-    if (!this.screen.isTty) return; // headless: no interactive review
+    if (!process.stdout.isTTY) return; // headless: no interactive review
     if (!this.agent.hasReflectableActivity) return; // no capability (e.g. stub)
     if (!this.agent.hasReflectableActivity()) return; // nothing meaningful happened
     let cfg: { reflectAfterSession?: boolean } = {};

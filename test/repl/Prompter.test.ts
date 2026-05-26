@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { parseYes, AutoDenyPrompter, PrompterRef } from '../../src/repl/Prompter.js';
-import { ANSWER_CANCELLED } from '../../src/repl/LineEditor.js';
 
 describe('parseYes', () => {
   it('accepts y / yes / empty', () => {
@@ -10,11 +9,10 @@ describe('parseYes', () => {
     expect(parseYes('')).toBe(true);
   });
 
-  it('rejects other answers and a cancelled prompt', () => {
+  it('rejects other answers', () => {
     expect(parseYes('n')).toBe(false);
     expect(parseYes('no')).toBe(false);
     expect(parseYes('nope')).toBe(false);
-    expect(parseYes(ANSWER_CANCELLED)).toBe(false);
   });
 });
 
