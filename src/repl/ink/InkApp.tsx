@@ -11,6 +11,9 @@ import { useBridgeState, useTerminalSize } from './hooks.js';
 import type { BridgeStore } from './store.js';
 import type { SpinnerId } from './spinners.js';
 import { bannerBlock, BANNER_GALLERY } from '../Banner.js';
+import { ModelPicker } from './ModelPicker.js';
+import { SlashMenu } from './SlashMenu.js';
+import { filterCommands } from '../commands.js';
 
 // Bridge uses a single static welcome banner — gallery rotation was loud
 // and stacked with the rail wordmark. ID 3 is the clean a-u-t-o-c-o-d-e
@@ -36,6 +39,8 @@ export interface InkAppProps {
   onCycleMode: () => void;
   onInterrupt: () => void;
   onExit: () => void;
+  // Fired when the user picks a new model from the picker overlay.
+  onModelChange: (provider: string, model: string) => void;
 }
 
 export function InkApp(props: InkAppProps): React.JSX.Element {
@@ -70,6 +75,9 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
   const [cursor, setCursor] = useState<number>(0);
   const [history, setHistory] = useState<string[]>([]);
   const [histPos, setHistPos] = useState<number>(-1);
+  // Slash menu state — opens when input starts with `/` and the user
+  // hasn't already finished typing a complete command name + space.
+  const [slashIdx, setSlashIdx] = useState<number>(0);
 
   const submit = useCallback(() => {
     const text = input;
@@ -78,8 +86,22 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
     setHistPos(-1);
     setInput('');
     setCursor(0);
+    setSlashIdx(0);
     props.onSubmit(text);
   }, [input, props]);
+
+  // The menu opens when the user has typed `/` followed by a partial
+  // command name (no space yet — once they hit space we assume they're
+  // typing args and stop showing the popup). The query is everything
+  // after the leading `/`.
+  const slashQuery = input.startsWith('/') && !input.includes(' ') ? input.slice(1) : null;
+  const slashOpen = slashQuery !== null;
+  const slashMatches = slashOpen ? filterCommands(slashQuery!) : [];
+
+  // Keep selection in range as the filter narrows.
+  useEffect(() => {
+    if (slashIdx >= slashMatches.length) setSlashIdx(Math.max(0, slashMatches.length - 1));
+  }, [slashMatches.length, slashIdx]);
 
   useInput((ch, key) => {
     if (key.ctrl && ch === 'c') {
@@ -94,6 +116,43 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
     if (key.tab && key.shift) {
       props.onCycleMode();
       return;
+    }
+    // Slash menu intercepts arrows / tab / enter while open so they
+    // navigate the popup instead of doing their normal thing.
+    if (slashOpen && slashMatches.length > 0) {
+      if (key.upArrow) {
+        setSlashIdx((i) => Math.max(0, i - 1));
+        return;
+      }
+      if (key.downArrow) {
+        setSlashIdx((i) => Math.min(slashMatches.length - 1, i + 1));
+        return;
+      }
+      if (key.tab || key.return) {
+        // Complete to the highlighted command. For arg-taking commands
+        // we leave the menu open feel via trailing space (so the user
+        // can keep typing); for arg-less commands we submit straight away.
+        const picked = slashMatches[slashIdx]!;
+        const completed = '/' + picked.name + (picked.args === 'none' ? '' : ' ');
+        setInput(completed);
+        setCursor(completed.length);
+        setSlashIdx(0);
+        if (key.return && picked.args === 'none') {
+          // Submit immediately for no-arg commands.
+          props.onSubmit(completed);
+          setInput('');
+          setCursor(0);
+        }
+        return;
+      }
+      if (key.escape) {
+        // Close the menu without losing the typed text.
+        setInput('');
+        setCursor(0);
+        return;
+      }
+      // Fall through for character / backspace edits so the user can
+      // keep narrowing the filter.
     }
     if (key.return) {
       submit();
@@ -146,7 +205,7 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
       setInput((s) => s.slice(0, cursor) + ch + s.slice(cursor));
       setCursor((c) => c + ch.length);
     }
-  });
+  }, { isActive: state.overlay === null });
 
   // Expose useApp's exit so the host can call ink.unmount() when done.
   useEffect(() => {
@@ -158,6 +217,30 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
   // column. Below 60 cols, even the main padding is uncomfortable — keep
   // it readable.
   const showRail = columns >= 100;
+
+  // Live model display — falls back to the props (set once at mount) if
+  // the store hasn't received its first model update yet.
+  const liveProvider = state.model.provider || props.modelProvider;
+  const liveModel = state.model.name || props.modelName;
+
+  // Active overlay: store-driven overlays (e.g. model picker) take
+  // precedence; the slash menu is purely input-state driven.
+  let overlay: React.ReactNode = null;
+  if (state.overlay?.kind === 'model') {
+    overlay = (
+      <ModelPicker
+        currentProvider={liveProvider}
+        currentModel={liveModel}
+        onPick={(m) => {
+          props.onModelChange(m.provider, m.model);
+          props.store.setOverlay(null);
+        }}
+        onCancel={() => props.store.setOverlay(null)}
+      />
+    );
+  } else if (slashOpen) {
+    overlay = <SlashMenu commands={slashMatches} selectedIdx={slashIdx} />;
+  }
 
   return (
     <Box flexDirection="column" width={columns} height={rows}>
@@ -174,12 +257,12 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
             state={state}
             sessionId={props.sessionId}
             projectRoot={props.projectRoot}
-            modelProvider={props.modelProvider}
-            modelName={props.modelName}
+            modelProvider={liveProvider}
+            modelName={liveModel}
             version={props.version}
           />
         )}
-        <Main state={state} input={input} cursor={cursor} spinnerId={spinnerId} />
+        <Main state={state} input={input} cursor={cursor} spinnerId={spinnerId} overlay={overlay} />
       </Box>
     </Box>
   );

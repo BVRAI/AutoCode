@@ -81,6 +81,13 @@ export interface BridgeState {
   };
   queueDepth: number;
   items: TranscriptItem[];
+  // Ephemeral overlay UI: discriminated union for whichever picker is
+  // currently open, or null. The Bridge renders the right overlay
+  // between the transcript region and the footer.
+  overlay: { kind: 'model' } | null;
+  // Active model — surfaced for the rail's MODEL row and for the model
+  // picker to show "current" highlight. Updated by the bench / user.
+  model: { provider: string; name: string };
 }
 
 type Listener = (s: BridgeState) => void;
@@ -96,6 +103,8 @@ const INITIAL: BridgeState = {
   usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 },
   queueDepth: 0,
   items: [],
+  overlay: null,
+  model: { provider: '', name: '' },
 };
 
 let _id = 0;
@@ -211,6 +220,18 @@ export class BridgeStore {
   setQueueDepth(n: number): void {
     if (this.state.queueDepth === n) return;
     this.emit({ ...this.state, queueDepth: n });
+  }
+
+  setModel(provider: string, name: string): void {
+    if (this.state.model.provider === provider && this.state.model.name === name) return;
+    this.emit({ ...this.state, model: { provider, name } });
+  }
+
+  setOverlay(overlay: BridgeState['overlay']): void {
+    if (this.state.overlay === overlay) return;
+    // Both null short-circuits via reference equality. Otherwise compare kind.
+    if (this.state.overlay && overlay && this.state.overlay.kind === overlay.kind) return;
+    this.emit({ ...this.state, overlay });
   }
 
   setMcpStatus(s: McpStatusEntry[]): void {

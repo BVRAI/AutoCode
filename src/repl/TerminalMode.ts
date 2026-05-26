@@ -21,6 +21,7 @@ import { ConfigStore } from '../auth/ConfigStore.js';
 import { runHooksForEvent } from '../agent/HookRunner.js';
 import { getPlugins, pluginHooksForEvent } from '../agent/Plugins.js';
 import { type EventEmitter, NullEventEmitter } from './EventEmitter.js';
+import { COMMAND_DEFS } from './commands.js';
 
 const MAX_QUEUE = 5;
 
@@ -55,6 +56,9 @@ export class TerminalMode {
   private readonly queue: string[] = [];
   private resolveExit: ((code: number) => void) | null = null;
   private inkInstance: { unmount: () => void; waitUntilExit: () => Promise<void> } | null = null;
+  // Reference to the live BridgeStore (only set while Bridge is mounted)
+  // so slash-command handlers can open overlays like the model picker.
+  private bridgeStore: import('./ink/store.js').BridgeStore | null = null;
 
   constructor(
     private readonly ctx: SessionContext,
@@ -90,6 +94,8 @@ export class TerminalMode {
     const { AutoAcceptPrompter } = await import('./Prompter.js');
 
     const store = new BridgeStore();
+    this.bridgeStore = store;
+    store.setModel(this.ctx.model.provider, this.ctx.model.model);
     this.renderer.setSink(createRendererSink(store));
     // Interim: Bridge has no inline approval UI yet, so wire an auto-accept
     // prompter — the agent does not hang waiting for confirmations the
@@ -126,6 +132,7 @@ export class TerminalMode {
       store.setQueueDepth(this.queue.length);
       store.setBusy(this.busy);
       store.setMode(this.ctx.mode);
+      store.setModel(this.ctx.model.provider, this.ctx.model.model);
     }, 1500);
 
     const version = await this.readVersion();
@@ -144,6 +151,11 @@ export class TerminalMode {
       },
       onInterrupt: () => this.handleInterrupt(),
       onExit: () => this.exitInk(),
+      onModelChange: (provider, model) => {
+        this.ctx.model = { provider, model };
+        store.setModel(provider, model);
+        this.renderer.dim(`model → ${provider} / ${model}`);
+      },
     });
 
     return new Promise<number>((resolve) => {
@@ -162,6 +174,7 @@ export class TerminalMode {
           /* nothing */
         }
         this.inkInstance = null;
+        this.bridgeStore = null;
         resolve(code);
       };
     });
@@ -579,30 +592,12 @@ export class TerminalMode {
   }
 
   private printHelp(): void {
-    const lines = [
-      '/help                          Show this message',
-      '/status                        Show session info',
-      '/cwd [path]                    Show or change the project root',
-      '/model [provider name]         Show or switch provider/model',
-      '/init                          Scaffold an AUTOCODE.md for this project',
-      '/clear                         Reset conversation history',
-      '/compact                       Summarize older turns',
-      '/cost                          Show session cost estimate',
-      '/diff                          Show uncommitted git changes',
-      '/auth                          Configure an API key',
-      '/mode [planning|default|autocode]  Show or set the workflow mode (or shift+tab)',
-      '/undo [turn]                   Revert last tool step (or last whole turn with `/undo turn`)',
-      '/trash                         List recently deleted files (recoverable)',
-      '/restore <id>                  Restore a deleted file from the trash',
-      '/mcp                           List configured MCP servers and their tools',
-      '/plugins                       List installed autocode plugins (skills + hooks)',
-      '/update                        Check for and install the latest autocode (npm)',
-      '/reflect                       Propose AUTOCODE.md additions based on this session',
-      '/spinner [name]                Show or set the active spinner (braille, pulse, orbit, …)',
-      '/stop                          Cancel current task (or Ctrl+C)',
-      '/exit                          Close autocode',
-    ];
-    for (const l of lines) this.renderer.info(l);
+    // Source of truth = COMMAND_DEFS. Same list drives the Bridge slash
+    // menu, so help and discovery never drift apart.
+    const sigWidth = Math.max(...COMMAND_DEFS.map((c) => c.signature.length)) + 2;
+    for (const c of COMMAND_DEFS) {
+      this.renderer.info(`${c.signature.padEnd(sigWidth)}${c.summary}`);
+    }
   }
 
   private printStatus(): void {
@@ -628,6 +623,11 @@ export class TerminalMode {
   }
 
   private handleModel(args: string[]): void {
+    // Inside Bridge with no args → open the picker overlay.
+    if (args.length === 0 && this.bridgeStore !== null) {
+      this.bridgeStore.setOverlay({ kind: 'model' });
+      return;
+    }
     if (args.length === 0) {
       this.renderer.info(`${this.ctx.model.provider} / ${this.ctx.model.model}`);
       return;
@@ -637,6 +637,7 @@ export class TerminalMode {
       return;
     }
     this.ctx.model = { provider: args[0]!, model: args.slice(1).join(' ') };
+    this.bridgeStore?.setModel(this.ctx.model.provider, this.ctx.model.model);
     this.renderer.info(`model → ${this.ctx.model.provider} / ${this.ctx.model.model}`);
   }
 

@@ -18,7 +18,9 @@ export interface ModelRate {
 
 // Provider → model-prefix → rate. We use startsWith matching so suffixes
 // (e.g. "-20251001") still resolve. Newest matching entry wins.
-const RATES: Record<string, Record<string, ModelRate>> = {
+// Exported so `src/llm/models.ts` can build its KNOWN_MODELS catalog from
+// the same source, no duplication.
+export const RATES: Record<string, Record<string, ModelRate>> = {
   anthropic: {
     'claude-opus-4-7': { inputPerM: 15, outputPerM: 75, cacheReadPerM: 1.5, cacheWritePerM: 18.75 },
     'claude-sonnet-4-6': { inputPerM: 3, outputPerM: 15, cacheReadPerM: 0.3, cacheWritePerM: 3.75 },

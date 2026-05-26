@@ -15,9 +15,13 @@ export interface MainProps {
   input: string;
   cursor: number;
   spinnerId: SpinnerId;
+  // Optional slot rendered between the chat region and the footer —
+  // used by overlays (model picker, slash menu) so they appear as
+  // popups attached to the input area without disturbing the chat layout.
+  overlay?: React.ReactNode;
 }
 
-export function Main({ state, input, cursor, spinnerId }: MainProps): React.JSX.Element {
+export function Main({ state, input, cursor, spinnerId, overlay }: MainProps): React.JSX.Element {
   return (
     <Box flexDirection="column" flexGrow={1}>
       {/* Chat region: takes all remaining height between top of main and
@@ -34,6 +38,7 @@ export function Main({ state, input, cursor, spinnerId }: MainProps): React.JSX.
           spinnerId={spinnerId}
         />
       </Box>
+      {overlay}
       <Footer input={input} cursor={cursor} state={state} />
     </Box>
   );
@@ -158,7 +163,7 @@ function UserMsg({ text }: { text: string }): React.JSX.Element {
 
 function AcMsg({ text }: { text: string }): React.JSX.Element {
   return (
-    <Box>
+    <Box marginTop={1}>
       <Text color={BR.violet} bold>{'ac '}</Text>
       <Box flexGrow={1}>
         <Text color={BR.ink}>{text}</Text>
