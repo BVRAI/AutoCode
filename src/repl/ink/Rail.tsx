@@ -80,18 +80,17 @@ function Block({ label, children }: { label: string; children: React.ReactNode }
 }
 
 function ModeList({ active }: { active: BridgeState['mode'] }): React.JSX.Element {
-  // The three coding modes live in the Shift+Tab cycle. Admin is opt-in
-  // (reached via `/mode admin` or `--mode admin`) and only appears in
-  // the rail when it's actually the active mode — keeps the rail compact
-  // for the common coding case.
+  // All four modes are always visible so users discover admin exists.
+  // The Shift+Tab cycle stays at 3 coding modes (admin opt-in via
+  // `/mode admin` or `--mode admin`), but the rail still lists admin
+  // as a row — the rail's job is to show what's available, not what's
+  // in the cycle.
   const modes: Array<{ id: BridgeState['mode']; label: string; hint: string; color: string }> = [
     { id: 'planning', label: 'planning', hint: 'read-only', color: BR.yellow },
     { id: 'default', label: 'default', hint: 'review', color: BR.teal },
     { id: 'autocode', label: 'autocode', hint: 'auto', color: BR.add },
+    { id: 'admin', label: 'admin', hint: 'auto-ops', color: BR.violet },
   ];
-  if (active === 'admin') {
-    modes.push({ id: 'admin', label: 'admin', hint: 'auto-ops', color: BR.violet });
-  }
   return (
     <Box flexDirection="column" marginBottom={1}>
       <Text color={BR.inkFaint}>MODE</Text>
