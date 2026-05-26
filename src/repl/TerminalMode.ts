@@ -228,12 +228,14 @@ export class TerminalMode {
   }
 
   private handleInterrupt(): void {
+    // Pure interrupt: stops the agent if it's running, no-op otherwise.
+    // Exit is a separate path (Ctrl+C double-press in Bridge, /exit
+    // anywhere) so the user can't accidentally close autocode while
+    // an important long-running task is mid-flight.
     if (this.busy) {
       this.agent.stop();
       this.renderer.dim('(interrupted)');
-      return;
     }
-    this.exit(0);
   }
 
   private handleCycle(): void {

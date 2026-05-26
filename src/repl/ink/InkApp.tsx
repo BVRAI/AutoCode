@@ -78,6 +78,11 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
   // Slash menu state — opens when input starts with `/` and the user
   // hasn't already finished typing a complete command name + space.
   const [slashIdx, setSlashIdx] = useState<number>(0);
+  // Ctrl+C double-press protection. Pressing Ctrl+C on empty input
+  // arms a 3-second window; a second Ctrl+C within that window exits.
+  // Prevents accidental exits during long coding ops. Esc remains the
+  // interrupt-the-agent keystroke.
+  const [exitArmed, setExitArmed] = useState<boolean>(false);
 
   const submit = useCallback(() => {
     const text = input;
@@ -105,12 +110,21 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
 
   useInput((ch, key) => {
     if (key.ctrl && ch === 'c') {
+      // Typed text? Just clear it; never exit when there's input on the line.
       if (input.length > 0) {
         setInput('');
         setCursor(0);
+        setExitArmed(false);
         return;
       }
-      props.onInterrupt();
+      // Empty input — first Ctrl+C arms exit, second confirms.
+      if (exitArmed) {
+        props.onExit();
+        return;
+      }
+      setExitArmed(true);
+      // Disarm after 3s if no second press.
+      setTimeout(() => setExitArmed(false), 3000);
       return;
     }
     if (key.tab && key.shift) {
@@ -270,7 +284,7 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
             version={props.version}
           />
         )}
-        <Main state={state} input={input} cursor={cursor} spinnerId={spinnerId} overlay={overlay} />
+        <Main state={state} input={input} cursor={cursor} spinnerId={spinnerId} overlay={overlay} exitArmed={exitArmed} />
       </Box>
     </Box>
   );

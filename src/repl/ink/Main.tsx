@@ -19,9 +19,12 @@ export interface MainProps {
   // used by overlays (model picker, slash menu) so they appear as
   // popups attached to the input area without disturbing the chat layout.
   overlay?: React.ReactNode;
+  // True when Ctrl+C has been pressed once and a 3-second window is open
+  // for the second press to confirm exit. Surfaced in the footer hint.
+  exitArmed?: boolean;
 }
 
-export function Main({ state, input, cursor, spinnerId, overlay }: MainProps): React.JSX.Element {
+export function Main({ state, input, cursor, spinnerId, overlay, exitArmed }: MainProps): React.JSX.Element {
   return (
     <Box flexDirection="column" flexGrow={1}>
       {/* Chat region: takes all remaining height between top of main and
@@ -39,7 +42,7 @@ export function Main({ state, input, cursor, spinnerId, overlay }: MainProps): R
         />
       </Box>
       {overlay}
-      <Footer input={input} cursor={cursor} state={state} />
+      <Footer input={input} cursor={cursor} state={state} exitArmed={exitArmed === true} />
     </Box>
   );
 }
@@ -255,10 +258,11 @@ function ThinkLine({ text, startedAt, spinnerId }: { text: string; startedAt: nu
 
 // ── footer (hairline rule + prompt + status hint) ─────────────────────
 
-function Footer({ input, cursor, state }: { input: string; cursor: number; state: BridgeState }): React.JSX.Element {
+function Footer({ input, cursor, state, exitArmed }: { input: string; cursor: number; state: BridgeState; exitArmed: boolean }): React.JSX.Element {
   const modeColor =
     state.mode === 'planning' ? BR.yellow :
     state.mode === 'autocode' ? BR.add :
+    state.mode === 'admin' ? BR.violet :
     BR.teal;
 
   // Render the input with a cursor block at `cursor`. Cursor is shown as
@@ -279,8 +283,11 @@ function Footer({ input, cursor, state }: { input: string; cursor: number; state
         <Text color={modeColor}>▸ {state.mode}</Text>
         {state.queueDepth > 0 && <Text color={BR.inkDim}>  ·  {state.queueDepth} queued</Text>}
         {state.busy && <Text color={BR.amber}>  ·  busy</Text>}
+        {exitArmed && <Text color={BR.amber} bold>  ·  press ^C again to exit</Text>}
         <Box flexGrow={1}><Text> </Text></Box>
-        <Text color={BR.inkFaint}>enter send · esc {state.busy ? 'interrupt' : 'clear'} · ↑ history · ^c stop</Text>
+        <Text color={BR.inkFaint}>
+          enter send · esc {state.busy ? 'interrupt' : 'clear'} · ↑ history · ^c {exitArmed ? 'EXIT' : 'exit (2×)'}
+        </Text>
       </Box>
     </Box>
   );
