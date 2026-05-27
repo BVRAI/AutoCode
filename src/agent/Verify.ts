@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { platform } from 'node:os';
 import { join } from 'node:path';
 
 import { detectProjectContext } from './ProjectContext.js';
@@ -68,6 +69,8 @@ function isUnderRelativeDir(filePath: string, relativeDir: string): boolean {
 function inferVerifyCommand(root: string): string | null {
 
   const { types } = detectProjectContext(root);
+
+  // Node/TypeScript — most common, kept first.
   if (types.includes('node') || types.includes('typescript')) {
     const scripts = readPackageScripts(root);
     if (scripts.test && !isPlaceholderScript(scripts.test)) return 'npm test';
@@ -75,10 +78,102 @@ function inferVerifyCommand(root: string): string | null {
     if (existsSync(join(root, 'tsconfig.json'))) return 'npx tsc --noEmit';
     return null;
   }
-  if (types.includes('rust')) return 'cargo check';
-  if (types.includes('go')) return 'go build ./...';
-  // python and others: too unreliable to guess — require explicit config.
+
+  // Rust — upgrade to `cargo test` when a tests/ directory exists (integration
+  // tests are the conventional Rust pattern; running them catches logic bugs
+  // the bare type-check misses). Without tests/, fall back to compile-only.
+  if (types.includes('rust')) {
+    if (isDir(join(root, 'tests'))) return 'cargo test';
+    return 'cargo check';
+  }
+
+  // Go — upgrade to `go test ./...` when any *_test.go is present (Go's
+  // convention puts tests alongside source files). Without test files, fall
+  // back to compile-only.
+  if (types.includes('go')) {
+    if (hasFileAtRoot(root, (n) => /_test\.go$/i.test(n))) return 'go test ./...';
+    return 'go build ./...';
+  }
+
+  // Python — only fire when there's clear evidence of a pytest setup.
+  // Bare pyproject.toml/requirements.txt isn't enough — many Python projects
+  // have those without runnable tests, and a spurious `pytest` invocation
+  // that exits non-zero would derail the agent.
+  if (types.includes('python') && hasPytestSetup(root)) {
+    return 'pytest';
+  }
+
+  // JVM — Gradle wrapper preferred (most reproducible), then Maven.
+  if (types.includes('jvm')) {
+    const isWin = platform() === 'win32';
+    if (existsSync(join(root, isWin ? 'gradlew.bat' : 'gradlew'))) {
+      return isWin ? 'gradlew.bat test' : './gradlew test';
+    }
+    // POSIX gradlew may also be present on a Windows checkout — fall back to it.
+    if (existsSync(join(root, 'gradlew'))) {
+      return './gradlew test';
+    }
+    if (existsSync(join(root, 'pom.xml'))) return 'mvn -q test';
+    return null;
+  }
+
+  // C++ — detected separately (not in ProjectContext markers) via CMakeLists.txt.
+  // Build-only verification: `cmake --build build` after a one-shot configure.
+  // Test execution is too project-specific (CTest, raw ninja targets, custom
+  // scripts) to infer safely — leave that to an AUTOCODE.md `verify:` directive.
+  if (existsSync(join(root, 'CMakeLists.txt'))) {
+    return 'cmake -B build && cmake --build build';
+  }
+
+  // Unknown / no usable signal — require explicit config.
   return null;
+}
+
+function isDir(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+// Single readdir of the project root, predicate-matched. Used for quick
+// "does this project have *_test.go / test_*.py / etc." checks without
+// triggering a full recursive scan. Aider/Exercism conventions put test
+// files at the root or under tests/, both of which a root scan + one
+// targeted subdir check (when needed) cover cheaply.
+function hasFileAtRoot(root: string, predicate: (name: string) => boolean): boolean {
+  try {
+    for (const name of readdirSync(root)) {
+      if (predicate(name)) return true;
+    }
+  } catch {
+    /* unreadable root — caller treats as no match */
+  }
+  return false;
+}
+
+// Python pytest detection: any of the standard config files, a
+// `[tool.pytest` table in pyproject.toml, a conftest.py at root, OR a test
+// file matching pytest's discovery patterns (test_*.py / *_test.py) at root
+// or under a tests/ subdir.
+function hasPytestSetup(root: string): boolean {
+  if (existsSync(join(root, 'pytest.ini'))) return true;
+  if (existsSync(join(root, 'pytest.cfg'))) return true;
+  if (existsSync(join(root, 'conftest.py'))) return true;
+  try {
+    const pyproject = readFileSync(join(root, 'pyproject.toml'), 'utf8');
+    if (/\[tool\.pytest/.test(pyproject)) return true;
+  } catch {
+    /* no pyproject.toml or unreadable — fall through */
+  }
+  const testNameRe = /^(test_.+\.py|.+_test\.py|conftest\.py)$/i;
+  if (hasFileAtRoot(root, (n) => testNameRe.test(n))) return true;
+  for (const sub of ['tests', 'test']) {
+    const dir = join(root, sub);
+    if (isDir(dir) && hasFileAtRoot(dir, (n) => testNameRe.test(n))) return true;
+  }
+  return false;
 }
 
 function readPackageScripts(root: string): Record<string, string> {

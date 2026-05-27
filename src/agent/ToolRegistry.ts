@@ -32,6 +32,22 @@ function webToolsEnabled(): boolean {
   }
 }
 
+// AUTOCODE_BENCH_MODE=1 trims tools the agent literally cannot use in a
+// headless automated run (browser windows + screenshot capture — both
+// GUI-bound, both useless when nobody is at the keyboard to see the
+// output). Set by autocode-bench's runner-common.ts; never set by V6 or
+// by real interactive users. Distinct from `webTools.enabled` — that one
+// gates the network-fetching tools for users in regulated contexts who
+// still want browser convenience. Bench mode strips both classes.
+function benchMode(): boolean {
+  return process.env.AUTOCODE_BENCH_MODE === '1';
+}
+
+// Convenience: which "GUI-bound" tools to skip in bench mode.
+function guiToolsEnabled(): boolean {
+  return !benchMode();
+}
+
 export class ToolRegistry {
   private readonly tools = new Map<string, Tool>();
 
@@ -46,12 +62,18 @@ export class ToolRegistry {
     this.register(new GlobTool());
     this.register(new GrepTool());
     this.register(new TodoWriteTool());
-    if (webToolsEnabled()) {
+    if (webToolsEnabled() && !benchMode()) {
+      // Network-fetching tools — gated by the user-facing config flag AND
+      // by bench mode (a bench run is headless + can't act on web data).
       this.register(new WebFetchTool());
       this.register(new WebSearchTool());
     }
-    this.register(new OpenInBrowserTool());
-    this.register(new CaptureScreenshotTool());
+    if (guiToolsEnabled()) {
+      // Browser/screenshot — keep for interactive users, drop in bench mode
+      // (a headless process can't meaningfully use either).
+      this.register(new OpenInBrowserTool());
+      this.register(new CaptureScreenshotTool());
+    }
     this.register(new AskUserTool());
     this.register(new TaskTool());
     this.register(new UseSkillTool());
@@ -72,7 +94,7 @@ export class ToolRegistry {
         r.register(new GlobTool());
         r.register(new GrepTool());
         r.register(new FindSymbolTool());
-        if (webToolsEnabled()) {
+        if (webToolsEnabled() && !benchMode()) {
           r.register(new WebFetchTool());
           r.register(new WebSearchTool());
         }
