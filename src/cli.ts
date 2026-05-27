@@ -20,6 +20,10 @@ import { AuthResolver } from './auth/AuthResolver.js';
 import { ConfigStore } from './auth/ConfigStore.js';
 import { dataDir, projectRootDefault, sessionsDir } from './util/paths.js';
 import { loadDotEnv } from './util/dotenv.js';
+import { loadCatalogForStartup, refreshCatalogInBackground } from './llm/CatalogClient.js';
+import { setProxyCatalog, findModel, getKnownModels } from './llm/models.js';
+import { setProxyRates } from './util/pricing.js';
+import { shouldRunFirstRunWizard, BYOK_PROVIDERS, BVRAI_SIGNUP_URL } from './auth/firstRun.js';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -75,6 +79,30 @@ program
         error: (t) => process.stderr.write(t + '\n'),
       });
       process.exit(code);
+    }
+    // When running with an Automax token, pull the proxy's /v1/catalog so
+    // the model picker and cost math reflect what the proxy actually serves
+    // (instead of autocode's bundled list, which is hand-edited and drifts).
+    // Soft-fail: any error keeps the bundled fallback in play so startup is
+    // never blocked by a proxy hiccup.
+    let catalogWarning: string | null = null;
+    const proxyToken = process.env.AUTOMAX_PROXY_TOKEN;
+    if (proxyToken && proxyToken.length > 0) {
+      const baseUrl = process.env.AUTOMAX_PROXY_URL ?? 'https://automax-proxy.fly.dev';
+      const fetchOpts = { baseUrl, token: proxyToken };
+      const result = await loadCatalogForStartup(fetchOpts);
+      if (result.catalog) {
+        setProxyCatalog(result.catalog);
+        setProxyRates(result.catalog);
+        if (result.refreshInBackground) {
+          // Cache was fresh-ish; refresh asynchronously so the next launch is
+          // current. Errors are swallowed by refreshCatalogInBackground.
+          void refreshCatalogInBackground(fetchOpts);
+        }
+      } else {
+        catalogWarning =
+          '(proxy catalog unavailable — using bundled model list; check AUTOMAX_PROXY_URL)';
+      }
     }
     // Resolve a resume target before building the session context. A session
     // is resumable only if it has both state.json and conversation.json.
@@ -180,12 +208,59 @@ program
         renderer.setUpdateBanner(updateInfo.banner);
       }
     }
+    // First-run wizard. Fires when a fresh interactive launch has no creds
+    // anywhere (env, config, or V6's AUTOMAX_PROXY_TOKEN) and no prior
+    // firstRunCompletedAt marker. Replaces today's "stub mode" warning with
+    // a two-step choice: sign up at bvrai.com, BYOK, or skip. Skipped for
+    // headless, --automax bridge mode, non-TTY, and resumed sessions —
+    // none of those should trip an interactive onboarding overlay.
+    const wizardEligible = !headless && !opts.automax && process.stdout.isTTY && !resumedMeta;
+    if (wizardEligible) {
+      const cfgNow = new ConfigStore().load();
+      if (shouldRunFirstRunWizard({ config: cfgNow, interactive: true })) {
+        const { runFirstRunWizard } = await import('./repl/ink/FirstRunWizard.js');
+        const outcome = await runFirstRunWizard();
+        const store = new ConfigStore();
+        const cfg = store.load();
+        cfg.firstRunCompletedAt = new Date().toISOString();
+        if (outcome.kind === 'byok') {
+          const provOpt = BYOK_PROVIDERS.find((p) => p.id === outcome.provider);
+          if (provOpt) {
+            cfg.apiKeys = cfg.apiKeys ?? {};
+            cfg.apiKeys[provOpt.id] = outcome.apiKey;
+            cfg.defaultProvider = provOpt.id;
+            // Switch this session's model context to the chosen provider so
+            // the user doesn't see a "no creds for xai" warning right after
+            // configuring Anthropic. defaultModelFor falls back to the
+            // hardcoded per-provider pick when no catalog is loaded (which
+            // is exactly the case here — BYOK paths never trigger the
+            // proxy catalog fetch).
+            ctx.model = { provider: provOpt.id, model: opts.model ?? defaultModelFor(provOpt.id) };
+          }
+        }
+        store.save(cfg);
+        if (outcome.kind === 'signup-opened') {
+          // Print the next-step hint to the main terminal scrollback so it
+          // survives Bridge's alt-screen takeover. The user has signed up
+          // (or is about to) but has no working LLM in the CLI yet.
+          process.stdout.write(
+            pc.cyan(
+              `\nThanks for signing up. ${BVRAI_SIGNUP_URL} is open in your browser.\n` +
+              `Continuing in stub mode — use /auth anytime to add a BYOK key.\n\n`,
+            ),
+          );
+        }
+      }
+    }
     const store = new TranscriptStore(ctx);
     const checkpoints = new CheckpointStore(ctx.sessionDir);
     checkpoints.sweep();
     store.appendTranscript({ role: 'system', text: `session started for ${root}` });
     if (dotenvResult.loaded > 0) {
       renderer.dim(`(loaded ${dotenvResult.loaded} var${dotenvResult.loaded === 1 ? '' : 's'} from .env)`);
+    }
+    if (catalogWarning) {
+      renderer.warn(catalogWarning);
     }
     if (resumeRequested && !resumedMeta) {
       renderer.warn(`(no resumable session for ${resumeRequested} — starting fresh)`);
@@ -251,6 +326,19 @@ program.parseAsync(process.argv).catch((err) => {
 });
 
 function defaultModelFor(provider: string): string {
+  // Prefer the catalog when available so V6 users get a default that
+  // actually exists at the proxy (the hardcoded list below drifts when the
+  // proxy adds new models or retires old ones). When picking from the
+  // catalog, honor the hardcoded preference first if it's present; else
+  // fall back to the first listed model for that provider.
+  const hardcoded = hardcodedDefaultModelFor(provider);
+  if (findModel(provider, hardcoded)) return hardcoded;
+  const catalogModel = firstCatalogModelFor(provider);
+  if (catalogModel) return catalogModel;
+  return hardcoded;
+}
+
+function hardcodedDefaultModelFor(provider: string): string {
   switch (provider) {
     case 'anthropic':
       return 'claude-opus-4-7';
@@ -265,6 +353,14 @@ function defaultModelFor(provider: string): string {
     default:
       return 'claude-opus-4-7';
   }
+}
+
+// First catalog entry for the given provider, or null.
+function firstCatalogModelFor(provider: string): string | null {
+  for (const m of getKnownModels()) {
+    if (m.provider === provider) return m.model;
+  }
+  return null;
 }
 
 function envKeyFor(provider: string): string {

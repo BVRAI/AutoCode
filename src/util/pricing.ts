@@ -51,7 +51,68 @@ export const RATES: Record<string, Record<string, ModelRate>> = {
   },
 };
 
+// Overlay populated at startup from the proxy's /v1/catalog when running
+// inside Automax. Replaces the bundled RATES for cost math whenever a
+// provider+model is present here; falls through to RATES otherwise so the
+// open-source standalone path keeps working unchanged.
+let proxyRateOverlay: Record<string, Record<string, ModelRate>> | null = null;
+
+export interface ProxyRatesCatalog {
+  providers: Record<
+    string,
+    {
+      models: Array<{
+        id: string;
+        input_price_per_million: number;
+        output_price_per_million: number;
+        supports_caching?: boolean;
+        cache_read_multiplier?: number;
+        cache_write_multiplier?: number;
+      }>;
+    }
+  >;
+}
+
+export function setProxyRates(catalog: ProxyRatesCatalog | null): void {
+  if (catalog === null) {
+    proxyRateOverlay = null;
+    return;
+  }
+  const overlay: Record<string, Record<string, ModelRate>> = {};
+  for (const [provider, providerCatalog] of Object.entries(catalog.providers)) {
+    overlay[provider] = {};
+    for (const entry of providerCatalog.models) {
+      const inputPerM = entry.input_price_per_million;
+      const outputPerM = entry.output_price_per_million;
+      const rate: ModelRate = { inputPerM, outputPerM };
+      // Cache pricing in the catalog is expressed as a multiplier on
+      // inputPerMtok. estimateCost wants absolute per-M rates, so we
+      // pre-multiply here.
+      if (entry.supports_caching && typeof entry.cache_read_multiplier === 'number') {
+        rate.cacheReadPerM = inputPerM * entry.cache_read_multiplier;
+      }
+      if (entry.supports_caching && typeof entry.cache_write_multiplier === 'number') {
+        rate.cacheWritePerM = inputPerM * entry.cache_write_multiplier;
+      }
+      overlay[provider]![entry.id] = rate;
+    }
+  }
+  proxyRateOverlay = overlay;
+}
+
 export function rateFor(provider: string, model: string): ModelRate | null {
+  // Proxy overlay wins. Use the same longest-prefix-match rule as the
+  // bundled table so date-suffixed ids still resolve.
+  const overlayRates = proxyRateOverlay?.[provider];
+  if (overlayRates) {
+    let best: { key: string; rate: ModelRate } | null = null;
+    for (const [key, rate] of Object.entries(overlayRates)) {
+      if (model.startsWith(key) && (!best || key.length > best.key.length)) {
+        best = { key, rate };
+      }
+    }
+    if (best) return best.rate;
+  }
   const providerRates = RATES[provider];
   if (!providerRates) return null;
   // Longest matching prefix wins so e.g. "claude-opus-4-7-20251001" picks the

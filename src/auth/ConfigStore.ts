@@ -71,6 +71,11 @@ export interface AutocodeConfig {
     extraBlockedHosts?: string[];
     extraAllowedHosts?: string[];
   };
+  // ISO timestamp recorded when the first-run wizard finished — either by
+  // saving credentials, opening the bvrai.com signup page, or by the user
+  // explicitly choosing Skip. Set once; suppresses the wizard on subsequent
+  // launches so it never re-prompts.
+  firstRunCompletedAt?: string;
 }
 
 export interface HookSpec {

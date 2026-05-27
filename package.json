@@ -1,6 +1,6 @@
 {
   "name": "@automax/autocode",
-  "version": "0.1.0-dev",
+  "version": "0.2.0",
   "description": "Terminal-resident agentic coding CLI. Open source. Bundled by Automax.",
   "license": "MIT",
   "type": "module",

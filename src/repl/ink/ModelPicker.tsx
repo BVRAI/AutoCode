@@ -1,12 +1,13 @@
 // Interactive model picker overlay — appears between the transcript region
 // and the footer when the user runs `/model` with no args. Arrow keys
-// navigate; Enter selects; Esc cancels. Reads from KNOWN_MODELS so adding
-// a new model is a one-file edit in src/llm/models.ts.
+// navigate; Enter selects; Esc cancels. Reads from getKnownModels() so the
+// list reflects whichever catalog is active — bundled (standalone) or
+// proxy-served (when running inside Automax).
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { BR } from './theme.js';
-import { KNOWN_MODELS, type ModelInfo } from '../../llm/models.js';
+import { getKnownModels, modelCatalogSource, type ModelInfo } from '../../llm/models.js';
 
 export interface ModelPickerProps {
   // Pre-select the row matching this (used to highlight the active model).
@@ -20,10 +21,12 @@ export function ModelPicker({ currentProvider, currentModel, onPick, onCancel }:
   // Build a flat ordered list with provider headers as virtual rows that
   // can't be selected; only model rows are selectable.
   type Row = { kind: 'header'; provider: string } | { kind: 'model'; model: ModelInfo };
+  const models = useMemo(() => getKnownModels(), []);
+  const source = useMemo(() => modelCatalogSource(), []);
   const rows: Row[] = useMemo(() => {
     const out: Row[] = [];
     let lastProvider = '';
-    for (const m of KNOWN_MODELS) {
+    for (const m of models) {
       if (m.provider !== lastProvider) {
         out.push({ kind: 'header', provider: m.provider });
         lastProvider = m.provider;
@@ -31,7 +34,7 @@ export function ModelPicker({ currentProvider, currentModel, onPick, onCancel }:
       out.push({ kind: 'model', model: m });
     }
     return out;
-  }, []);
+  }, [models]);
 
   // Pre-select the active model if it matches one in the catalog.
   const initialIdx = useMemo(() => {
@@ -96,7 +99,11 @@ export function ModelPicker({ currentProvider, currentModel, onPick, onCancel }:
     >
       <Box>
         <Text color={BR.teal} bold>Select a model</Text>
-        <Text color={BR.inkFaint}>  ↑↓ pick · enter confirm · esc cancel</Text>
+        <Text color={BR.inkFaint}>
+          {source === 'proxy'
+            ? `  from Automax catalog · ${models.length} models · ↑↓ pick · enter confirm · esc cancel`
+            : `  ↑↓ pick · enter confirm · esc cancel`}
+        </Text>
       </Box>
       <Box flexDirection="column" marginTop={1}>
         {rows.map((r, i) => {
