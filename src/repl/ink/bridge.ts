@@ -10,14 +10,37 @@ import { renderUnifiedDiff } from '../../util/diff.js';
 
 // Routes ConsoleRenderer writes into the store.
 export function createRendererSink(store: BridgeStore): RendererSink {
+  // The agent loop narrates tool execution as dim/info text: a shell-command
+  // preview block, a "→ tool summary (Nms)" result line, hook chatter. The
+  // structured tool cards (from tool_call/completed events) already represent
+  // each tool, so surfacing this text too would double everything. Drop it —
+  // purely a rendering choice; the agent still emits it (and --automax sees it).
+  let inPreview = false;
+  const isNoise = (text: string): boolean => {
+    const t = text.trim();
+    if (t === '--- preview ---') {
+      inPreview = true;
+      return true;
+    }
+    if (/^-{3,}$/.test(t)) {
+      inPreview = false;
+      return true; // closing rule of the preview block
+    }
+    if (inPreview) return true; // the echoed command between the markers
+    if (t.startsWith('→ ')) return true; // tool result summary (the card shows it)
+    if (t.startsWith('hook[')) return true; // pre-hook chatter
+    return false;
+  };
   return {
     info(text) {
+      if (isNoise(text)) return;
       store.appendText('info', text);
     },
     assistant(text) {
       store.appendText('assistant', text);
     },
     dim(text) {
+      if (isNoise(text)) return;
       store.appendText('info', text);
     },
     warn(text) {
@@ -27,6 +50,7 @@ export function createRendererSink(store: BridgeStore): RendererSink {
       store.appendText('error', text);
     },
     status(text) {
+      if (isNoise(text)) return;
       store.appendText('info', text);
     },
     rule() {
@@ -65,6 +89,13 @@ export function createBridgeEventEmitter(
             break;
           }
           case 'tool_call': {
+            // Finish the previously-open tool first: the agent loop emits only
+            // one 'completed' per turn, so without this every tool except the
+            // last would stay stuck in the running state.
+            if (openToolId) {
+              store.finishTool(openToolId, 'ok');
+              openToolId = null;
+            }
             const name = String(data['name'] ?? 'tool');
             const args = (data['args'] as Record<string, unknown>) ?? {};
             const target = pickTarget(args);
@@ -127,7 +158,7 @@ export function createBridgeEventEmitter(
 }
 
 function pickTarget(args: Record<string, unknown>): string | undefined {
-  for (const k of ['path', 'file', 'target', 'filepath', 'file_path']) {
+  for (const k of ['path', 'file', 'target', 'filepath', 'file_path', 'command', 'pattern', 'query', 'url', 'name']) {
     const v = args[k];
     if (typeof v === 'string') return v;
   }

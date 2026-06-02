@@ -131,7 +131,7 @@ const INITIAL: BridgeState = {
   overlay: null,
   model: { provider: '', name: '' },
   project: { branch: null, dirty: 0 },
-  plan: { items: [], collapsed: false },
+  plan: { items: [], collapsed: true },
 };
 
 let _id = 0;

@@ -395,9 +395,11 @@ export async function mountInkApp(props: InkAppProps): Promise<{ unmount: () => 
     }
   };
   const inst = render(<InkApp {...props} />, {
-    // Wrap stdout so each frame is written inside a synchronized-output
-    // bracket — kills the per-keystroke full-screen-repaint flicker.
-    stdout: withSynchronizedOutput(process.stdout),
+    // Synchronized output only helps (and only belongs in) the full-screen
+    // cockpit, where the whole frame repaints. In inline mode it interferes
+    // with Ink's <Static> scrollback (stranding ghost frames), so use the
+    // raw stream there.
+    stdout: altScreen ? withSynchronizedOutput(process.stdout) : process.stdout,
     stdin: process.stdin,
     exitOnCtrlC: false,
     patchConsole: false,
