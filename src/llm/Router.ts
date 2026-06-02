@@ -3,6 +3,7 @@ import { AnthropicProvider } from './providers/AnthropicProvider.js';
 import { XaiProvider } from './providers/XaiProvider.js';
 import { OpenAIProvider } from './providers/OpenAIProvider.js';
 import { OpenRouterProvider } from './providers/OpenRouterProvider.js';
+import { GeminiProvider } from './providers/GeminiProvider.js';
 import { AuthResolver } from '../auth/AuthResolver.js';
 
 export type ProviderName = 'anthropic' | 'openai' | 'google' | 'xai' | 'openrouter';
@@ -59,7 +60,7 @@ function construct(name: ProviderName, auth: ReturnType<AuthResolver['resolve']>
     case 'openrouter':
       return new OpenRouterProvider(auth);
     case 'google':
-      throw new Error('google (gemini) provider not yet implemented — deferred to a later phase');
+      return new GeminiProvider(auth);
     default:
       throw new Error(`provider not yet implemented: ${name}`);
   }

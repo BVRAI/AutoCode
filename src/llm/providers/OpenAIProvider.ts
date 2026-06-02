@@ -1,5 +1,5 @@
 import type { CompletionRequest, CompletionResponse, LlmProvider, StreamEvent } from '../types.js';
-import type { AuthMode } from '../../auth/AuthResolver.js';
+import { isProxyAuth, type AuthMode } from '../../auth/AuthResolver.js';
 import { buildBody, parseResponse, streamOpenAiCompat, type OpenAiChatResponse } from './openaiCompat.js';
 
 const DEFAULT_BASE = 'https://api.openai.com/v1';
@@ -13,13 +13,13 @@ export class OpenAIProvider implements LlmProvider {
     if (this.auth.kind === 'missing') {
       throw new Error('openai credentials missing — set OPENAI_API_KEY or AUTOMAX_PROXY_TOKEN');
     }
-    const base = this.auth.kind === 'automax' ? this.auth.baseOverride : DEFAULT_BASE;
+    const base = isProxyAuth(this.auth) ? this.auth.baseOverride : DEFAULT_BASE;
     const url = `${base}/chat/completions`;
 
     const headers: Record<string, string> = { 'content-type': 'application/json' };
     if (this.auth.kind === 'byok') {
       headers['authorization'] = `Bearer ${this.auth.apiKey}`;
-    } else if (this.auth.kind === 'automax') {
+    } else if (isProxyAuth(this.auth)) {
       headers['authorization'] = `Bearer ${this.auth.token}`;
     }
 
@@ -41,14 +41,14 @@ export class OpenAIProvider implements LlmProvider {
     if (this.auth.kind === 'missing') {
       throw new Error('openai credentials missing — set OPENAI_API_KEY or AUTOMAX_PROXY_TOKEN');
     }
-    const base = this.auth.kind === 'automax' ? this.auth.baseOverride : DEFAULT_BASE;
+    const base = isProxyAuth(this.auth) ? this.auth.baseOverride : DEFAULT_BASE;
     const url = `${base}/chat/completions`;
     const headers: Record<string, string> = {
       'content-type': 'application/json',
       accept: 'text/event-stream',
     };
     if (this.auth.kind === 'byok') headers['authorization'] = `Bearer ${this.auth.apiKey}`;
-    else if (this.auth.kind === 'automax') headers['authorization'] = `Bearer ${this.auth.token}`;
+    else if (isProxyAuth(this.auth)) headers['authorization'] = `Bearer ${this.auth.token}`;
     const res = await fetch(url, {
       method: 'POST',
       headers,

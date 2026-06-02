@@ -14,6 +14,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { parseFrontmatter } from '../util/frontmatter.js';
 import { _resetPluginCacheForTests, discoverPlugins } from './Plugins.js';
+import { BUILTIN_SKILLS } from './builtinSkills.js';
 
 export interface Skill {
   name: string;
@@ -21,8 +22,10 @@ export interface Skill {
   /** Optional informational glob — the agent decides activation by description. */
   match?: string;
   body: string;
-  /** "project" or "user" — for debugging / future precedence reasoning. */
-  source: 'project' | 'user';
+  /** "builtin" (compiled in), "user", or "project" — for debugging / precedence
+   *  reasoning. Built-ins are lowest precedence; a user/project skill of the
+   *  same name overrides them. */
+  source: 'project' | 'user' | 'builtin';
 }
 
 export interface SkillMeta {
@@ -44,13 +47,24 @@ const cache = new Map<string, Skill[]>();
 export function getSkills(projectRoot: string): Skill[] {
   const cached = cache.get(projectRoot);
   if (cached !== undefined) return cached;
-  const skills = discoverSkills(projectRoot, homedir());
+  const skills = layerBuiltins(discoverSkills(projectRoot, homedir()));
   cache.set(projectRoot, skills);
   return skills;
 }
 
-/** Pure: same as getSkills but without the memo, for tests + explicit
- *  re-discovery (not currently exposed but harmless to keep public). */
+/** Layer the compiled-in built-in skills UNDER the discovered (disk/plugin)
+ *  skills: a user- or project-defined skill of the same name overrides the
+ *  built-in. Kept out of discoverSkills so the disk/plugin cascade stays pure
+ *  and independently testable. */
+function layerBuiltins(discovered: Skill[]): Skill[] {
+  const byName = new Map<string, Skill>();
+  for (const s of BUILTIN_SKILLS) byName.set(s.name, s);
+  for (const s of discovered) byName.set(s.name, s);
+  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Pure: the disk + plugin skill cascade without the memo or built-ins
+ *  (those are layered on in getSkills). For tests + explicit re-discovery. */
 export function discoverSkills(projectRoot: string, userHome: string): Skill[] {
   const byName = new Map<string, Skill>();
 

@@ -12,6 +12,7 @@ import type { BridgeStore } from './store.js';
 import type { SpinnerId } from './spinners.js';
 import { bannerBlock, BANNER_GALLERY } from '../Banner.js';
 import { ModelPicker } from './ModelPicker.js';
+import { ProviderPicker } from './ProviderPicker.js';
 import { SlashMenu } from './SlashMenu.js';
 import { filterCommands } from '../commands.js';
 
@@ -151,8 +152,15 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
         setInput(completed);
         setCursor(completed.length);
         setSlashIdx(0);
-        if (key.return && picked.args === 'none') {
-          // Submit immediately for no-arg commands.
+        // Submit immediately on Enter for commands whose no-args invocation
+        // is meaningful — both `'none'` and `'optional'`. For `'optional'`
+        // commands (/cwd, /model, /mode, /trash, /undo) the no-args form is
+        // the most common invocation (e.g. /model opens the picker), so the
+        // default Enter behaviour should fire it. Users who want to type
+        // args still use Tab to complete-and-keep-typing. `'required'`
+        // commands stay completion-only here because submitting them empty
+        // would just error.
+        if (key.return && (picked.args === 'none' || picked.args === 'optional')) {
           props.onSubmit(completed);
           setInput('');
           setCursor(0);
@@ -247,16 +255,32 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
 
   // Active overlay: store-driven overlays (e.g. model picker) take
   // precedence; the slash menu is purely input-state driven.
+  //
+  // The model picker is two-stage. 'model-provider' lists providers; picking
+  // one transitions to 'model-models' which lists that provider's rows. Esc
+  // from 'model-models' goes BACK to 'model-provider' (not all the way out)
+  // so the user can browse providers freely; Esc from 'model-provider'
+  // closes the overlay.
   let overlay: React.ReactNode = null;
-  if (state.overlay?.kind === 'model') {
+  if (state.overlay?.kind === 'model-provider') {
+    overlay = (
+      <ProviderPicker
+        currentProvider={liveProvider}
+        onPick={(provider) => props.store.setOverlay({ kind: 'model-models', provider })}
+        onCancel={() => props.store.setOverlay(null)}
+      />
+    );
+  } else if (state.overlay?.kind === 'model-models') {
     overlay = (
       <ModelPicker
+        provider={state.overlay.provider}
         currentProvider={liveProvider}
         currentModel={liveModel}
         onPick={(m) => {
           props.onModelChange(m.provider, m.model);
           props.store.setOverlay(null);
         }}
+        onBack={() => props.store.setOverlay({ kind: 'model-provider' })}
         onCancel={() => props.store.setOverlay(null)}
       />
     );
@@ -290,6 +314,31 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
   );
 }
 
+// Synchronized output (DEC private mode 2026): bracket each frame Ink writes
+// so the terminal buffers the erase+repaint and presents it atomically. Ink's
+// renderer repaints the whole full-screen frame on every state change (e.g.
+// each keystroke), which otherwise shows as flicker; with synchronized output
+// the user only ever sees the finished frame. Terminals that don't support the
+// mode ignore the markers (no-op), so it's safe everywhere. Ink ≥6.7 emits
+// these itself; we're on Ink 5, so we wrap the output stream.
+const SYNC_BEGIN = '\x1b[?2026h';
+const SYNC_END = '\x1b[?2026l';
+
+function withSynchronizedOutput(base: NodeJS.WriteStream): NodeJS.WriteStream {
+  return new Proxy(base, {
+    get(target, prop, receiver) {
+      if (prop === 'write') {
+        return (chunk: unknown, ...rest: unknown[]): boolean => {
+          const s = typeof chunk === 'string' ? chunk : (chunk as Buffer).toString();
+          return (target.write as (...a: unknown[]) => boolean)(SYNC_BEGIN + s + SYNC_END, ...rest);
+        };
+      }
+      const value = Reflect.get(target, prop, receiver) as unknown;
+      return typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(target) : value;
+    },
+  }) as NodeJS.WriteStream;
+}
+
 // One-stop mount helper. Returns the Ink render instance — call
 // `instance.unmount()` to exit cleanly. Manages alt-screen takeover
 // (Bridge owns the full window for its lifetime, exits cleanly back to
@@ -310,7 +359,9 @@ export async function mountInkApp(props: InkAppProps): Promise<{ unmount: () => 
     }
   };
   const inst = render(<InkApp {...props} />, {
-    stdout: process.stdout,
+    // Wrap stdout so each frame is written inside a synchronized-output
+    // bracket — kills the per-keystroke full-screen-repaint flicker.
+    stdout: withSynchronizedOutput(process.stdout),
     stdin: process.stdin,
     exitOnCtrlC: false,
     patchConsole: false,

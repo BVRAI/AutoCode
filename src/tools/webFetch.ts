@@ -58,7 +58,7 @@ export class WebFetchTool implements Tool {
     try {
       const res = await fetch(parsed, {
         signal: controller.signal,
-        headers: { 'user-agent': 'autocode/0.1 (+https://github.com/gregpalin/autocode)' },
+        headers: { 'user-agent': 'autocode/0.2 (+https://github.com/BVRAI/AutoCode)' },
         redirect: 'follow',
       });
       const ct = res.headers.get('content-type') ?? '';

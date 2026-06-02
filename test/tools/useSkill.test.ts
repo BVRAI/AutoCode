@@ -58,10 +58,12 @@ describe('UseSkillTool', () => {
     expect(r.content).toContain('b');
   });
 
-  it('returns an error result with setup hints when no skills are configured', async () => {
-    const r = await new UseSkillTool().execute({ name: 'anything' }, makeCtx(projectRoot));
-    expect(r.isError).toBe(true);
-    expect(r.content).toContain('.autocode/skills');
+  it('exposes the built-in git skill out of the box (no setup required)', async () => {
+    const r = await new UseSkillTool().execute({ name: 'git' }, makeCtx(projectRoot));
+    expect(r.isError).toBeFalsy();
+    expect(r.metadata?.skill).toBe('git');
+    expect(r.metadata?.source).toBe('builtin');
+    expect(r.content).toContain('Co-Authored-By: Autocode');
   });
 
   it('rejects an empty name with a clear error', async () => {

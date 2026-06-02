@@ -1,89 +1,71 @@
-// Interactive model picker overlay — appears between the transcript region
-// and the footer when the user runs `/model` with no args. Arrow keys
-// navigate; Enter selects; Esc cancels. Reads from getKnownModels() so the
-// list reflects whichever catalog is active — bundled (standalone) or
-// proxy-served (when running inside Automax).
+// Stage-2 picker overlay — opens after the user picks a provider in
+// ProviderPicker. Shows only models for that provider, otherwise mirrors the
+// look of stage 1 (teal border, faint hint line, ▸ marker, ← current tag).
+//
+// Esc here goes BACK to the provider stage (the bridge transitions
+// overlay to {kind:'model-provider'}) rather than closing the whole flow,
+// so the user can browse providers without losing the picker. Closing
+// is one more Esc away.
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { BR } from './theme.js';
 import { getKnownModels, modelCatalogSource, type ModelInfo } from '../../llm/models.js';
 
 export interface ModelPickerProps {
-  // Pre-select the row matching this (used to highlight the active model).
+  // The provider this picker is scoped to. Picked in stage 1.
+  provider: string;
+  // Highlight the row matching the currently-active model.
   currentProvider: string;
   currentModel: string;
   onPick: (m: ModelInfo) => void;
-  onCancel: () => void;
+  onBack: () => void;    // Esc — pops back to ProviderPicker.
+  onCancel: () => void;  // Reserved; not currently bound. Kept on the
+                         // interface so a future "double-Esc to close"
+                         // shortcut can wire to it without a contract change.
 }
 
-export function ModelPicker({ currentProvider, currentModel, onPick, onCancel }: ModelPickerProps): React.JSX.Element {
-  // Build a flat ordered list with provider headers as virtual rows that
-  // can't be selected; only model rows are selectable.
-  type Row = { kind: 'header'; provider: string } | { kind: 'model'; model: ModelInfo };
-  const models = useMemo(() => getKnownModels(), []);
+export function ModelPicker({
+  provider,
+  currentProvider,
+  currentModel,
+  onPick,
+  onBack,
+}: ModelPickerProps): React.JSX.Element {
+  const models = useMemo<ModelInfo[]>(
+    () => getKnownModels().filter((m) => m.provider.toLowerCase() === provider.toLowerCase()),
+    [provider],
+  );
   const source = useMemo(() => modelCatalogSource(), []);
-  const rows: Row[] = useMemo(() => {
-    const out: Row[] = [];
-    let lastProvider = '';
-    for (const m of models) {
-      if (m.provider !== lastProvider) {
-        out.push({ kind: 'header', provider: m.provider });
-        lastProvider = m.provider;
-      }
-      out.push({ kind: 'model', model: m });
-    }
-    return out;
-  }, [models]);
 
-  // Pre-select the active model if it matches one in the catalog.
+  // Pre-select the active model if it matches one in this provider's list;
+  // else the first row.
   const initialIdx = useMemo(() => {
-    for (let i = 0; i < rows.length; i++) {
-      const r = rows[i]!;
-      if (r.kind === 'model' && r.model.provider === currentProvider && currentModel.startsWith(r.model.model)) {
-        return i;
-      }
+    for (let i = 0; i < models.length; i++) {
+      const m = models[i]!;
+      if (m.provider === currentProvider && currentModel.startsWith(m.model)) return i;
     }
-    // Default to the first selectable (model) row.
-    for (let i = 0; i < rows.length; i++) if (rows[i]!.kind === 'model') return i;
     return 0;
-  }, [rows, currentProvider, currentModel]);
+  }, [models, currentProvider, currentModel]);
 
   const [selectedIdx, setSelectedIdx] = useState<number>(initialIdx);
 
-  // Step past header rows on up/down so the highlight only ever sits on
-  // a model row.
-  const stepTo = (start: number, direction: 1 | -1): number => {
-    let i = start;
-    for (let n = 0; n < rows.length; n++) {
-      i = (i + direction + rows.length) % rows.length;
-      if (rows[i]!.kind === 'model') return i;
-    }
-    return start;
-  };
-
-  useEffect(() => {
-    if (rows[selectedIdx]?.kind !== 'model') {
-      setSelectedIdx(stepTo(selectedIdx, 1));
-    }
-  }, []); // mount only
-
   useInput((_input, key) => {
     if (key.escape) {
-      onCancel();
+      onBack();
       return;
     }
     if (key.return) {
-      const row = rows[selectedIdx];
-      if (row && row.kind === 'model') onPick(row.model);
+      const m = models[selectedIdx];
+      if (m) onPick(m);
       return;
     }
     if (key.upArrow) {
-      setSelectedIdx((i) => stepTo(i, -1));
+      setSelectedIdx((i) => (i - 1 + Math.max(1, models.length)) % Math.max(1, models.length));
       return;
     }
     if (key.downArrow) {
-      setSelectedIdx((i) => stepTo(i, 1));
+      setSelectedIdx((i) => (i + 1) % Math.max(1, models.length));
       return;
     }
   });
@@ -98,46 +80,43 @@ export function ModelPicker({ currentProvider, currentModel, onPick, onCancel }:
       marginX={2}
     >
       <Box>
-        <Text color={BR.teal} bold>Select a model</Text>
+        <Text color={BR.teal} bold>{provider.toUpperCase()} models</Text>
         <Text color={BR.inkFaint}>
           {source === 'proxy'
-            ? `  from Automax catalog · ${models.length} models · ↑↓ pick · enter confirm · esc cancel`
-            : `  ↑↓ pick · enter confirm · esc cancel`}
+            ? `  from Automax catalog · ${models.length} · ↑↓ pick · enter confirm · esc back`
+            : `  ${models.length} · ↑↓ pick · enter confirm · esc back`}
         </Text>
       </Box>
-      <Box flexDirection="column" marginTop={1}>
-        {rows.map((r, i) => {
-          if (r.kind === 'header') {
+      {models.length === 0 ? (
+        <Box marginTop={1}>
+          <Text color={BR.inkFaint}>(no models available for {provider})</Text>
+        </Box>
+      ) : (
+        <Box flexDirection="column" marginTop={1}>
+          {models.map((m, i) => {
+            const selected = i === selectedIdx;
+            const isCurrent =
+              m.provider === currentProvider && currentModel.startsWith(m.model);
+            const marker = selected ? '▸' : ' ';
+            const labelColor = selected ? BR.teal : isCurrent ? BR.add : BR.ink;
             return (
-              <Box key={`h-${r.provider}`} marginTop={i === 0 ? 0 : 1}>
-                <Text color={BR.inkFaint}>{r.provider.toUpperCase()}</Text>
+              <Box key={`m-${m.provider}-${m.model}`}>
+                <Text color={selected ? BR.teal : BR.inkFaint}>{marker} </Text>
+                <Box width={32}>
+                  <Text color={labelColor} bold={selected}>
+                    {m.label}
+                  </Text>
+                  {isCurrent && <Text color={BR.add}>  ← current</Text>}
+                </Box>
+                <Text color={BR.inkDim}>
+                  ${m.inputPerM}/M in · ${m.outputPerM}/M out
+                </Text>
+                {m.notes && <Text color={BR.inkFaint}>  · {m.notes}</Text>}
               </Box>
             );
-          }
-          const selected = i === selectedIdx;
-          const isCurrent =
-            r.model.provider === currentProvider && currentModel.startsWith(r.model.model);
-          const marker = selected ? '▸' : ' ';
-          const labelColor = selected ? BR.teal : isCurrent ? BR.add : BR.ink;
-          return (
-            <Box key={`m-${r.model.provider}-${r.model.model}`}>
-              <Text color={selected ? BR.teal : BR.inkFaint}>{marker} </Text>
-              <Box width={32}>
-                <Text color={labelColor} bold={selected}>
-                  {r.model.label}
-                </Text>
-                {isCurrent && <Text color={BR.add}>  ← current</Text>}
-              </Box>
-              <Text color={BR.inkDim}>
-                ${r.model.inputPerM}/M in · ${r.model.outputPerM}/M out
-              </Text>
-              {r.model.notes && (
-                <Text color={BR.inkFaint}>  · {r.model.notes}</Text>
-              )}
-            </Box>
-          );
-        })}
-      </Box>
+          })}
+        </Box>
+      )}
     </Box>
   );
 }

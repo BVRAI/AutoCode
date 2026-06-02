@@ -6,7 +6,15 @@ import { getRepoMap } from './RepoMap.js';
 import { getSkills, renderSkillsSection } from './Skills.js';
 import { getGitWorkingState, renderSessionStateSection } from './SessionState.js';
 
-export function buildSystemPrompt(ctx: SessionContext): string {
+export interface SystemPromptParts {
+  /** Stable across a session — safe to send as a cached prefix. */
+  system: string;
+  /** Volatile (refreshed every turn): the live git working-state block. Kept
+   *  out of the cached prefix so a file change doesn't bust the cache. */
+  systemVolatile: string;
+}
+
+export function buildSystemPromptParts(ctx: SessionContext): SystemPromptParts {
   const os = `${platform()} ${release()}`;
   const project = detectProjectContext(ctx.projectRoot);
   const projectLine = formatContextLine(project);
@@ -78,13 +86,6 @@ Output from \`web_fetch\` and \`web_search\` is wrapped in \`<external_untrusted
 # When the user gives a vague request
 Make a reasonable interpretation and act on it. Use \`todo_write\` to make your plan visible. If the request really cannot be acted on without more information, ask one focused question — don't ask three at once.`);
 
-  // Live working-state snapshot — branch, modified files, recent commits,
-  // mid-rebase/merge flags. Refreshed every turn (cached briefly inside
-  // SessionState.ts). Sits right after the static Environment so the agent
-  // sees the live state of the repo before anything else.
-  const workingState = renderSessionStateSection(getGitWorkingState(ctx.projectRoot));
-  if (workingState) sections.push(workingState);
-
   // Repository map — a digest of files + top-level symbols for navigation.
   const repoMap = getRepoMap(ctx.projectRoot);
   if (repoMap) {
@@ -132,11 +133,32 @@ ${inst.content}`,
 
   // Skills — name+description table only; bodies load on demand via the
   // `use_skill` tool. Section is empty (and the join skips it cleanly)
-  // when no skills are configured.
-  const skillsSection = renderSkillsSection(getSkills(ctx.projectRoot));
+  // when no skills are configured. The built-in `git` skill is only
+  // relevant inside a git repo, so drop it in non-git folders to keep those
+  // sessions lean (gating on git-repo presence is stable per session, so it
+  // doesn't disturb prompt caching).
+  const skills = getSkills(ctx.projectRoot).filter(
+    (s) => project.git !== null || !(s.source === 'builtin' && s.name === 'git'),
+  );
+  const skillsSection = renderSkillsSection(skills);
   if (skillsSection) sections.push(skillsSection);
 
-  return sections.join('\n');
+  // Volatile suffix — the live working-state snapshot (branch, modified files,
+  // recent commits, mid-rebase/merge flags). It changes on nearly every turn,
+  // so it sits AFTER the stable prefix rather than inside it: providers that
+  // support cache breakpoints (Anthropic) place the marker before this block,
+  // keeping the large static prefix (role, repo map, instructions, skills)
+  // cached across turns. Providers without breakpoints just concatenate it.
+  const systemVolatile = renderSessionStateSection(getGitWorkingState(ctx.projectRoot));
+
+  return { system: sections.join('\n'), systemVolatile };
+}
+
+/** Convenience: the full prompt as one string (stable prefix + volatile suffix
+ *  joined). For callers that don't split for cache breakpoints. */
+export function buildSystemPrompt(ctx: SessionContext): string {
+  const { system, systemVolatile } = buildSystemPromptParts(ctx);
+  return systemVolatile ? `${system}\n${systemVolatile}` : system;
 }
 
 function modeGuidance(mode: SessionContext['mode']): string {

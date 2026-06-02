@@ -28,6 +28,7 @@ function baseAgent(overrides: Partial<AgentHandler>): AgentHandler {
     clearConversation: () => 0,
     compactConversation: () => ({ before: 0, after: 0 }),
     cumulativeUsage: () => ({ inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }),
+    currentContextTokens: () => 0,
     ...overrides,
   };
 }

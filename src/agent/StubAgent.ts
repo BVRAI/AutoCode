@@ -38,4 +38,8 @@ export class StubAgent implements AgentHandler {
   cumulativeUsage(): { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number } {
     return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
   }
+
+  currentContextTokens(): number {
+    return 0;
+  }
 }

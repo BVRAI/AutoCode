@@ -24,6 +24,10 @@ export interface ModelInfo {
   inputPerM: number;
   outputPerM: number;
   cacheReadPerM?: number;
+  /** Max context window in tokens, when known. Populated from the proxy
+   *  catalog; undefined for bundled BYOK models (callers fall back to a
+   *  family heuristic in contextWindow.ts). */
+  contextWindow?: number;
 }
 
 export type ModelCatalogSource = 'bundled' | 'proxy';
@@ -123,6 +127,7 @@ export function setProxyCatalog(catalog: FullCatalog | null): void {
         inputPerM,
         outputPerM,
         cacheReadPerM,
+        contextWindow: entry.context_window,
       });
     }
   }

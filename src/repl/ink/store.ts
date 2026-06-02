@@ -78,16 +78,33 @@ export interface BridgeState {
     cacheReadTokens: number;
     cacheWriteTokens: number;
     costUsd: number;
+    // Live context occupancy (≈ last request's input tokens) and the selected
+    // model's real window, for the rail's CONTEXT meter — distinct from the
+    // cumulative in/out totals above.
+    currentContextTokens: number;
+    contextWindow: number;
   };
   queueDepth: number;
   items: TranscriptItem[];
   // Ephemeral overlay UI: discriminated union for whichever picker is
   // currently open, or null. The Bridge renders the right overlay
   // between the transcript region and the footer.
-  overlay: { kind: 'model' } | null;
+  //
+  // The model picker is two-stage: 'model-provider' shows the list of
+  // providers; selecting one transitions to 'model-models' which shows
+  // only that provider's models. Esc from the model stage goes back to
+  // the provider stage; Esc from the provider stage closes.
+  overlay:
+    | { kind: 'model-provider' }
+    | { kind: 'model-models'; provider: string }
+    | null;
   // Active model — surfaced for the rail's MODEL row and for the model
   // picker to show "current" highlight. Updated by the bench / user.
   model: { provider: string; name: string };
+  // Project git summary for the rail's PROJECT row. `branch === null` means
+  // the folder is not a git repo (rail shows "no git"). Refreshed on the
+  // rail's poll timer, so it tracks branch switches mid-session.
+  project: { branch: string | null; dirty: number };
 }
 
 type Listener = (s: BridgeState) => void;
@@ -100,11 +117,12 @@ const INITIAL: BridgeState = {
   thinkingStartedAt: null,
   editsThisTurn: [],
   mcpStatus: [],
-  usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 },
+  usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0, currentContextTokens: 0, contextWindow: 0 },
   queueDepth: 0,
   items: [],
   overlay: null,
   model: { provider: '', name: '' },
+  project: { branch: null, dirty: 0 },
 };
 
 let _id = 0;
@@ -210,7 +228,9 @@ export class BridgeStore {
       cur.outputTokens === merged.outputTokens &&
       cur.cacheReadTokens === merged.cacheReadTokens &&
       cur.cacheWriteTokens === merged.cacheWriteTokens &&
-      cur.costUsd === merged.costUsd
+      cur.costUsd === merged.costUsd &&
+      cur.currentContextTokens === merged.currentContextTokens &&
+      cur.contextWindow === merged.contextWindow
     ) {
       return;
     }
@@ -227,10 +247,19 @@ export class BridgeStore {
     this.emit({ ...this.state, model: { provider, name } });
   }
 
+  setProjectGit(branch: string | null, dirty: number): void {
+    const cur = this.state.project;
+    if (cur.branch === branch && cur.dirty === dirty) return;
+    this.emit({ ...this.state, project: { branch, dirty } });
+  }
+
   setOverlay(overlay: BridgeState['overlay']): void {
+    // Reference equality covers null→null and the rare "same object passed
+    // twice" case. We don't short-circuit on kind equality anymore because
+    // the model-models overlay carries a `provider` field, and switching
+    // from {kind:'model-models',provider:'anthropic'} to the same kind with
+    // a different provider needs to re-emit so the picker re-renders.
     if (this.state.overlay === overlay) return;
-    // Both null short-circuits via reference equality. Otherwise compare kind.
-    if (this.state.overlay && overlay && this.state.overlay.kind === overlay.kind) return;
     this.emit({ ...this.state, overlay });
   }
 
@@ -264,6 +293,11 @@ export class BridgeStore {
 
   // Reset everything — used by /clear.
   reset(): void {
-    this.emit({ ...INITIAL, mode: this.state.mode, mcpStatus: this.state.mcpStatus });
+    this.emit({
+      ...INITIAL,
+      mode: this.state.mode,
+      mcpStatus: this.state.mcpStatus,
+      project: this.state.project,
+    });
   }
 }

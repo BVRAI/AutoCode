@@ -7,7 +7,7 @@ const LINES: string[] = [
   ' █  █ ▀▄▄▀  █  ▀▄▄▀ ▀▄▄█ ▀▄▄▀ █▄▄▀ █▄▄▄',
 ];
 
-const TAGLINE = '   agentic coding cli · github.com/gregpalin/autocode';
+const TAGLINE = '   agentic coding cli · github.com/BVRAI/AutoCode';
 
 export function printBanner(stream: NodeJS.WriteStream = process.stdout): void {
   stream.write('\n');

@@ -83,4 +83,23 @@ describe('StdoutEventEmitter', () => {
     expect(() => new StdoutEventEmitter().emit('tool_call', data)).not.toThrow();
     expect(writes).toHaveLength(0); // event dropped, no line written
   });
+
+  it('emits the launch-time ready handshake in the exact envelope V6 expects', () => {
+    // Byte-for-byte contract with Automax V6's AutoCodeEventBridge — key order
+    // included (pid, cwd, mode).
+    new StdoutEventEmitter().emit('ready', { pid: 4242, cwd: '/tmp/proj', mode: 'default' });
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toBe(
+      '<<AMX>>{"type":"ready","data":{"pid":4242,"cwd":"/tmp/proj","mode":"default"}}<</AMX>>\n',
+    );
+  });
+});
+
+describe('NullEventEmitter — ready handshake', () => {
+  it('stays silent for the ready event in standalone (non-automax) runs', () => {
+    const spy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    new NullEventEmitter().emit('ready', { pid: 1, cwd: '/x', mode: 'default' });
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
 });

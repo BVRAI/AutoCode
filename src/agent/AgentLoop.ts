@@ -6,7 +6,7 @@ import type { ToolExecutionContext } from '../tools/types.js';
 import type { ContentBlock, ImageBlock, Message, StreamEvent } from '../llm/types.js';
 import { LlmRouter, type ProviderName } from '../llm/Router.js';
 import { ToolRegistry } from './ToolRegistry.js';
-import { buildSystemPrompt } from './PromptBuilder.js';
+import { buildSystemPromptParts } from './PromptBuilder.js';
 import { currentTodos, markInProgressInterrupted } from '../tools/todoWrite.js';
 import { renderUnifiedDiff } from '../util/diff.js';
 import { estimateCost, formatUsd } from '../util/pricing.js';
@@ -113,6 +113,13 @@ export class AgentLoop {
       cacheReadTokens: this.cumCacheRead,
       cacheWriteTokens: this.cumCacheWrite,
     };
+  }
+
+  // Input tokens of the most recent LLM call ≈ tokens currently live in the
+  // context window (system prompt + tools + conversation). Drives the rail's
+  // CONTEXT meter; 0 before the first reply and just after an auto-compact.
+  currentContextTokens(): number {
+    return this.lastInputTokens;
   }
 
   // Swap the activity emitter at runtime. Used by the Ink Bridge UI to
@@ -426,11 +433,13 @@ export class AgentLoop {
       let response: { content: ContentBlock[]; stopReason: string; usage: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number } } | null = null;
       let firstTextSeen = false;
       try {
+        const { system, systemVolatile } = buildSystemPromptParts(ctx);
         const stream = this.deps.router.completeStream(
           ctx.model.provider as ProviderName,
           {
             model: ctx.model.model,
-            system: buildSystemPrompt(ctx),
+            system,
+            systemVolatile,
             messages: this.conversation,
             tools: this.deps.registry.schemas(),
           },

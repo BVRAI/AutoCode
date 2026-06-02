@@ -24,6 +24,7 @@ import { loadCatalogForStartup, refreshCatalogInBackground } from './llm/Catalog
 import { setProxyCatalog, findModel, getKnownModels } from './llm/models.js';
 import { setProxyRates } from './util/pricing.js';
 import { shouldRunFirstRunWizard, BYOK_PROVIDERS, BVRAI_SIGNUP_URL } from './auth/firstRun.js';
+import { initialize as initSecretStore } from './auth/SecretStore.js';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -38,8 +39,11 @@ program
 
 program
   .option('--project-root <path>', 'project root (defaults to cwd)')
-  .option('--provider <name>', 'LLM provider (anthropic|xai|openai|openrouter)', process.env.AUTOMAX_PROVIDER ?? 'xai')
-  .option('--model <name>', 'model id (defaults per provider)', process.env.AUTOMAX_MODEL)
+  // No commander-level default for provider/model so we can distinguish
+  // "user explicitly passed a flag" from "fell through to default" inside
+  // the action body. Precedence below is: resume > flag > env > config > xai.
+  .option('--provider <name>', 'LLM provider (anthropic|xai|openai|openrouter); default: last used or xai')
+  .option('--model <name>', 'model id; default: last used or per-provider default')
   .option('--plan-mode', 'start in planning mode (read-only — agent plans, makes no changes)', false)
   .option('--mode <name>', 'start in a specific workflow mode: planning | default | autocode | admin (overrides --plan-mode)')
   .option('-p, --print <prompt>', 'run a single task non-interactively and exit')
@@ -51,7 +55,7 @@ program
   .action(
     async (opts: {
       projectRoot?: string;
-      provider: string;
+      provider?: string;
       model?: string;
       planMode?: boolean;
       mode?: string;
@@ -125,12 +129,32 @@ program
     const root = opts.projectRoot
       ? opts.projectRoot
       : (resumedMeta?.projectRoot ?? projectRootDefault());
-    // On resume, provider + model come from the saved session (/model can
-    // still switch mid-session). Otherwise, from flags.
-    const provider = resumedMeta ? resumedMeta.provider : opts.provider;
+    // Provider + model precedence (highest wins):
+    //   1. resumedMeta — explicit resume of a prior session
+    //   2. CLI flag — user passed --provider / --model explicitly
+    //   3. env var — AUTOMAX_PROVIDER / AUTOMAX_MODEL (V6 injects these)
+    //   4. config — cfg.defaultProvider / defaultModel from prior /model
+    //      switch or first-run wizard. Wizard writes these but the
+    //      pre-2026-05-27 cli.ts ignored them; fixed here.
+    //   5. hardcoded — 'xai' / defaultModelFor() as final fallback.
+    const startupCfg = new ConfigStore().load();
+    const provider = resumedMeta
+      ? resumedMeta.provider
+      : (opts.provider
+          ?? process.env.AUTOMAX_PROVIDER
+          ?? startupCfg.defaultProvider
+          ?? 'xai');
+    // For model: only honor the stored default when the resolved provider
+    // matches the provider it was saved under. Otherwise (e.g. user passed
+    // --provider openai but cfg.defaultModel is a Claude model), fall
+    // through to defaultModelFor(provider).
+    const useStoredModel = provider === startupCfg.defaultProvider;
     const model = resumedMeta
       ? resumedMeta.model
-      : (opts.model ?? defaultModelFor(opts.provider));
+      : (opts.model
+          ?? process.env.AUTOMAX_MODEL
+          ?? (useStoredModel ? startupCfg.defaultModel : undefined)
+          ?? defaultModelFor(provider));
 
     // Headless runs auto-accept (no interactive approval is possible);
     // --mode <name> takes precedence over --plan-mode if both are given.
@@ -208,6 +232,15 @@ program
         renderer.setUpdateBanner(updateInfo.banner);
       }
     }
+    // SecretStore must initialize before the wizard runs (so the wizard's
+    // hasAnyCredentials check sees keys stored in the OS keyring, not just
+    // plaintext env/config) AND before AuthResolver runs (so providers
+    // can read the freshly-cached secrets synchronously). Init also
+    // performs migrate-on-read: plaintext keys in ~/.autocode/config.json
+    // get copied to the OS keyring and zeroed from the plaintext slot,
+    // with a single dim line announcing the migration count.
+    await initSecretStore(renderer);
+
     // First-run wizard. Fires when a fresh interactive launch has no creds
     // anywhere (env, config, or V6's AUTOMAX_PROXY_TOKEN) and no prior
     // firstRunCompletedAt marker. Replaces today's "stub mode" warning with
@@ -226,8 +259,10 @@ program
         if (outcome.kind === 'byok') {
           const provOpt = BYOK_PROVIDERS.find((p) => p.id === outcome.provider);
           if (provOpt) {
-            cfg.apiKeys = cfg.apiKeys ?? {};
-            cfg.apiKeys[provOpt.id] = outcome.apiKey;
+            // Route through SecretStore so the wizard-saved key lands in
+            // the OS keyring (or plaintext fallback) — same path as /auth.
+            const { setSecret } = await import('./auth/SecretStore.js');
+            await setSecret(`byok-${provOpt.id}`, outcome.apiKey);
             cfg.defaultProvider = provOpt.id;
             // Switch this session's model context to the chosen provider so
             // the user doesn't see a "no creds for xai" warning right after
@@ -246,9 +281,23 @@ program
           process.stdout.write(
             pc.cyan(
               `\nThanks for signing up. ${BVRAI_SIGNUP_URL} is open in your browser.\n` +
-              `Continuing in stub mode — use /auth anytime to add a BYOK key.\n\n`,
+              `Continuing in stub mode — use /login or /auth anytime to add credentials.\n\n`,
             ),
           );
+        }
+        if (outcome.kind === 'signup-then-login') {
+          // Wizard's signup branch chains into /login (Plan 8 Open Decision
+          // #7). We can't call runLogin straight from here because the next
+          // thing cli.ts does is mount Bridge — and Bridge's interim prompter
+          // can't actually capture paste mid-flow. Instead, print the same
+          // instructions runLogin would print, plus a clear "run /login
+          // sk_amx_… inside autocode" cue. The user lands at the Bridge
+          // prompt and runs /login with their key as an arg.
+          const { printLoginInstructions } = await import('./repl/LoginCommand.js');
+          // Use a transient ConsoleRenderer (no sink yet — Bridge mounts
+          // below; these lines hit stdout/main scrollback before alt-screen
+          // takeover, so they're still visible after Bridge exits too).
+          printLoginInstructions(renderer);
         }
       }
     }

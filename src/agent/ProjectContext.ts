@@ -1,6 +1,7 @@
 import { execSync } from 'node:child_process';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { resolveGitBranch } from './SessionState.js';
 
 export interface ProjectContext {
   root: string;
@@ -52,18 +53,13 @@ export function detectProjectContext(root: string): ProjectContext {
 
 function detectGit(root: string): GitInfo | null {
   if (!existsSync(join(root, '.git'))) return null;
-  let branch = '';
+  const resolved = resolveGitBranch(root);
+  const branch = resolved
+    ? resolved.isDetachedHead
+      ? '(HEAD detached)'
+      : resolved.branch
+    : '(unknown)';
   let dirty = 0;
-  try {
-    branch = execSync('git rev-parse --abbrev-ref HEAD', {
-      cwd: root,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    })
-      .toString()
-      .trim();
-  } catch {
-    branch = '(unknown)';
-  }
   try {
     const out = execSync('git status --porcelain', {
       cwd: root,

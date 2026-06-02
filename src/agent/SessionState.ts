@@ -56,16 +56,16 @@ export function getGitWorkingState(projectRoot: string): GitWorkingState | null 
 function collectGitWorkingState(projectRoot: string): GitWorkingState | null {
   if (!existsSync(join(projectRoot, '.git'))) return null;
 
-  const branch = readBranch(projectRoot);
-  if (branch === null) return null; // not really a git repo
+  const resolved = resolveGitBranch(projectRoot);
+  if (resolved === null) return null; // a .git with no resolvable HEAD — not usable
 
-  const isDetachedHead = branch === 'HEAD';
+  const { isDetachedHead } = resolved;
   const inProgress = detectInProgress(projectRoot);
   const status = readStatus(projectRoot);
   const recentCommits = readRecentCommits(projectRoot);
 
   return {
-    branch: isDetachedHead ? `(HEAD detached)` : branch,
+    branch: isDetachedHead ? `(HEAD detached)` : resolved.branch,
     isDetachedHead,
     inProgress,
     modifiedFiles: status.modifiedFiles,
@@ -76,14 +76,27 @@ function collectGitWorkingState(projectRoot: string): GitWorkingState | null {
   };
 }
 
-function readBranch(cwd: string): string | null {
+/** Resolve the current branch in an unborn-HEAD- and detached-HEAD-safe way.
+ *  `git rev-parse --abbrev-ref HEAD` errors out on a repo with zero commits
+ *  (the "git init, never committed" case), so we lead with `symbolic-ref`,
+ *  which returns the branch name even before the first commit exists. A
+ *  detached HEAD has no symbolic ref, so we fall back to the short commit
+ *  SHA and flag it. Returns null only when neither resolves — e.g. the
+ *  directory isn't actually a git repo, or `.git` is empty/corrupt. */
+export function resolveGitBranch(root: string): { branch: string; isDetachedHead: boolean } | null {
+  const symbolic = tryGit('git symbolic-ref --quiet --short HEAD', root);
+  if (symbolic) return { branch: symbolic, isDetachedHead: false };
+
+  const sha = tryGit('git rev-parse --short HEAD', root);
+  if (sha) return { branch: sha, isDetachedHead: true };
+
+  return null;
+}
+
+function tryGit(command: string, cwd: string): string | null {
   try {
-    return execSync('git rev-parse --abbrev-ref HEAD', {
-      cwd,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    })
-      .toString()
-      .trim();
+    const out = execSync(command, { cwd, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+    return out.length > 0 ? out : null;
   } catch {
     return null;
   }

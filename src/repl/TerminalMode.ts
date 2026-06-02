@@ -10,18 +10,23 @@ import type { Message, ContentBlock } from '../llm/types.js';
 import { buildAgentInput } from '../util/imageInput.js';
 import { estimateCost, formatUsd } from '../util/pricing.js';
 import { ConsoleRenderer } from './ConsoleRenderer.js';
-import { parse, type ParsedInput } from './CommandParser.js';
+import { parse, type ParsedInput, type LocalCommandName } from './CommandParser.js';
 import { runInit } from './InitCommand.js';
 import { runAuth } from './AuthCommand.js';
+import { runLogin, printAlreadyAuthenticatedNotice } from './LoginCommand.js';
+import { isAutomaxHosted } from '../util/host.js';
 import { PrompterRef } from './Prompter.js';
 import { runUpdate } from '../update/UpdateChecker.js';
 import { isBundled } from '../util/host.js';
 import { applyProposal, type Proposal } from '../agent/SessionReflection.js';
+import { getGitWorkingState } from '../agent/SessionState.js';
+import { contextWindowFor } from '../util/contextWindow.js';
 import { ConfigStore } from '../auth/ConfigStore.js';
 import { runHooksForEvent } from '../agent/HookRunner.js';
 import { getPlugins, pluginHooksForEvent } from '../agent/Plugins.js';
 import { type EventEmitter, NullEventEmitter } from './EventEmitter.js';
 import { COMMAND_DEFS } from './commands.js';
+import { getKnownModels, modelCatalogSource } from '../llm/models.js';
 
 const MAX_QUEUE = 5;
 
@@ -31,6 +36,8 @@ export interface AgentHandler {
   clearConversation(): number;
   compactConversation(ctx: SessionContext): Promise<{ before: number; after: number; summarized: boolean }>;
   cumulativeUsage(): { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
+  // Tokens currently live in the context window (≈ last request's input).
+  currentContextTokens?(): number;
   loadState?(state: { messages: Message[]; usage: CumulativeUsage }): void;
   undo?(grain?: 'step' | 'turn'): { turn: number; restored: number; step?: number } | null;
   hasReflectableActivity?(): boolean;
@@ -69,12 +76,27 @@ export class TerminalMode {
   ) {}
 
   run(): Promise<number> {
-    // V6 / --automax: when autocode is hosted by Automax V6, the V6 UI
-    // owns the chat panel + input bar + spinner. We must not mount any
-    // visual TUI; V6 only wants a line-oriented stdin and the JSON
-    // event stream on stdout. Use runPlain regardless of TTY.
-    if (process.env['AUTOCODE_AUTOMAX'] === '1') return this.runPlain();
+    // Launch-time liveness handshake for the Automax V6 host. V6's safety gate
+    // won't send input to a terminal pane until it has seen at least one
+    // <<AMX>> event confirming autocode is actually running — and the next
+    // event (`started`) only fires once a task begins, which needs that input.
+    // Emitting `ready` here breaks that deadlock. Going through `this.emitter`
+    // makes it a byte-identical <<AMX>> line under --automax (StdoutEventEmitter)
+    // and a silent no-op standalone (NullEventEmitter) — same convention as
+    // started/tool_call/etc. Fires exactly once: run() is called once per launch.
+    this.emitter.emit('ready', {
+      pid: process.pid,
+      cwd: this.ctx.projectRoot,
+      mode: this.ctx.mode,
+    });
+
     // Bridge (Ink) for any real TTY; readline fallback otherwise.
+    // Note: when hosted by Automax V6, --automax still drives the AMX event
+    // stream + proxy-catalog fetch (see cli.ts), but the TUI choice is now
+    // purely TTY-based — V6's ConPty pane reports as a TTY and renders the
+    // full Ink Bridge UI just like a standalone shell. The earlier "V6 owns
+    // the chat panel" gate that forced runPlain here was a dated assumption
+    // from before the Terminal-tab redesign.
     if (!process.stdout.isTTY) return this.runPlain();
     return this.runBridge();
   }
@@ -116,6 +138,22 @@ export class TerminalMode {
     refreshMcp();
     const mcpTimer = setInterval(refreshMcp, 5_000);
 
+    // Snapshot the project's git branch + dirty count into the rail's PROJECT
+    // row. getGitWorkingState is cached ~2s, so polling it on the usage timer
+    // is nearly free; it keeps the branch live across mid-session checkouts.
+    const refreshProjectGit = (): void => {
+      const g = getGitWorkingState(this.ctx.projectRoot);
+      if (!g) {
+        store.setProjectGit(null, 0);
+        return;
+      }
+      const branch = g.isDetachedHead ? 'detached' : g.branch;
+      const dirty =
+        g.stagedFiles.length + g.modifiedFiles.length + g.deletedFiles.length + g.untrackedCount;
+      store.setProjectGit(branch, dirty);
+    };
+    refreshProjectGit();
+
     // Poll cumulative usage every 1500ms to keep the rail's context meter
     // alive between events. Cheap — just reads in-memory counters. The
     // store dedupes identical values, so steady-state cycles cost nothing.
@@ -128,11 +166,14 @@ export class TerminalMode {
         cacheReadTokens: u.cacheReadTokens,
         cacheWriteTokens: u.cacheWriteTokens,
         costUsd: cost,
+        currentContextTokens: this.agent.currentContextTokens?.() ?? 0,
+        contextWindow: contextWindowFor(this.ctx.model.provider, this.ctx.model.model),
       });
       store.setQueueDepth(this.queue.length);
       store.setBusy(this.busy);
       store.setMode(this.ctx.mode);
       store.setModel(this.ctx.model.provider, this.ctx.model.model);
+      refreshProjectGit();
     }, 1500);
 
     const version = await this.readVersion();
@@ -294,28 +335,7 @@ export class TerminalMode {
   }
 
   private async handleLocal(
-    name:
-      | 'help'
-      | 'status'
-      | 'cwd'
-      | 'model'
-      | 'stop'
-      | 'exit'
-      | 'init'
-      | 'clear'
-      | 'compact'
-      | 'cost'
-      | 'diff'
-      | 'auth'
-      | 'mode'
-      | 'undo'
-      | 'trash'
-      | 'restore'
-      | 'mcp'
-      | 'update'
-      | 'reflect'
-      | 'plugins'
-      | 'spinner',
+    name: LocalCommandName,
     args: string[],
   ): Promise<void> {
     switch (name) {
@@ -352,7 +372,22 @@ export class TerminalMode {
         this.handleDiff();
         return;
       case 'auth':
-        await runAuth(this.prompter, this.renderer);
+        await runAuth(this.renderer, args);
+        return;
+      case 'login':
+        if (isAutomaxHosted()) {
+          // V6-embedded — V6's session owns the auth. Plan 8 Open Decision
+          // #4 (a): hard no-op with a helpful message, never spawn a
+          // browser handoff that would create who-am-I ambiguity.
+          printAlreadyAuthenticatedNotice(this.renderer);
+        } else {
+          // /login takes the key as an inline argument. The Bridge prompter
+          // can't reliably ask for paste mid-session (interim AutoAccept
+          // returns ''), so passing-as-arg is the only mode that works in
+          // every shell. /login alone prints instructions; /login sk_amx_…
+          // validates + saves.
+          await runLogin(this.renderer, args[0]);
+        }
         return;
       case 'mode':
         this.handleMode(args);
@@ -625,13 +660,20 @@ export class TerminalMode {
   }
 
   private handleModel(args: string[]): void {
-    // Inside Bridge with no args → open the picker overlay.
+    // Inside Bridge with no args → open the two-stage picker (provider first,
+    // then that provider's models). Esc semantics inside the pickers handle
+    // the "back to providers" transition.
     if (args.length === 0 && this.bridgeStore !== null) {
-      this.bridgeStore.setOverlay({ kind: 'model' });
+      this.bridgeStore.setOverlay({ kind: 'model-provider' });
       return;
     }
+    // Plain mode (V6 / AUTOCODE_AUTOMAX / non-TTY) with no args → there's no
+    // Ink overlay to mount, so print the full catalog instead. Without this
+    // the user only saw the *current* model and had no way to discover the
+    // available names — and inside V6 specifically, the live proxy catalog
+    // we fetch at startup was invisible.
     if (args.length === 0) {
-      this.renderer.info(`${this.ctx.model.provider} / ${this.ctx.model.model}`);
+      this.printModelList();
       return;
     }
     if (args.length < 2) {
@@ -640,7 +682,63 @@ export class TerminalMode {
     }
     this.ctx.model = { provider: args[0]!, model: args.slice(1).join(' ') };
     this.bridgeStore?.setModel(this.ctx.model.provider, this.ctx.model.model);
+    // Persist the choice as the new launch default. Next plain `acv1`
+    // opens with this provider/model instead of falling back to xai.
+    // Silent — matches gh/gcloud's "last-used is the default" UX.
+    try {
+      const store = new ConfigStore();
+      const cfg = store.load();
+      cfg.defaultProvider = this.ctx.model.provider;
+      cfg.defaultModel = this.ctx.model.model;
+      store.save(cfg);
+    } catch {
+      /* persistence failure is non-fatal — the switch still applies for
+         this session, just won't be remembered next launch */
+    }
     this.renderer.info(`model → ${this.ctx.model.provider} / ${this.ctx.model.model}`);
+  }
+
+  // Plain-text equivalent of the Ink ModelPicker overlay. Same data source
+  // (getKnownModels), same grouping, same current-model highlight rule —
+  // just rendered through the renderer instead of as a React tree.
+  private printModelList(): void {
+    const models = getKnownModels();
+    const source = modelCatalogSource();
+    const currentProvider = this.ctx.model.provider;
+    const currentModel = this.ctx.model.model;
+    // Longest-prefix-match for the current row, matching findModel's rule
+    // so e.g. "claude-opus-4-7-20251001" highlights the "claude-opus-4-7" entry.
+    let currentKey: string | null = null;
+    let bestLen = -1;
+    for (const m of models) {
+      if (m.provider !== currentProvider) continue;
+      if (currentModel.startsWith(m.model) && m.model.length > bestLen) {
+        currentKey = `${m.provider}/${m.model}`;
+        bestLen = m.model.length;
+      }
+    }
+    const sourceTag = source === 'proxy' ? `from Automax catalog · ${models.length} models` : `bundled · ${models.length} models`;
+    this.renderer.info(`Current: ${currentProvider} / ${currentModel}`);
+    this.renderer.info('');
+    this.renderer.info(`Available models (${sourceTag}):`);
+    let lastProvider = '';
+    const LABEL_WIDTH = 32;
+    for (const m of models) {
+      if (m.provider !== lastProvider) {
+        this.renderer.info('');
+        this.renderer.dim(`  ${m.provider.toUpperCase()}`);
+        lastProvider = m.provider;
+      }
+      const isCurrent = `${m.provider}/${m.model}` === currentKey;
+      const marker = isCurrent ? '←' : ' ';
+      const label = m.label.length > LABEL_WIDTH ? m.label.slice(0, LABEL_WIDTH - 1) + '…' : m.label.padEnd(LABEL_WIDTH);
+      const price = `$${m.inputPerM}/M in · $${m.outputPerM}/M out`;
+      const notes = m.notes ? `· ${m.notes}` : '';
+      const currentTag = isCurrent ? ' ← current' : '';
+      this.renderer.info(`    ${marker} ${label}  ${price}  ${notes}${currentTag}`);
+    }
+    this.renderer.info('');
+    this.renderer.dim('Switch with:  /model <provider> <model>');
   }
 
   private handleClear(): void {

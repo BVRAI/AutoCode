@@ -7,6 +7,7 @@ import { Box, Text } from 'ink';
 import { BR } from './theme.js';
 import type { BridgeState, RailEditSummary, McpStatusEntry } from './store.js';
 import { basename } from 'node:path';
+import { AUTO_COMPACT_THRESHOLD } from '../../util/contextWindow.js';
 
 const RAIL_WIDTH = 32;
 
@@ -39,9 +40,7 @@ export function Rail({ state, sessionId, projectRoot, modelProvider, modelName, 
       </Block>
       <Block label="PROJECT">
         <Text color={BR.ink}>{truncate(basename(projectRoot), RAIL_WIDTH - 4)}</Text>
-        <Text color={BR.inkDim}>
-          <Text color={BR.teal}>master</Text>
-        </Text>
+        <ProjectBranch project={state.project} />
       </Block>
       <Block label="MODEL">
         <Text color={BR.ink}>{modelProvider} / {truncate(modelName, RAIL_WIDTH - 4 - modelProvider.length - 3)}</Text>
@@ -67,6 +66,23 @@ function Wordmark(): React.JSX.Element {
       </Text>
       <Text color={BR.inkFaint}>  acv1</Text>
     </Box>
+  );
+}
+
+function ProjectBranch({ project }: { project: BridgeState['project'] }): React.JSX.Element {
+  // branch === null ⇒ not a git repo. Otherwise show the real branch (the
+  // host resolves "detached" for a detached HEAD), plus a dirty badge like
+  // "●3" when there are uncommitted changes.
+  if (project.branch === null) {
+    return <Text color={BR.inkFaint}>no git</Text>;
+  }
+  const badge = project.dirty > 0 ? ` ●${project.dirty}` : '';
+  const branch = truncate(project.branch, RAIL_WIDTH - 4 - badge.length);
+  return (
+    <Text>
+      <Text color={BR.teal}>{branch}</Text>
+      {badge ? <Text color={BR.inkDim}>{badge}</Text> : null}
+    </Text>
   );
 }
 
@@ -111,12 +127,17 @@ function ModeList({ active }: { active: BridgeState['mode'] }): React.JSX.Elemen
 }
 
 function ContextMeter({ usage }: { usage: BridgeState['usage'] }): React.JSX.Element {
-  // 256k window is the cap shown by Bridge — match the design.
-  const window = 256_000;
-  const used = usage.inputTokens + usage.outputTokens;
+  // True context fill: live tokens (≈ the last request's input — system prompt
+  // + tools + conversation) over the selected model's real window (resolved by
+  // the host poll). Both are 0 until the first reply lands; the bar then
+  // reflects actual occupancy and stays in lock-step with the 80% auto-compact
+  // trigger. The in/out/cache/cost rows below remain CUMULATIVE session totals.
+  const window = usage.contextWindow > 0 ? usage.contextWindow : 200_000;
+  const used = usage.currentContextTokens;
   const pct = Math.max(0, Math.min(1, used / window));
   const cells = 18;
   const filled = Math.round(cells * pct);
+  const near = pct >= AUTO_COMPACT_THRESHOLD; // approaching auto-compaction
   const cacheStr =
     usage.inputTokens > 0
       ? `${Math.round((usage.cacheReadTokens / Math.max(1, usage.inputTokens)) * 100)}%`
@@ -125,9 +146,12 @@ function ContextMeter({ usage }: { usage: BridgeState['usage'] }): React.JSX.Ele
     <Box flexDirection="column" marginBottom={1}>
       <Text color={BR.inkFaint}>CONTEXT</Text>
       <Box>
-        <Text color={BR.teal}>{'▰'.repeat(filled)}</Text>
+        <Text color={near ? BR.yellow : BR.teal}>{'▰'.repeat(filled)}</Text>
         <Text color={BR.ruleStrong}>{'▱'.repeat(cells - filled)}</Text>
-        <Text color={BR.inkDim}>  {Math.round(pct * 100)}%</Text>
+        <Text color={near ? BR.yellow : BR.inkDim}>  {Math.round(pct * 100)}%</Text>
+      </Box>
+      <Box>
+        <Text color={BR.inkDim}>{formatTokens(used)} / {formatTokens(window)}</Text>
       </Box>
       <Box>
         <Text color={BR.inkDim}>in  </Text>
@@ -209,7 +233,8 @@ function truncate(s: string, n: number): string {
 function formatTokens(n: number): string {
   if (n < 1000) return String(n);
   if (n < 10_000) return (n / 1000).toFixed(1) + 'k';
-  return Math.round(n / 1000) + 'k';
+  if (n < 1_000_000) return Math.round(n / 1000) + 'k';
+  return (n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 0) + 'M';
 }
 
 function shortSession(id: string): string {

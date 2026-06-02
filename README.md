@@ -23,7 +23,7 @@ Both `autocode` and `acv1` are installed. They run the same binary; `acv1` (shor
 ## Install from source (dev)
 
 ```sh
-git clone https://github.com/gregpalin/autocode.git
+git clone https://github.com/BVRAI/AutoCode.git
 cd autocode
 npm install
 npm run build

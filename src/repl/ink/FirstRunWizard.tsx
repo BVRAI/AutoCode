@@ -17,6 +17,13 @@ import { BYOK_PROVIDERS, BVRAI_SIGNUP_URL, type ByokProviderOption } from '../..
 
 export type WizardOutcome =
   | { kind: 'byok'; provider: ByokProviderOption['id']; apiKey: string }
+  // User opened the bvrai.com signup page and wants to chain into `/login`
+  // after completing signup. cli.ts unmounts the wizard, then invokes
+  // runLogin against the standard prompter/renderer.
+  | { kind: 'signup-then-login' }
+  // User opened the signup page but chose to skip the login flow for now.
+  // Same end-state as 'skipped' — wizard records firstRunCompletedAt and
+  // session continues in stub mode.
   | { kind: 'signup-opened' }
   | { kind: 'skipped' };
 
@@ -129,12 +136,16 @@ export function FirstRunWizard({ onComplete }: FirstRunWizardProps): React.JSX.E
     }
 
     if (step === 'bvrai-opened') {
-      if (key.return || ch === ' ') {
-        onComplete({ kind: 'signup-opened' });
+      if (key.return) {
+        // Enter → chain into /login. Plan 8 wire-through: after the user
+        // signs up at bvrai.com, the natural next step is logging into the
+        // newly-created account from the CLI.
+        onComplete({ kind: 'signup-then-login' });
         return;
       }
-      if (key.escape) {
-        // Same as confirming — they've seen the message.
+      if (ch === 's' || ch === 'S' || key.escape) {
+        // Skip the login chain — stay in stub mode. User can run /login
+        // later from the REPL.
         onComplete({ kind: 'signup-opened' });
         return;
       }
@@ -239,11 +250,9 @@ function BvraiOpenedStep(): React.JSX.Element {
     <Box flexDirection="column">
       <Text color={BR.ink}>Opening <Text color={BR.teal}>{BVRAI_SIGNUP_URL}</Text> in your browser…</Text>
       <Box height={1} />
-      <Text color={BR.ink}>After signing up:</Text>
-      <Text color={BR.inkDim}>  · Install the Automax desktop app from your dashboard for the full experience.</Text>
-      <Text color={BR.inkDim}>  · Standalone CLI access via this wizard is coming soon.</Text>
-      <Box height={1} />
-      <Text color={BR.inkFaint}>enter to continue (AutoCode will start in stub mode; use /auth anytime to add a BYOK key)</Text>
+      <Text color={BR.ink}>Once you've completed signup:</Text>
+      <Text color={BR.inkDim}>  · Press <Text color={BR.teal}>Enter</Text> to log in (AutoCode will open the API-keys page and prompt for your key).</Text>
+      <Text color={BR.inkDim}>  · Press <Text color={BR.teal}>s</Text> to skip into stub mode (you can /login or /auth later).</Text>
     </Box>
   );
 }

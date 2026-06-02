@@ -6,7 +6,7 @@ import type {
   Message,
   StreamEvent,
 } from '../types.js';
-import type { AuthMode } from '../../auth/AuthResolver.js';
+import { isProxyAuth, type AuthMode } from '../../auth/AuthResolver.js';
 import { parseSseStream } from '../sse.js';
 
 const DEFAULT_BASE = 'https://api.anthropic.com/v1';
@@ -23,19 +23,23 @@ export class AnthropicProvider implements LlmProvider {
         `anthropic credentials missing — set ANTHROPIC_API_KEY or AUTOMAX_PROXY_TOKEN`,
       );
     }
-    const base = this.auth.kind === 'automax' ? this.auth.baseOverride : DEFAULT_BASE;
+    const base = isProxyAuth(this.auth) ? this.auth.baseOverride : DEFAULT_BASE;
     const url = `${base}/messages`;
 
     const body = {
       model: req.model,
       max_tokens: req.maxTokens ?? 8192,
       temperature: req.temperature ?? 1.0,
+      // The cache breakpoint sits on the stable `system` block. Any volatile
+      // suffix (live git working-state) goes in a SECOND block after it, so it
+      // refreshes every turn without invalidating the cached prefix.
       system: [
         {
           type: 'text',
           text: req.system,
           cache_control: { type: 'ephemeral' },
         },
+        ...(req.systemVolatile ? [{ type: 'text', text: req.systemVolatile }] : []),
       ],
       tools: req.tools.map((t, idx) => ({
         name: t.name,
@@ -55,7 +59,7 @@ export class AnthropicProvider implements LlmProvider {
     };
     if (this.auth.kind === 'byok') {
       headers['x-api-key'] = this.auth.apiKey;
-    } else if (this.auth.kind === 'automax') {
+    } else if (isProxyAuth(this.auth)) {
       headers['authorization'] = `Bearer ${this.auth.token}`;
     }
 
@@ -77,7 +81,7 @@ export class AnthropicProvider implements LlmProvider {
     if (this.auth.kind === 'missing') {
       throw new Error('anthropic credentials missing — set ANTHROPIC_API_KEY or AUTOMAX_PROXY_TOKEN');
     }
-    const base = this.auth.kind === 'automax' ? this.auth.baseOverride : DEFAULT_BASE;
+    const base = isProxyAuth(this.auth) ? this.auth.baseOverride : DEFAULT_BASE;
     const url = `${base}/messages`;
 
     const body = {
@@ -85,7 +89,10 @@ export class AnthropicProvider implements LlmProvider {
       max_tokens: req.maxTokens ?? 8192,
       temperature: req.temperature ?? 1.0,
       stream: true,
-      system: [{ type: 'text', text: req.system, cache_control: { type: 'ephemeral' } }],
+      system: [
+        { type: 'text', text: req.system, cache_control: { type: 'ephemeral' } },
+        ...(req.systemVolatile ? [{ type: 'text', text: req.systemVolatile }] : []),
+      ],
       tools: req.tools.map((t, idx) => ({
         name: t.name,
         description: t.description,
@@ -101,7 +108,7 @@ export class AnthropicProvider implements LlmProvider {
       'accept': 'text/event-stream',
     };
     if (this.auth.kind === 'byok') headers['x-api-key'] = this.auth.apiKey;
-    else if (this.auth.kind === 'automax') headers['authorization'] = `Bearer ${this.auth.token}`;
+    else if (isProxyAuth(this.auth)) headers['authorization'] = `Bearer ${this.auth.token}`;
 
     const res = await fetch(url, {
       method: 'POST',

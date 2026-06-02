@@ -115,6 +115,10 @@ export class LiveAgent implements AgentHandler {
     return this.loop.cumulativeUsage();
   }
 
+  currentContextTokens(): number {
+    return this.loop.currentContextTokens();
+  }
+
   mcpStatus(): ReturnType<McpClientManager['status']> {
     return this.mcp.status();
   }

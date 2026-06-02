@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { buildBody, parseResponse, type OpenAiChatResponse } from '../../src/llm/providers/openaiCompat.js';
+import {
+  buildBody,
+  isOpenAiReasoningModel,
+  parseResponse,
+  type OpenAiChatResponse,
+} from '../../src/llm/providers/openaiCompat.js';
 import type { CompletionRequest } from '../../src/llm/types.js';
 
 const baseReq: CompletionRequest = {
@@ -63,6 +68,50 @@ describe('openaiCompat.buildBody', () => {
     ]);
   });
 
+  // ── OpenAI reasoning-model parameter handling ────────────────────────
+
+  it('uses max_tokens + temperature for standard chat models (gpt-5.1)', () => {
+    const body = buildBody({ ...baseReq, model: 'gpt-5.1' });
+    expect(body.max_tokens).toBe(8192);
+    expect(body.temperature).toBe(1);
+    expect(body.max_completion_tokens).toBeUndefined();
+  });
+
+  it('uses max_completion_tokens + omits temperature for o4-mini (reasoning)', () => {
+    const body = buildBody({ ...baseReq, model: 'o4-mini' });
+    expect(body.max_completion_tokens).toBe(8192);
+    expect(body.max_tokens).toBeUndefined();
+    expect(body.temperature).toBeUndefined();
+  });
+
+  it('matches the OpenRouter-prefixed reasoning variant (openai/o4-mini)', () => {
+    const body = buildBody({ ...baseReq, model: 'openai/o4-mini' });
+    expect(body.max_completion_tokens).toBe(8192);
+    expect(body.max_tokens).toBeUndefined();
+    expect(body.temperature).toBeUndefined();
+  });
+
+  it('preserves max_tokens + temperature for grok-code-fast-1 (regression guard)', () => {
+    const body = buildBody({ ...baseReq, model: 'grok-code-fast-1' });
+    expect(body.max_tokens).toBe(8192);
+    expect(body.temperature).toBe(1);
+    expect(body.max_completion_tokens).toBeUndefined();
+  });
+
+  it('matches older reasoning models (o1-preview, o3-mini, o3-pro)', () => {
+    for (const model of ['o1', 'o1-mini', 'o1-preview', 'o3', 'o3-mini', 'o3-pro']) {
+      const body = buildBody({ ...baseReq, model });
+      expect(body.max_completion_tokens, `${model} should use max_completion_tokens`).toBe(8192);
+      expect(body.max_tokens, `${model} should NOT set max_tokens`).toBeUndefined();
+      expect(body.temperature, `${model} should NOT set temperature`).toBeUndefined();
+    }
+  });
+
+  it('honors a user-supplied maxTokens on reasoning models', () => {
+    const body = buildBody({ ...baseReq, model: 'o4-mini', maxTokens: 4096 });
+    expect(body.max_completion_tokens).toBe(4096);
+  });
+
   it('translates tool_result blocks into role:tool messages', () => {
     const body = buildBody({
       ...baseReq,
@@ -80,6 +129,19 @@ describe('openaiCompat.buildBody', () => {
       content: 'a.txt\nb.md',
       tool_call_id: 'call_1',
     });
+  });
+});
+
+describe('isOpenAiReasoningModel', () => {
+  it('matches the OpenAI o-series and its OpenRouter prefix', () => {
+    for (const m of ['o1', 'o1-mini', 'o1-preview', 'o3', 'o3-mini', 'o3-pro', 'o4', 'o4-mini', 'openai/o4-mini', 'o5-future']) {
+      expect(isOpenAiReasoningModel(m), m).toBe(true);
+    }
+  });
+  it('does NOT match standard or non-OpenAI models', () => {
+    for (const m of ['gpt-5.1', 'gpt-5', 'gpt-4.1', 'grok-code-fast-1', 'grok-4', 'claude-opus-4-7', 'claude-sonnet-4-6', 'gemini-2.5-flash', 'meta-llama/llama-3.3-70b', 'anthropic/claude-opus-4-7']) {
+      expect(isOpenAiReasoningModel(m), m).toBe(false);
+    }
   });
 });
 

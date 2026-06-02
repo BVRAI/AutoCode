@@ -1,4 +1,4 @@
-import { AuthResolver, type AuthMode } from '../auth/AuthResolver.js';
+import { AuthResolver, isProxyAuth, type AuthMode } from '../auth/AuthResolver.js';
 import {
   optionalNumber,
   requireString,
@@ -91,8 +91,8 @@ async function xaiSearch(
   model: string,
   auth: Exclude<AuthMode, { kind: 'missing' }>,
 ): Promise<ToolResult> {
-  const base = auth.kind === 'automax' ? auth.baseOverride : XAI_DEFAULT_BASE;
-  const token = auth.kind === 'automax' ? auth.token : auth.apiKey;
+  const base = isProxyAuth(auth) ? auth.baseOverride : XAI_DEFAULT_BASE;
+  const token = isProxyAuth(auth) ? auth.token : auth.apiKey;
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), XAI_SEARCH_TIMEOUT_MS);
   try {

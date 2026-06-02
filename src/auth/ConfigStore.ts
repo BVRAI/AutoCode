@@ -76,6 +76,14 @@ export interface AutocodeConfig {
   // explicitly choosing Skip. Set once; suppresses the wizard on subsequent
   // launches so it never re-prompts.
   firstRunCompletedAt?: string;
+  // Long-lived BVRAI proxy API key (`sk_amx_*`) obtained via `/login`. When
+  // present, AutoCode authenticates standalone proxy requests with this
+  // key. Distinct from `AUTOMAX_PROXY_TOKEN` (a short-lived Firebase ID
+  // token injected by V6) — the precedence in AuthResolver puts the env
+  // var first, so V6-embedded sessions always use V6's session and never
+  // see this key. Stored plaintext in Phase A; Phase C will migrate to OS
+  // keyring.
+  amxKey?: string;
 }
 
 export interface HookSpec {

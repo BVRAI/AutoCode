@@ -38,7 +38,11 @@ export interface OpenAiChatBody {
     function: { name: string; description: string; parameters: unknown };
   }>;
   tool_choice?: 'auto' | 'none' | 'required';
+  // Output-length cap. Standard chat models accept `max_tokens`; OpenAI's
+  // reasoning-family models (o1/o3/o4 series) reject it and require
+  // `max_completion_tokens` — only one of these fields is set per request.
   max_tokens?: number;
+  max_completion_tokens?: number;
   temperature?: number;
 }
 
@@ -63,16 +67,31 @@ export interface OpenAiChatResponse {
 }
 
 export function buildBody(req: CompletionRequest): OpenAiChatBody {
-  const messages: OpenAiMessage[] = [{ role: 'system', content: req.system }];
+  // No cache-breakpoint support here — fold any volatile suffix onto the end
+  // of the system message. OpenAI's automatic prefix caching still benefits
+  // from the stable content coming first.
+  const systemText = req.systemVolatile ? `${req.system}\n${req.systemVolatile}` : req.system;
+  const messages: OpenAiMessage[] = [{ role: 'system', content: systemText }];
   for (const m of req.messages) {
     messages.push(...toOpenAiMessages(m));
   }
   const body: OpenAiChatBody = {
     model: req.model,
     messages,
-    max_tokens: req.maxTokens ?? 8192,
-    temperature: req.temperature ?? 1.0,
   };
+  // OpenAI reasoning models (o1/o3/o4 series) require `max_completion_tokens`
+  // instead of `max_tokens`, and reject any `temperature` other than the
+  // default 1.0. Detect by model-id prefix and adjust accordingly. The
+  // OpenRouter route-prefix variant (`openai/o4-mini`) is matched too.
+  // Every other naming convention used by xAI / Anthropic / Google / non-o
+  // OpenRouter routes is safe — see isOpenAiReasoningModel below.
+  if (isOpenAiReasoningModel(req.model)) {
+    body.max_completion_tokens = req.maxTokens ?? 8192;
+    // Omit temperature entirely — reasoning models accept only the default.
+  } else {
+    body.max_tokens = req.maxTokens ?? 8192;
+    body.temperature = req.temperature ?? 1.0;
+  }
   if (req.tools.length > 0) {
     body.tools = req.tools.map((t) => ({
       type: 'function',
@@ -85,6 +104,15 @@ export function buildBody(req: CompletionRequest): OpenAiChatBody {
     body.tool_choice = 'auto';
   }
   return body;
+}
+
+// True for OpenAI's reasoning-family models (o1, o1-mini, o1-preview, o3,
+// o3-mini, o3-pro, o4, o4-mini, future o5-* …). Pattern is unambiguous in
+// practice — no other provider's naming convention starts with `o<digit>`:
+// xAI is `grok-*`, Anthropic is `claude-*`, Google is `gemini-*`,
+// OpenRouter prefixes everything else (`anthropic/...`, `meta-llama/...`).
+export function isOpenAiReasoningModel(model: string): boolean {
+  return /^(openai\/)?o\d/.test(model);
 }
 
 // One autocode Message can expand into multiple OpenAI messages:

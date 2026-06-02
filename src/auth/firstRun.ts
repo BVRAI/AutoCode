@@ -9,6 +9,7 @@
 // a cryptic "stub mode" warning.
 
 import type { AutocodeConfig } from './ConfigStore.js';
+import { getSecret, KNOWN_ACCOUNTS } from './SecretStore.js';
 
 // Env vars AuthResolver checks. Mirrors ConfigStore.envKeyFor so we don't
 // double-define; AUTOMAX_PROXY_TOKEN is the V6-embedded path.
@@ -21,9 +22,10 @@ const CRED_ENV_VARS = [
   'GOOGLE_API_KEY',
 ] as const;
 
-// True iff *any* credential AutoCode can use is set, either in process env
-// or persisted in the config file. Treats "configured for any provider" as
-// "user has been here before."
+// True iff *any* credential AutoCode can use is set, in any of: process
+// env, persisted plaintext config, or the SecretStore cache (which after
+// initialize() holds both keyring-stored and plaintext-fallback secrets).
+// Treats "configured for any provider" as "user has been here before."
 export function hasAnyCredentials(config: AutocodeConfig, env: NodeJS.ProcessEnv = process.env): boolean {
   for (const name of CRED_ENV_VARS) {
     const v = env[name];
@@ -32,6 +34,14 @@ export function hasAnyCredentials(config: AutocodeConfig, env: NodeJS.ProcessEnv
   const keys = config.apiKeys ?? {};
   for (const v of Object.values(keys)) {
     if (typeof v === 'string' && v.length > 0) return true;
+  }
+  // Check the SecretStore cache. After SecretStore.initialize() this
+  // includes keys migrated to the OS keyring (which are no longer in
+  // the plaintext config slots above), so without this check the wizard
+  // would re-fire after migration for users with prior saved keys.
+  for (const account of KNOWN_ACCOUNTS) {
+    const v = getSecret(account);
+    if (v && v.length > 0) return true;
   }
   return false;
 }
@@ -112,3 +122,9 @@ export const BYOK_PROVIDERS: ByokProviderOption[] = [
 // a single constant so the domain decision (bvrai.com vs automax.com vs
 // other) is a one-line change later.
 export const BVRAI_SIGNUP_URL = 'https://bvrai.com';
+
+// Where the user manages their `sk_amx_*` API keys — the page Atrium owns
+// (Plan 8 Phase A). The CLI's `/login` command opens this URL in a browser
+// so the user can mint and copy a key. If Atrium picks a different path,
+// update this single constant.
+export const BVRAI_API_KEYS_URL = 'https://bvrai.ca/dashboard/api-keys';

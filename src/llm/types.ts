@@ -42,7 +42,13 @@ export interface ToolSchema {
 
 export interface CompletionRequest {
   model: string;
+  /** Stable system prompt — the cacheable prefix. */
   system: string;
+  /** Optional volatile system content appended AFTER `system`. Providers that
+   *  support cache breakpoints (Anthropic) place the breakpoint between the two
+   *  so this suffix can change every turn without busting the cached prefix;
+   *  others concatenate it onto `system`. */
+  systemVolatile?: string;
   messages: Message[];
   tools: ToolSchema[];
   maxTokens?: number;

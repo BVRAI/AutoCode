@@ -64,6 +64,34 @@ describe('getGitWorkingState', () => {
     expect(s!.recentCommits[0]!.subject).toBe('initial commit');
   }, SESSION_TEST_TIMEOUT_MS);
 
+  it('handles an unborn repo (init, never committed) with the real branch name', () => {
+    // Regression: `git rev-parse --abbrev-ref HEAD` errors on zero commits, so
+    // this used to return null (no working-state) — now symbolic-ref resolves
+    // the unborn branch and the state is populated with empty commit/file lists.
+    initRepo(dir); // git init -b main, no commit
+    _resetSessionStateCacheForTests();
+    const s = getGitWorkingState(dir);
+    expect(s).not.toBeNull();
+    expect(s!.branch).toBe('main');
+    expect(s!.isDetachedHead).toBe(false);
+    expect(s!.recentCommits).toEqual([]);
+    expect(s!.modifiedFiles).toEqual([]);
+    expect(s!.stagedFiles).toEqual([]);
+  }, SESSION_TEST_TIMEOUT_MS);
+
+  it('flags a detached HEAD', () => {
+    initRepo(dir);
+    commit(dir, 'a.txt', 'a', 'first');
+    commit(dir, 'b.txt', 'b', 'second');
+    const firstSha = execSync('git rev-parse HEAD~1', { cwd: dir }).toString().trim();
+    sh(`git checkout -q ${firstSha}`, dir);
+    _resetSessionStateCacheForTests();
+    const s = getGitWorkingState(dir);
+    expect(s).not.toBeNull();
+    expect(s!.isDetachedHead).toBe(true);
+    expect(s!.branch).toBe('(HEAD detached)');
+  }, SESSION_TEST_TIMEOUT_MS);
+
   it('reports an unstaged modification under modifiedFiles', () => {
     initRepo(dir);
     commit(dir, 'a.txt', 'v1', 'init');

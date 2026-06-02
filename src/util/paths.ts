@@ -18,6 +18,10 @@ export function dataDir(): string {
 }
 
 export function configDir(): string {
+  const override = process.env.AUTOCODE_CONFIG_DIR;
+  if (override && override.trim().length > 0) {
+    return resolve(override);
+  }
   return join(homedir(), '.autocode');
 }
 
