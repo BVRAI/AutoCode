@@ -36,6 +36,7 @@ export const COMMAND_DEFS: ReadonlyArray<CommandDef> = [
   { name: 'mcp',      signature: '/mcp',                                      summary: 'List configured MCP servers and their tools',               args: 'none' },
   { name: 'plugins',  signature: '/plugins',                                  summary: 'List installed plugins (skills + hooks)',                   args: 'none' },
   { name: 'spinner',  signature: '/spinner [name]',                           summary: 'Show or set the active spinner',                            args: 'optional' },
+  { name: 'ui',       signature: '/ui [inline|cockpit|dark|light]',           summary: 'Switch TUI mode (inline/cockpit) or theme',                 args: 'optional' },
   { name: 'update',   signature: '/update',                                   summary: 'Check for and install the latest autocode',                 args: 'none' },
   { name: 'reflect',  signature: '/reflect',                                  summary: 'Propose AUTOCODE.md additions based on this session',       args: 'none' },
   { name: 'stop',     signature: '/stop',                                     summary: 'Cancel current task (or ^C)',                               args: 'none' },

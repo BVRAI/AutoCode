@@ -105,6 +105,14 @@ export interface BridgeState {
   // the folder is not a git repo (rail shows "no git"). Refreshed on the
   // rail's poll timer, so it tracks branch switches mid-session.
   project: { branch: string | null; dirty: number };
+  // Sticky plan panel (inline mode) — mirrors the todo_write list so a
+  // multi-phase task always shows its overall progress above the prompt.
+  plan: { items: PlanItem[]; collapsed: boolean };
+}
+
+export interface PlanItem {
+  text: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'interrupted';
 }
 
 type Listener = (s: BridgeState) => void;
@@ -123,6 +131,7 @@ const INITIAL: BridgeState = {
   overlay: null,
   model: { provider: '', name: '' },
   project: { branch: null, dirty: 0 },
+  plan: { items: [], collapsed: false },
 };
 
 let _id = 0;
@@ -251,6 +260,20 @@ export class BridgeStore {
     const cur = this.state.project;
     if (cur.branch === branch && cur.dirty === dirty) return;
     this.emit({ ...this.state, project: { branch, dirty } });
+  }
+
+  // Mirror the todo_write list into the sticky plan panel. Equality-guarded on
+  // a shallow (text, status) compare so repeated identical writes don't churn.
+  setPlan(items: PlanItem[]): void {
+    const cur = this.state.plan.items;
+    if (cur.length === items.length && cur.every((c, i) => c.text === items[i]!.text && c.status === items[i]!.status)) {
+      return;
+    }
+    this.emit({ ...this.state, plan: { ...this.state.plan, items } });
+  }
+
+  togglePlanCollapsed(): void {
+    this.emit({ ...this.state, plan: { ...this.state.plan, collapsed: !this.state.plan.collapsed } });
   }
 
   setOverlay(overlay: BridgeState['overlay']): void {

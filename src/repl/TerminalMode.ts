@@ -21,6 +21,7 @@ import { isBundled } from '../util/host.js';
 import { applyProposal, type Proposal } from '../agent/SessionReflection.js';
 import { getGitWorkingState } from '../agent/SessionState.js';
 import { contextWindowFor } from '../util/contextWindow.js';
+import { currentTodos } from '../tools/todoWrite.js';
 import { ConfigStore } from '../auth/ConfigStore.js';
 import { runHooksForEvent } from '../agent/HookRunner.js';
 import { getPlugins, pluginHooksForEvent } from '../agent/Plugins.js';
@@ -174,9 +175,20 @@ export class TerminalMode {
       store.setMode(this.ctx.mode);
       store.setModel(this.ctx.model.provider, this.ctx.model.model);
       refreshProjectGit();
+      store.setPlan(currentTodos(this.ctx.sessionId).map((td) => ({ text: td.text, status: td.status })));
     }, 1500);
 
     const version = await this.readVersion();
+
+    const uiCfg = (() => {
+      try {
+        return new ConfigStore().load().ui ?? {};
+      } catch {
+        return {};
+      }
+    })();
+    const uiMode: 'inline' | 'cockpit' = uiCfg.mode === 'cockpit' ? 'cockpit' : 'inline';
+    const uiTheme = uiCfg.theme === 'light' ? 'light' : 'dark';
 
     this.inkInstance = await mountInkApp({
       store,
@@ -185,6 +197,8 @@ export class TerminalMode {
       modelProvider: this.ctx.model.provider,
       modelName: this.ctx.model.model,
       version,
+      uiMode,
+      theme: uiTheme,
       onSubmit: (text) => this.handleSubmit(text),
       onCycleMode: () => {
         this.handleCycle();
@@ -412,7 +426,32 @@ export class TerminalMode {
         return this.handlePlugins();
       case 'spinner':
         return this.handleSpinner(args);
+      case 'ui':
+        return this.handleUi(args);
     }
+  }
+
+  private handleUi(args: string[]): void {
+    const cs = new ConfigStore();
+    const cfg = cs.load();
+    const ui = cfg.ui ?? {};
+    if (args.length === 0) {
+      this.renderer.info(`ui mode: ${ui.mode ?? 'inline'} · theme: ${ui.theme ?? 'dark'}`);
+      this.renderer.dim('set with  /ui inline|cockpit  or  /ui dark|light');
+      return;
+    }
+    const arg = args[0]!.toLowerCase();
+    if (arg === 'inline' || arg === 'cockpit') {
+      cs.save({ ...cfg, ui: { ...ui, mode: arg } });
+      this.renderer.dim(`ui mode → ${arg} (restart autocode to apply)`);
+      return;
+    }
+    if (arg === 'dark' || arg === 'light') {
+      cs.save({ ...cfg, ui: { ...ui, theme: arg } });
+      this.renderer.dim(`ui theme → ${arg} (restart autocode to apply)`);
+      return;
+    }
+    this.renderer.error(`unknown /ui option '${arg}'. valid: inline, cockpit, dark, light`);
   }
 
   private handleSpinner(args: string[]): void {

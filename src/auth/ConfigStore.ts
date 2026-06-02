@@ -76,6 +76,13 @@ export interface AutocodeConfig {
   // explicitly choosing Skip. Set once; suppresses the wizard on subsequent
   // launches so it never re-prompts.
   firstRunCompletedAt?: string;
+  // Bridge TUI rendering. `mode`: 'inline' (default — flicker-free append-only
+  // scrolling log) or 'cockpit' (the full-screen alt-screen rail). `theme`:
+  // 'dark' (default) or 'light'. Toggled at runtime with `/ui`.
+  ui?: {
+    mode?: 'inline' | 'cockpit';
+    theme?: 'dark' | 'light';
+  };
   // Long-lived BVRAI proxy API key (`sk_amx_*`) obtained via `/login`. When
   // present, AutoCode authenticates standalone proxy requests with this
   // key. Distinct from `AUTOMAX_PROXY_TOKEN` (a short-lived Firebase ID

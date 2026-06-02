@@ -6,7 +6,8 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
 import { Rail } from './Rail.js';
 import { Main } from './Main.js';
-import { BR } from './theme.js';
+import { Inline } from './Inline.js';
+import { ThemeContext, themeByName } from './theme.js';
 import { useBridgeState, useTerminalSize } from './hooks.js';
 import type { BridgeStore } from './store.js';
 import type { SpinnerId } from './spinners.js';
@@ -34,6 +35,10 @@ export interface InkAppProps {
   modelProvider: string;
   modelName: string;
   version: string;
+  // 'inline' (default, flicker-free append-only) or 'cockpit' (full-screen rail).
+  uiMode: 'inline' | 'cockpit';
+  // Theme name ('dark' | 'light'); anything else falls back to dark.
+  theme?: string;
 
   // Callbacks into the host (TerminalMode/AgentHandler).
   onSubmit: (text: string) => void;
@@ -126,6 +131,11 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
       setExitArmed(true);
       // Disarm after 3s if no second press.
       setTimeout(() => setExitArmed(false), 3000);
+      return;
+    }
+    // ^P toggles the sticky plan panel between expanded and collapsed.
+    if (key.ctrl && (ch === 'p' || ch === 'P')) {
+      props.store.togglePlanCollapsed();
       return;
     }
     if (key.tab && key.shift) {
@@ -288,29 +298,54 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
     overlay = <SlashMenu commands={slashMatches} selectedIdx={slashIdx} />;
   }
 
+  const theme = themeByName(props.theme);
+
+  // Inline (default): append-only, no full-screen box, no alt-screen.
+  if (props.uiMode !== 'cockpit') {
+    return (
+      <ThemeContext.Provider value={theme}>
+        <Inline
+          state={state}
+          input={input}
+          cursor={cursor}
+          spinnerId={spinnerId}
+          overlay={overlay}
+          exitArmed={exitArmed}
+          projectRoot={props.projectRoot}
+          version={props.version}
+          modelProvider={liveProvider}
+          modelName={liveModel}
+        />
+      </ThemeContext.Provider>
+    );
+  }
+
+  // Cockpit (opt-in): the original full-screen alt-screen rail + viewport.
   return (
-    <Box flexDirection="column" width={columns} height={rows}>
-      {showBanner && (
-        <Box flexDirection="column" paddingX={2}>
-          {bannerBlock(WELCOME_BANNER).map((line, i) => (
-            <Text key={i} color={BR.teal}>{line}</Text>
-          ))}
-        </Box>
-      )}
-      <Box flexDirection="row" flexGrow={1}>
-        {showRail && (
-          <Rail
-            state={state}
-            sessionId={props.sessionId}
-            projectRoot={props.projectRoot}
-            modelProvider={liveProvider}
-            modelName={liveModel}
-            version={props.version}
-          />
+    <ThemeContext.Provider value={theme}>
+      <Box flexDirection="column" width={columns} height={rows}>
+        {showBanner && (
+          <Box flexDirection="column" paddingX={2}>
+            {bannerBlock(WELCOME_BANNER).map((line, i) => (
+              <Text key={i} color={theme.accent}>{line}</Text>
+            ))}
+          </Box>
         )}
-        <Main state={state} input={input} cursor={cursor} spinnerId={spinnerId} overlay={overlay} exitArmed={exitArmed} />
+        <Box flexDirection="row" flexGrow={1}>
+          {showRail && (
+            <Rail
+              state={state}
+              sessionId={props.sessionId}
+              projectRoot={props.projectRoot}
+              modelProvider={liveProvider}
+              modelName={liveModel}
+              version={props.version}
+            />
+          )}
+          <Main state={state} input={input} cursor={cursor} spinnerId={spinnerId} overlay={overlay} exitArmed={exitArmed} />
+        </Box>
       </Box>
-    </Box>
+    </ThemeContext.Provider>
   );
 }
 
@@ -345,15 +380,16 @@ function withSynchronizedOutput(base: NodeJS.WriteStream): NodeJS.WriteStream {
 // the user's shell with prior scrollback intact).
 export async function mountInkApp(props: InkAppProps): Promise<{ unmount: () => void; waitUntilExit: () => Promise<void> }> {
   const { render } = await import('ink');
-  // Enter alt-screen: save the cursor (DECSC), switch to alternate
-  // screen buffer (1049h), move home, clear. On exit we restore.
-  process.stdout.write('\x1b[?1049h\x1b[H\x1b[2J');
+  // Alt-screen is ONLY for cockpit mode (it owns the full window). Inline mode
+  // renders append-only into the normal scrollback — no takeover, no clear.
+  const altScreen = props.uiMode === 'cockpit';
+  if (altScreen) process.stdout.write('\x1b[?1049h\x1b[H\x1b[2J');
   let exited = false;
   const restore = (): void => {
     if (exited) return;
     exited = true;
     try {
-      process.stdout.write('\x1b[?1049l');
+      if (altScreen) process.stdout.write('\x1b[?1049l');
     } catch {
       /* shell already closed */
     }

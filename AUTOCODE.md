@@ -30,3 +30,7 @@ You are operating inside the `autocode` repository — the source for the very t
 - Don't add dependencies casually. Every npm package becomes a supply-chain risk and a Windows-compatibility concern. Prefer hand-rolled implementations of small primitives.
 - Follow Anthropic's "writing effective tools" guidance when adding or changing tool descriptions — write them as if explaining to a new colleague.
 - When the user asks for a UX change, also consider whether the same change would surprise a user upgrading from a previous version. If so, mention the migration concern.
+
+## Reference material
+
+- `_context_only/` — read-only reference material the user keeps for you to consult: design files, screenshots, log outputs, exported specs. It is **gitignored and never part of the build** — read from it for context, but never import it into source or commit it. (A convention used across the user's projects.)

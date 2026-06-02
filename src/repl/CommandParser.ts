@@ -20,7 +20,8 @@ export type LocalCommandName =
   | 'update'
   | 'reflect'
   | 'plugins'
-  | 'spinner';
+  | 'spinner'
+  | 'ui';
 
 export interface LocalCommand {
   kind: 'local';
@@ -62,6 +63,7 @@ const KNOWN: ReadonlySet<LocalCommandName> = new Set([
   'reflect',
   'plugins',
   'spinner',
+  'ui',
 ]);
 
 export function parse(line: string): ParsedInput {
