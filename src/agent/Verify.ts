@@ -121,7 +121,14 @@ function inferVerifyCommand(root: string): string | null {
   // Build-only verification: `cmake --build build` after a one-shot configure.
   // Test execution is too project-specific (CTest, raw ninja targets, custom
   // scripts) to infer safely — leave that to an AUTOCODE.md `verify:` directive.
-  if (existsSync(join(root, 'CMakeLists.txt'))) {
+  //
+  // Skipped under the bench harness: there the harness configures + builds with
+  // the toolchain env the agent's sandbox doesn't carry, so a self-build here
+  // false-fails on environment grounds (not a code bug). That phantom failure
+  // gets fed back as "fix the failures," and the agent burns its whole budget
+  // chasing a build error in already-correct code. The harness runs the
+  // authoritative tests itself, so cpp self-verify is redundant as well as broken.
+  if (existsSync(join(root, 'CMakeLists.txt')) && process.env.AUTOCODE_BENCH_MODE !== '1') {
     return 'cmake -B build && cmake --build build';
   }
 
