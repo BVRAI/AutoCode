@@ -52,6 +52,9 @@ program
   .option('--banners', 'preview the startup banner options and exit', false)
   .option('--update', 'install the latest autocode from npm and exit', false)
   .option('--automax', 'emit machine-readable activity events for the Automax host', false)
+  .option('--temperature <n>', 'sampling temperature for model calls (e.g. 0 for deterministic); default: provider default')
+  .option('--max-cost <usd>', 'stop a turn once its accumulated model cost exceeds this many USD')
+  .option('--max-iterations <n>', 'max tool-call iterations per turn before stopping (default 40)')
   .action(
     async (opts: {
       projectRoot?: string;
@@ -65,6 +68,9 @@ program
       banners?: boolean;
       update?: boolean;
       automax?: boolean;
+      temperature?: string;
+      maxCost?: string;
+      maxIterations?: string;
     }) => {
     if (opts.banners) {
       printBannerGallery();
@@ -174,6 +180,21 @@ program
     // path swaps in the pinned-bar prompter once TerminalMode starts.
     const prompter = new PrompterRef(headless ? new AutoDenyPrompter() : new PlainPrompter());
 
+    // Optional sampling + budget flags (used by the benchmark harness; for
+    // normal runs these are undefined and the provider / loop defaults apply).
+    const numFlag = (raw: string | undefined, name: string): number | undefined => {
+      if (raw === undefined) return undefined;
+      const n = Number(raw);
+      if (!Number.isFinite(n)) {
+        process.stderr.write(`invalid ${name}: ${raw}\n`);
+        process.exit(2);
+      }
+      return n;
+    };
+    const temperatureFlag = numFlag(opts.temperature, '--temperature');
+    const maxCostFlag = numFlag(opts.maxCost, '--max-cost');
+    const maxIterationsFlag = numFlag(opts.maxIterations, '--max-iterations');
+
     const ctx: SessionContext = {
       sessionId,
       projectRoot: root,
@@ -182,6 +203,11 @@ program
       model: { provider, model },
       startedAt: new Date().toISOString(),
       mode: initialMode,
+      sampling: temperatureFlag !== undefined ? { temperature: temperatureFlag } : undefined,
+      budget:
+        maxCostFlag !== undefined || maxIterationsFlag !== undefined
+          ? { maxCostUsd: maxCostFlag, maxIterations: maxIterationsFlag }
+          : undefined,
     };
 
     const renderer = new ConsoleRenderer();

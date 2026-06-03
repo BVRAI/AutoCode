@@ -410,8 +410,12 @@ export class AgentLoop {
     const recentToolSigs: string[] = [];
     const consecutiveFailures = new Map<string, number>();
     let mutated = false;
+    // Per-turn iteration backstop. Defaults to MAX_ITERATIONS but the budget
+    // can raise it — the benchmark harness governs by cost instead and only
+    // wants this as a loose runaway guard.
+    const maxIterations = ctx.budget?.maxIterations ?? MAX_ITERATIONS;
 
-    for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
+    for (let iter = 0; iter < maxIterations; iter++) {
       if (this.cancelled) {
         this.deps.renderer.spinner.stop();
         this.deps.renderer.dim('(cancelled)');
@@ -426,6 +430,31 @@ export class AgentLoop {
         this.deps.renderer.dim('  (auto-compacting — conversation context is getting large)');
         await this.compactConversation(ctx);
         this.lastInputTokens = 0;
+      }
+      // Cost-budget backstop: once the turn's accumulated model cost crosses
+      // the configured ceiling, stop before paying for another call. The model
+      // is deliberately NOT told about this — a generous budget means honest
+      // work finishes on its own first, and surfacing a shrinking budget just
+      // provokes rushed, low-quality last-ditch attempts.
+      const maxCostUsd = ctx.budget?.maxCostUsd;
+      if (maxCostUsd !== undefined && maxCostUsd > 0) {
+        const { cost } = estimateCost(
+          {
+            inputTokens: totals.in,
+            outputTokens: totals.out,
+            cacheReadTokens: totals.cacheRead,
+            cacheWriteTokens: totals.cacheWrite,
+          },
+          ctx.model.provider,
+          ctx.model.model,
+        );
+        if (cost > maxCostUsd) {
+          this.deps.renderer.warn(
+            `(stopped — turn cost $${cost.toFixed(2)} reached the $${maxCostUsd.toFixed(2)} budget)`,
+          );
+          this.deps.store.touch(null);
+          return { mutated };
+        }
       }
       this.deps.store.touch(userText.slice(0, 80));
 
@@ -442,6 +471,7 @@ export class AgentLoop {
             systemVolatile,
             messages: this.conversation,
             tools: this.deps.registry.schemas(),
+            temperature: ctx.sampling?.temperature,
           },
         );
         for await (const evt of stream as AsyncIterable<StreamEvent>) {
@@ -715,7 +745,7 @@ export class AgentLoop {
       }
     }
 
-    this.deps.renderer.warn(`(stopped after ${MAX_ITERATIONS} iterations)`);
+    this.deps.renderer.warn(`(stopped after ${maxIterations} iterations)`);
     this.deps.store.touch(null);
     return { mutated };
   }

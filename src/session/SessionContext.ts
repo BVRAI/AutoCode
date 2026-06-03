@@ -23,6 +23,11 @@ export interface SessionContext {
   model: ModelConfig;
   startedAt: string;
   mode: AgentMode;
+  // Optional per-invocation sampling + budget controls, set from CLI flags
+  // (used by the benchmark harness; absent for normal interactive runs, where
+  // the provider sampling default and the built-in iteration cap apply).
+  sampling?: { temperature?: number };
+  budget?: { maxCostUsd?: number; maxIterations?: number };
 }
 
 // Shift+Tab cycle order: default → autocode → planning → default.
