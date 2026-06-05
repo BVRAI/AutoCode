@@ -17,7 +17,9 @@ import { useTheme, type Theme } from './theme.js';
 import { useTick, useTerminalSize } from './hooks.js';
 import { StatusBar } from './StatusBar.js';
 import { PlanPanel } from './PlanPanel.js';
+import { Markdown } from './Markdown.js';
 import { glyphs } from './glyphs.js';
+import { WORDMARK, WORDMARK_COMPACT, TAGLINE, gradientSegments, hexToRgb } from '../Banner.js';
 
 const DIFF_CAP = 24;
 
@@ -67,6 +69,7 @@ export function Inline(props: InlineProps): React.JSX.Element {
               model={props.modelName}
               projectRoot={props.projectRoot}
               branch={state.project.branch}
+              columns={columns}
             />
           ) : (
             <EntryRow key={entry.key} t={t} entry={entry} columns={columns} />
@@ -120,10 +123,8 @@ function EntryRow({ t, entry, columns }: { t: Theme; entry: Entry; columns: numb
       );
     case 'assistant':
       return (
-        <Box marginTop={1}>
-          <Box flexGrow={1}>
-            <Text color={t.ink}>{item.text ?? ''}</Text>
-          </Box>
+        <Box marginTop={1} flexGrow={1}>
+          <Markdown text={item.text ?? ''} />
         </Box>
       );
     case 'info':
@@ -279,6 +280,7 @@ function Welcome({
   model,
   projectRoot,
   branch,
+  columns,
 }: {
   t: Theme;
   version: string;
@@ -286,14 +288,31 @@ function Welcome({
   model: string;
   projectRoot: string;
   branch: string | null;
+  columns: number;
 }): React.JSX.Element {
   const g = glyphs();
+  // Big face when there's room (≥ 69 cols), else the 2-row compact face.
+  const art = columns >= WORDMARK[0]!.length + 1 ? WORDMARK : WORDMARK_COMPACT;
+  const width = art[0]!.length;
+  // Theme-aware gradient: accent (teal) → agent (violet), painted natively as
+  // per-color <Text> runs so it's safe inside <Static> (no embedded ANSI).
+  const from = hexToRgb(t.accent);
+  const to = hexToRgb(t.agent);
   return (
     <Box flexDirection="column">
-      <Box>
-        <Text color={t.accent} bold>autocode</Text>
-        <Text color={t.inkFaint}> v{version}</Text>
-        <Text color={t.inkFaint}>{'  ·  '}</Text>
+      {art.map((row, r) => (
+        <Box key={r}>
+          {gradientSegments(row, width, from, to).map((s, i) => (
+            <Text key={i} color={s.color}>{s.text}</Text>
+          ))}
+        </Box>
+      ))}
+      {/* tagline — version already carries its own leading 'v' */}
+      <Box marginTop={1}>
+        <Text color={t.inkFaint}>{TAGLINE}{'  ·  '}{version}</Text>
+      </Box>
+      {/* meta — wordmark + tagline cover name/version, so this drops them */}
+      <Box marginTop={1}>
         <Text color={t.ink}>{provider}/{model}</Text>
         <Text color={t.inkFaint}>{'  ·  '}</Text>
         <Text color={t.inkDim}>{basename(projectRoot)}</Text>

@@ -10,6 +10,7 @@ export class Spinner {
   private frameIdx = 0;
   private label = '';
   private active = false;
+  private muted = false;
   private readonly enabled: boolean;
 
   constructor(private readonly stream: NodeJS.WriteStream = process.stderr) {
@@ -19,9 +20,19 @@ export class Spinner {
     this.enabled = Boolean(stream.isTTY) && process.env['AUTOCODE_AUTOMAX'] !== '1';
   }
 
+  // Silence the spinner without touching its many call sites. The Ink Bridge
+  // UI mutes it while it owns the screen: Bridge renders its own activity
+  // indicator (the inline ActivityLine), so this stderr spinner would
+  // otherwise bleed a duplicate 'thinking' line — plus a stray \r-erased blank
+  // line — below Ink's frame, since inline mode has no alt-screen to hide it.
+  mute(muted: boolean): void {
+    this.muted = muted;
+    if (muted) this.stop(); // erase any frame already on screen
+  }
+
   start(label: string): void {
     this.label = label;
-    if (!this.enabled) return;
+    if (!this.enabled || this.muted) return;
     if (this.active) {
       this.render();
       return;
@@ -54,7 +65,7 @@ export class Spinner {
   }
 
   private render(): void {
-    if (!this.enabled) return;
+    if (!this.enabled || this.muted) return;
     const frame = FRAMES[this.frameIdx]!;
     this.stream.write(`\r${pc.cyan(frame)} ${pc.dim(this.label)}\x1b[K`);
   }

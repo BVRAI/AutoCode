@@ -37,6 +37,11 @@ export class ConsoleRenderer {
   // is a no-op in this mode — the rail/banner render via Ink components.
   setSink(sink: RendererSink | null): void {
     this.sink = sink;
+    // When Bridge/Ink owns the screen it renders its own activity spinner
+    // (the inline ActivityLine), so mute the stderr spinner — otherwise it
+    // bleeds a duplicate 'thinking' line (and a stray blank line) below Ink's
+    // frame in inline mode. Re-enabled when the sink is cleared on exit.
+    this.spinner.mute(sink !== null);
   }
 
   setUpdateBanner(text: string | null): void {

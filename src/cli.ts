@@ -5,7 +5,6 @@ import { ConsoleRenderer } from './repl/ConsoleRenderer.js';
 import { TerminalMode } from './repl/TerminalMode.js';
 import { runHeadless } from './repl/HeadlessMode.js';
 import { PrompterRef, AutoDenyPrompter, PlainPrompter } from './repl/Prompter.js';
-import { printBannerGallery } from './repl/Banner.js';
 import { checkForUpdate, readOwnPackage, runUpdate, shouldAutoUpdate } from './update/UpdateChecker.js';
 import { isBundled } from './util/host.js';
 import pc from 'picocolors';
@@ -49,7 +48,6 @@ program
   .option('-p, --print <prompt>', 'run a single task non-interactively and exit')
   .option('--resume <sessionId>', 'resume a specific prior session')
   .option('-c, --continue', 'resume the most recent prior session', false)
-  .option('--banners', 'preview the startup banner options and exit', false)
   .option('--update', 'install the latest autocode from npm and exit', false)
   .option('--automax', 'emit machine-readable activity events for the Automax host', false)
   .option('--temperature <n>', 'sampling temperature for model calls (e.g. 0 for deterministic); default: provider default')
@@ -65,16 +63,31 @@ program
       print?: string;
       resume?: string;
       continue?: boolean;
-      banners?: boolean;
       update?: boolean;
       automax?: boolean;
       temperature?: string;
       maxCost?: string;
       maxIterations?: string;
     }) => {
-    if (opts.banners) {
-      printBannerGallery();
-      process.exit(0);
+    // Fresh-screen launch (like Claude Code / Gemini / Codex — effectively a
+    // Ctrl+L first): clear the terminal so the banner opens on a clean slate.
+    // Done here, before any startup notice prints, so resume/.env/first-run
+    // lines land on the cleared screen instead of being wiped by a late clear.
+    // Inline + interactive only: cockpit gets its clean screen from the
+    // alt-screen buffer (and restores the user's scrollback on exit), and
+    // headless / --automax / piped runs have no UI to frame. Drop the \x1b[3J
+    // to keep prior scrollback (true Ctrl+L); we clear it for a fully fresh feel.
+    try {
+      const uiMode = new ConfigStore().load().ui?.mode ?? 'inline';
+      const interactiveInline =
+        process.stdout.isTTY &&
+        !opts.update &&
+        typeof opts.print !== 'string' &&
+        !opts.automax &&
+        uiMode !== 'cockpit';
+      if (interactiveInline) process.stdout.write('\x1b[2J\x1b[3J\x1b[H');
+    } catch {
+      /* clearing is cosmetic — never let it block startup */
     }
     if (opts.update) {
       if (isBundled()) {

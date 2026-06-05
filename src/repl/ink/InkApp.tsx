@@ -3,7 +3,7 @@
 // the controller (typically TerminalMode) for submit / mode-cycle / exit.
 
 import React, { useEffect, useState, useCallback } from 'react';
-import { Box, Text, useApp, useInput } from 'ink';
+import { Box, useApp, useInput } from 'ink';
 import { Rail } from './Rail.js';
 import { Main } from './Main.js';
 import { Inline } from './Inline.js';
@@ -11,16 +11,10 @@ import { ThemeContext, themeByName } from './theme.js';
 import { useBridgeState, useTerminalSize } from './hooks.js';
 import type { BridgeStore } from './store.js';
 import type { SpinnerId } from './spinners.js';
-import { bannerBlock, BANNER_GALLERY } from '../Banner.js';
 import { ModelPicker } from './ModelPicker.js';
 import { ProviderPicker } from './ProviderPicker.js';
 import { SlashMenu } from './SlashMenu.js';
 import { filterCommands } from '../commands.js';
-
-// Bridge uses a single static welcome banner — gallery rotation was loud
-// and stacked with the rail wordmark. ID 3 is the clean a-u-t-o-c-o-d-e
-// inside a single-line box.
-const WELCOME_BANNER = BANNER_GALLERY.find((b) => b.id === 3) ?? BANNER_GALLERY[0]!;
 
 export interface InkAppHandle {
   // Imperative API the controller uses to drive the UI from outside React.
@@ -53,7 +47,6 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
   const state = useBridgeState(props.store);
   const { columns, rows } = useTerminalSize();
   const [spinnerId, setSpinnerId] = useState<SpinnerId>('braille');
-  const [showBanner, setShowBanner] = useState<boolean>(true);
   // Read /spinner config asynchronously after mount (so the file read
   // doesn't block first paint).
   useEffect(() => {
@@ -68,12 +61,6 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
       }
     })();
   }, []);
-
-  // First-prompt-ends-the-banner: dismiss the welcome banner once the
-  // user has submitted anything (turn > 0).
-  useEffect(() => {
-    if (state.turn > 0 && showBanner) setShowBanner(false);
-  }, [state.turn, showBanner]);
 
   const app = useApp();
 
@@ -324,13 +311,6 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
   return (
     <ThemeContext.Provider value={theme}>
       <Box flexDirection="column" width={columns} height={rows}>
-        {showBanner && (
-          <Box flexDirection="column" paddingX={2}>
-            {bannerBlock(WELCOME_BANNER).map((line, i) => (
-              <Text key={i} color={theme.accent}>{line}</Text>
-            ))}
-          </Box>
-        )}
         <Box flexDirection="row" flexGrow={1}>
           {showRail && (
             <Rail

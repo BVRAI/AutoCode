@@ -8,6 +8,7 @@ import { BR } from './theme.js';
 import type { BridgeState, ToolEntry, TranscriptItem } from './store.js';
 import { Spinner } from './spinners.js';
 import type { SpinnerId } from './spinners.js';
+import { Markdown } from './Markdown.js';
 import { renderUnifiedDiff } from '../../util/diff.js';
 
 export interface MainProps {
@@ -169,7 +170,7 @@ function AcMsg({ text }: { text: string }): React.JSX.Element {
     <Box marginTop={1}>
       <Text color={BR.violet} bold>{'ac '}</Text>
       <Box flexGrow={1}>
-        <Text color={BR.ink}>{text}</Text>
+        <Markdown text={text} />
       </Box>
     </Box>
   );
