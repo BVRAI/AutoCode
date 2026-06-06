@@ -45,11 +45,13 @@ export class EditFileTool implements Tool {
     const count = countOccurrences(original, oldText);
 
     if (count === 0) {
+      const base =
+        `Could not find old_text in ${toRelative(ctx.session.projectRoot, target)}. ` +
+        `Read the file first and retry with the exact existing text (including whitespace).`;
+      const hint = noMatchHint(original, oldText);
       return {
         summary: 'old_text not found',
-        content:
-          `Could not find old_text in ${toRelative(ctx.session.projectRoot, target)}. ` +
-          `Read the file first and retry with the exact existing text (including whitespace).`,
+        content: hint ? `${base}\n\n${hint}` : base,
         isError: true,
       };
     }
@@ -86,4 +88,84 @@ function countOccurrences(haystack: string, needle: string): number {
     i += needle.length;
   }
   return count;
+}
+
+// On a failed exact match, explain WHY — usually a whitespace/indentation
+// mismatch (the #1 "edit didn't apply" failure mode). Returns a hint the model
+// can act on in a single retry, or null if nothing useful was found. Runs only
+// on the error path, so a little extra scanning is fine.
+const HINT_SNIPPET_CAP = 1500;
+
+function noMatchHint(original: string, oldText: string): string | null {
+  const fileLines = original.split(/\r?\n/);
+  const oldLines = trimBlankEnds(oldText.split(/\r?\n/));
+  if (oldLines.length === 0) return null;
+
+  const norm = (s: string): string => s.trim().replace(/\s+/g, ' ');
+  const normFile = fileLines.map(norm);
+  const normOld = oldLines.map(norm);
+  const w = normOld.length;
+
+  // 1) Whitespace-insensitive window match — the high-value case. Locate where
+  // the block matches ignoring indentation/spacing, then hand back the EXACT
+  // current bytes so the model retries verbatim.
+  for (let i = 0; i + w <= normFile.length; i++) {
+    let ok = true;
+    for (let j = 0; j < w; j++) {
+      if (normFile[i + j] !== normOld[j]) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) {
+      const snippet = cap(fileLines.slice(i, i + w).join('\n'));
+      return (
+        `A whitespace-only difference was found at lines ${i + 1}-${i + w}. ` +
+        `The file currently has this exact text — retry old_text with it verbatim:\n${snippet}`
+      );
+    }
+  }
+
+  // 2) Closest-line fallback — point the model at the most similar region.
+  const firstOld = normOld[0]!;
+  let bestIdx = -1;
+  let bestScore = 0;
+  for (let i = 0; i < normFile.length; i++) {
+    const score = lineSimilarity(normFile[i]!, firstOld);
+    if (score > bestScore) {
+      bestScore = score;
+      bestIdx = i;
+    }
+  }
+  if (bestIdx >= 0 && bestScore >= 0.5) {
+    const s = Math.max(0, bestIdx - 3);
+    const e = Math.min(fileLines.length - 1, bestIdx + 3);
+    const region = fileLines.slice(s, e + 1).map((l, k) => `${s + k + 1}: ${l}`).join('\n');
+    return `No close match. The most similar line is ${bestIdx + 1}; here is that region:\n${cap(region)}`;
+  }
+  return null;
+}
+
+function trimBlankEnds(lines: string[]): string[] {
+  let s = 0;
+  let e = lines.length;
+  while (s < e && lines[s]!.trim() === '') s++;
+  while (e > s && lines[e - 1]!.trim() === '') e--;
+  return lines.slice(s, e);
+}
+
+// Jaccard overlap of whitespace-split tokens — cheap, dependency-free, enough
+// to point the model at the right line.
+function lineSimilarity(a: string, b: string): number {
+  if (!a || !b) return 0;
+  const ta = new Set(a.split(' ').filter(Boolean));
+  const tb = new Set(b.split(' ').filter(Boolean));
+  if (ta.size === 0 || tb.size === 0) return 0;
+  let inter = 0;
+  for (const t of ta) if (tb.has(t)) inter++;
+  return inter / Math.max(ta.size, tb.size);
+}
+
+function cap(s: string): string {
+  return s.length > HINT_SNIPPET_CAP ? s.slice(0, HINT_SNIPPET_CAP) + '\n… (truncated)' : s;
 }

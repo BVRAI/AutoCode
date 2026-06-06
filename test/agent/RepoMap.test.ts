@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildRepoMap } from '../../src/agent/RepoMap.js';
+import { buildRepoMap, repoFileCount } from '../../src/agent/RepoMap.js';
 
 describe('RepoMap', () => {
   let root: string;
@@ -58,6 +58,15 @@ describe('RepoMap', () => {
     const map = buildRepoMap(root);
     expect(map).toContain('index.html');
     expect(map).toContain('style.css');
+  });
+
+  it('repoFileCount counts scanned source files only', () => {
+    writeFileSync(join(root, 'a.ts'), 'export const a = 1;\n');
+    writeFileSync(join(root, 'b.ts'), 'export const b = 2;\n');
+    mkdirSync(join(root, 'sub'));
+    writeFileSync(join(root, 'sub', 'c.ts'), 'export const c = 3;\n');
+    writeFileSync(join(root, 'notes.txt'), 'not a source file');
+    expect(repoFileCount(root)).toBe(3);
   });
 
   it('caps the digest size on a large repo', () => {

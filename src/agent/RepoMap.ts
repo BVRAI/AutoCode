@@ -13,23 +13,49 @@ const SOURCE_EXT = new Set([
   '.css', '.scss', '.html', '.vue', '.svelte',
 ]);
 
-const mapCache = new Map<string, string>();
+// Repo size at/above which the system prompt switches on the "navigating a
+// large codebase" localization protocol. Polyglot-style single-exercise repos
+// sit far below this; real projects sit far above. Stable per session, so
+// gating on it is cache-safe (same pattern as the git-skill gate).
+export const LARGE_REPO_FILE_THRESHOLD = 25;
+
+interface RepoMapInfo {
+  digest: string;
+  fileCount: number;
+}
+
+const mapCache = new Map<string, RepoMapInfo>();
 
 // A compact digest of the project — file tree + top-level symbols — injected
 // into the system prompt so the agent can navigate without blind re-reads.
 // Cached per project root for the life of the process.
 export function getRepoMap(projectRoot: string): string {
+  return repoMapInfo(projectRoot).digest;
+}
+
+// Number of source files scanned for the repo map (capped at MAX_FILES). A
+// stable per-session "how big is this repo" signal used for prompt gating.
+export function repoFileCount(projectRoot: string): number {
+  return repoMapInfo(projectRoot).fileCount;
+}
+
+function repoMapInfo(projectRoot: string): RepoMapInfo {
   const cached = mapCache.get(projectRoot);
   if (cached !== undefined) return cached;
-  const map = buildRepoMap(projectRoot);
-  mapCache.set(projectRoot, map);
-  return map;
+  const info = buildRepoMapInfo(projectRoot);
+  mapCache.set(projectRoot, info);
+  return info;
 }
 
 export function buildRepoMap(projectRoot: string): string {
+  return buildRepoMapInfo(projectRoot).digest;
+}
+
+function buildRepoMapInfo(projectRoot: string): RepoMapInfo {
   const files: string[] = [];
   collect(projectRoot, files, 0);
   files.sort();
+  const fileCount = files.length;
 
   const lines: string[] = [];
   let bytes = 0;
@@ -45,8 +71,8 @@ export function buildRepoMap(projectRoot: string): string {
     lines.push(line);
     bytes += line.length + 1;
   }
-  if (lines.length === 0) return '';
-  return lines.join('\n') + (truncated ? '\n… (repo map truncated)' : '');
+  const digest = lines.length === 0 ? '' : lines.join('\n') + (truncated ? '\n… (repo map truncated)' : '');
+  return { digest, fileCount };
 }
 
 function collect(dir: string, out: string[], depth: number): void {

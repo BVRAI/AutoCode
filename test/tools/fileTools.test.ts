@@ -74,6 +74,19 @@ describe('file tools', () => {
     expect(out.summary).toMatch(/not found/);
   });
 
+  it('edit_file no-match hint surfaces a whitespace-only mismatch with the exact text', async () => {
+    // File uses a TAB; the model retries with 4 SPACES — exact match fails, but
+    // the hint should locate it and hand back the verbatim current text.
+    writeFileSync(join(root, 'ws.ts'), 'function f() {\n\treturn 1;\n}\n');
+    const out = await new EditFileTool().execute(
+      { path: 'ws.ts', old_text: '    return 1;', new_text: '    return 2;' },
+      ctx,
+    );
+    expect(out.isError).toBe(true);
+    expect(out.content).toMatch(/whitespace-only difference was found at lines 2-2/);
+    expect(out.content).toContain('\treturn 1;'); // exact current bytes (tab-indented)
+  });
+
   it('edit_file rejects ambiguous match', async () => {
     writeFileSync(join(root, 'dup.txt'), 'foo\nfoo\nfoo\n');
     const out = await new EditFileTool().execute(

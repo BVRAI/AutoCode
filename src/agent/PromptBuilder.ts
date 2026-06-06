@@ -2,7 +2,7 @@ import { platform, release } from 'node:os';
 import type { SessionContext } from '../session/SessionContext.js';
 import { detectProjectContext, formatContextLine } from './ProjectContext.js';
 import { loadProjectInstructions } from './ProjectInstructions.js';
-import { getRepoMap } from './RepoMap.js';
+import { getRepoMap, repoFileCount, LARGE_REPO_FILE_THRESHOLD } from './RepoMap.js';
 import { getSkills, renderSkillsSection } from './Skills.js';
 import { getGitWorkingState, renderSessionStateSection } from './SessionState.js';
 
@@ -95,6 +95,25 @@ Make a reasonable interpretation and act on it. Use \`todo_write\` to make your 
 A digest of the project's files and their top-level symbols. Use it to navigate the codebase efficiently instead of listing/reading blindly. It is built once at session start and may be slightly stale — confirm with \`read_file\`/\`glob\` before relying on specifics.
 
 ${repoMap}`,
+    );
+  }
+
+  // Localization protocol — only for genuinely large codebases. On a big repo
+  // the agent should narrow systematically (the #1 repo-level lever per the
+  // research: Agentless's file→symbol→line, Aider's repo-map-first) instead of
+  // grepping the whole tree. Gated on a stable per-session size signal so it's
+  // cache-safe AND so small / single-file projects (e.g. polyglot exercises)
+  // never see it — keeping that path lean and unchanged.
+  if (repoMap && repoFileCount(ctx.projectRoot) >= LARGE_REPO_FILE_THRESHOLD) {
+    sections.push(
+      `\n# Navigating a large codebase
+
+This project is large, so localize before you act — don't grep the whole tree or read files at random:
+1. Start from the Repository map above to pick the few candidate files.
+2. Narrow within them: use \`find_symbol\` to jump to where a name is defined or used, and \`grep\` scoped to those files/dirs — not the whole repo.
+3. \`read_file\` only the relevant slices (use offset/length) once you know what to open.
+4. Work file → symbol → line: confirm the exact location before editing.
+5. For a change spanning several files, delegate context-gathering to a \`task\` subagent so your own window stays focused.`,
     );
   }
 
