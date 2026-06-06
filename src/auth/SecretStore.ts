@@ -57,6 +57,10 @@ interface KeytarLike {
 let keytarModule: KeytarLike | null = null;
 let keytarLoadAttempted = false;
 let cache: Partial<Record<AccountName, string>> = {};
+// Where each cached secret actually lives — 'keyring' (OS-encrypted) or
+// 'plaintext' (~/.autocode/config.json). Surfaced by the /keys manager so the
+// user can see whether OS encryption is in play.
+let sources: Partial<Record<AccountName, 'keyring' | 'plaintext'>> = {};
 let initialized = false;
 
 // Lazy-load keytar. Returns null on any failure so callers can fall
@@ -123,9 +127,11 @@ export async function initialize(renderer?: ConsoleRenderer): Promise<void> {
 
   for (const account of KNOWN_ACCOUNTS) {
     let value: string | undefined;
+    let src: 'keyring' | 'plaintext' | undefined;
     if (keytar) {
       try {
         value = (await keytar.getPassword(SERVICE_NAME, account)) ?? undefined;
+        if (value !== undefined) src = 'keyring';
       } catch {
         value = undefined;
       }
@@ -135,6 +141,7 @@ export async function initialize(renderer?: ConsoleRenderer): Promise<void> {
       const plain = readPlaintext(account, cfg);
       if (plain !== undefined && plain.length > 0) {
         value = plain;
+        src = 'plaintext';
         // Migrate-on-read: if keyring is available, copy to keyring AND
         // zero the plaintext slot so the secret stops sitting in
         // config.json.
@@ -144,13 +151,17 @@ export async function initialize(renderer?: ConsoleRenderer): Promise<void> {
             writePlaintext(account, cfg, undefined);
             cfgDirty = true;
             migrated += 1;
+            src = 'keyring';
           } catch {
             /* couldn't write to keyring — leave plaintext as-is */
           }
         }
       }
     }
-    if (value !== undefined) cache[account] = value;
+    if (value !== undefined) {
+      cache[account] = value;
+      if (src) sources[account] = src;
+    }
   }
 
   if (cfgDirty) store.save(cfg);
@@ -170,6 +181,13 @@ export function getSecret(account: AccountName): string | undefined {
   return cache[account];
 }
 
+// Where the cached secret for this account is stored — 'keyring',
+// 'plaintext', or undefined when no secret is set. Read-only view for the
+// /keys manager; does not trigger any I/O.
+export function getSecretSource(account: AccountName): 'keyring' | 'plaintext' | undefined {
+  return sources[account];
+}
+
 // Persist a secret. Writes to keyring if available, plaintext config
 // otherwise. Updates the in-memory cache so subsequent getSecret() calls
 // see the new value without restart.
@@ -186,6 +204,7 @@ export async function setSecret(account: AccountName, value: string): Promise<vo
         writePlaintext(account, cfg, undefined);
         store.save(cfg);
       }
+      sources[account] = 'keyring';
       return;
     } catch {
       /* fall through to plaintext */
@@ -196,11 +215,13 @@ export async function setSecret(account: AccountName, value: string): Promise<vo
   const cfg = store.load();
   writePlaintext(account, cfg, value);
   store.save(cfg);
+  sources[account] = 'plaintext';
 }
 
 // Remove a secret from both keyring and plaintext config. Idempotent.
 export async function deleteSecret(account: AccountName): Promise<void> {
   delete cache[account];
+  delete sources[account];
   const keytar = await loadKeytar();
   if (keytar) {
     try {
@@ -221,6 +242,7 @@ export async function deleteSecret(account: AccountName): Promise<void> {
 // Not exported in the public API surface; tests import via the file path.
 export function _resetForTests(): void {
   cache = {};
+  sources = {};
   initialized = false;
   keytarModule = null;
   keytarLoadAttempted = false;

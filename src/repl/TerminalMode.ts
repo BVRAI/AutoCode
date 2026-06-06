@@ -211,6 +211,16 @@ export class TerminalMode {
         store.setModel(provider, model);
         this.renderer.dim(`model → ${provider} / ${model}`);
       },
+      onSaveKey: async (provider, apiKey) => {
+        const { saveByokKey } = await import('../auth/keyStatus.js');
+        await saveByokKey(provider, apiKey);
+        this.renderer.dim(`saved ${provider} key (restart autocode to use it)`);
+      },
+      onRemoveKey: async (provider) => {
+        const { removeByokKey } = await import('../auth/keyStatus.js');
+        await removeByokKey(provider);
+        this.renderer.dim(`removed ${provider} key`);
+      },
     });
 
     return new Promise<number>((resolve) => {
@@ -386,8 +396,8 @@ export class TerminalMode {
         this.handleDiff();
         return;
       case 'auth':
-        await runAuth(this.renderer, args);
-        return;
+      case 'keys':
+        return this.handleKeys(args);
       case 'login':
         if (isAutomaxHosted()) {
           // V6-embedded — V6's session owns the auth. Plan 8 Open Decision
@@ -429,6 +439,18 @@ export class TerminalMode {
       case 'ui':
         return this.handleUi(args);
     }
+  }
+
+  // `/keys` (and its `/auth` alias). No args inside Bridge opens the
+  // interactive key-manager overlay (see/add/replace/remove BYOK keys). The
+  // arg path (`/keys <provider> <key>`) and the non-TTY no-args help both
+  // route through runAuth.
+  private async handleKeys(args: string[]): Promise<void> {
+    if (args.length === 0 && this.bridgeStore !== null) {
+      this.bridgeStore.setOverlay({ kind: 'byok' });
+      return;
+    }
+    await runAuth(this.renderer, args);
   }
 
   private handleUi(args: string[]): void {

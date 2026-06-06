@@ -97,6 +97,7 @@ export interface BridgeState {
   overlay:
     | { kind: 'model-provider' }
     | { kind: 'model-models'; provider: string }
+    | { kind: 'byok' }
     | null;
   // Active model — surfaced for the rail's MODEL row and for the model
   // picker to show "current" highlight. Updated by the bench / user.

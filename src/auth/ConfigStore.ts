@@ -19,6 +19,11 @@ export interface AutocodeConfig {
     openrouter?: string;
     brave?: string;
   };
+  // Non-secret metadata for BYOK keys — the keys themselves live in the OS
+  // keyring (via SecretStore), but the "when did I add this" timestamp is
+  // not sensitive, so it sits here. Keyed by provider id. Surfaced by the
+  // `/keys` manager as "added <date>".
+  apiKeyMeta?: Record<string, { addedAt: string }>;
   // Map of arbitrary server name → spawn config. Same shape as Claude Code's
   // mcpServers entry, so users can paste configs across tools.
   mcpServers?: Record<string, McpServerConfig>;

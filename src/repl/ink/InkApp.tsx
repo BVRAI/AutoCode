@@ -13,6 +13,7 @@ import type { BridgeStore } from './store.js';
 import type { SpinnerId } from './spinners.js';
 import { ModelPicker } from './ModelPicker.js';
 import { ProviderPicker } from './ProviderPicker.js';
+import { KeyManager } from './KeyManager.js';
 import { SlashMenu } from './SlashMenu.js';
 import { filterCommands } from '../commands.js';
 
@@ -41,6 +42,9 @@ export interface InkAppProps {
   onExit: () => void;
   // Fired when the user picks a new model from the picker overlay.
   onModelChange: (provider: string, model: string) => void;
+  // BYOK key-manager overlay actions (the /keys flow).
+  onSaveKey: (provider: string, apiKey: string) => Promise<void>;
+  onRemoveKey: (provider: string) => Promise<void>;
 }
 
 export function InkApp(props: InkAppProps): React.JSX.Element {
@@ -279,6 +283,14 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
         }}
         onBack={() => props.store.setOverlay({ kind: 'model-provider' })}
         onCancel={() => props.store.setOverlay(null)}
+      />
+    );
+  } else if (state.overlay?.kind === 'byok') {
+    overlay = (
+      <KeyManager
+        onSave={props.onSaveKey}
+        onRemove={props.onRemoveKey}
+        onClose={() => props.store.setOverlay(null)}
       />
     );
   } else if (slashOpen) {

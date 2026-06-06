@@ -14,7 +14,7 @@
 
 import pc from 'picocolors';
 import { BYOK_PROVIDERS } from '../auth/firstRun.js';
-import { setSecret, type AccountName } from '../auth/SecretStore.js';
+import { saveByokKey } from '../auth/keyStatus.js';
 import type { ConsoleRenderer } from './ConsoleRenderer.js';
 
 type ProviderId = (typeof BYOK_PROVIDERS)[number]['id'];
@@ -46,13 +46,13 @@ export async function runAuth(renderer: ConsoleRenderer, args: string[]): Promis
     return;
   }
 
-  await setSecret(`byok-${provider}` as AccountName, key);
+  await saveByokKey(provider, key);
 
   const meta = BYOK_PROVIDERS.find((p) => p.id === provider);
   const label = meta?.label ?? provider;
   renderer.info(`${pc.green('✓')} Saved ${label} key.`);
   renderer.dim(`(stored in OS keyring when available; ${meta?.envKey ?? 'env var'} still overrides if set)`);
-  renderer.dim('Restart autocode (/exit then acv1) to use it.');
+  renderer.dim('Restart autocode (/exit then acv1) to use it. Run /keys to see all your keys.');
 }
 
 function printAuthInstructions(renderer: ConsoleRenderer): void {

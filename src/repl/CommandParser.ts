@@ -10,6 +10,7 @@ export type LocalCommandName =
   | 'compact'
   | 'cost'
   | 'diff'
+  | 'keys'
   | 'auth'
   | 'login'
   | 'mode'
@@ -52,6 +53,7 @@ const KNOWN: ReadonlySet<LocalCommandName> = new Set([
   'compact',
   'cost',
   'diff',
+  'keys',
   'auth',
   'login',
   'mode',
