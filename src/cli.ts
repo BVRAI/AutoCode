@@ -180,11 +180,11 @@ program
     // Falls back to: headless → autocode, --plan-mode → planning, else default.
     const headless = typeof opts.print === 'string';
     const explicitMode = typeof opts.mode === 'string' ? opts.mode.toLowerCase() : null;
-    const validMode = (m: string | null): m is 'planning' | 'default' | 'autocode' | 'admin' =>
-      m === 'planning' || m === 'default' || m === 'autocode' || m === 'admin';
+    const validMode = (m: string | null): m is 'planning' | 'default' | 'autocode' | 'admin' | 'sights' =>
+      m === 'planning' || m === 'default' || m === 'autocode' || m === 'admin' || m === 'sights';
     if (explicitMode !== null && !validMode(explicitMode)) {
       process.stderr.write(
-        `unknown --mode value: ${explicitMode} (expected planning | default | autocode | admin)\n`,
+        `unknown --mode value: ${explicitMode} (expected planning | default | autocode | admin | sights)\n`,
       );
       process.exit(2);
     }
@@ -371,7 +371,7 @@ program
             `no credentials for ${ctx.model.provider} — set ${envKeyFor(ctx.model.provider)} or AUTOMAX_PROXY_TOKEN. Running in stub mode.`,
           ),
           new StubAgent(renderer, store))
-        : new LiveAgent(renderer, store, { checkpoints, prompter, emitter });
+        : new LiveAgent(renderer, store, { checkpoints, prompter, emitter, mode: initialMode });
 
     // Initialize MCP servers if any are configured. Fail soft.
     if (agent instanceof LiveAgent) {

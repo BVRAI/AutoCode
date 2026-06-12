@@ -13,7 +13,13 @@ export interface ModelConfig {
 //               verify-loop is skipped. Reached via `/mode admin` or the
 //               `--mode admin` CLI flag (Automax V6 uses this when routing
 //               admin tasks). Not in the Shift+Tab cycle — opt-in.
-export type AgentMode = 'planning' | 'default' | 'autocode' | 'admin';
+//  - sights:    locked-down static-website builder for Automax V6's Sights
+//               workspace. Auto-apply like autocode, but the tool registry
+//               is restricted to file ops inside the project root (no shell,
+//               no web, no subagents) and the system prompt mandates a fully
+//               offline site. CLI-only (`--mode sights`, headless) — not in
+//               the Shift+Tab cycle and not accepted by `/mode`.
+export type AgentMode = 'planning' | 'default' | 'autocode' | 'admin' | 'sights';
 
 export interface SessionContext {
   sessionId: string;
@@ -44,6 +50,8 @@ export function nextMode(mode: AgentMode): AgentMode {
     case 'planning':
       return 'default';
     case 'admin':
+      return 'default';
+    case 'sights':
       return 'default';
   }
 }

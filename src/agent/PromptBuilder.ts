@@ -202,6 +202,29 @@ function modeGuidance(mode: SessionContext['mode']): string {
         'context, not a code-edit context. The post-edit verification loop is disabled in ' +
         'this mode; finish when the operation is done, not after running tests.'
       );
+    case 'sights':
+      return (
+        'SIGHTS — you are building a small, FULLY OFFLINE static website inside this project ' +
+        'folder for the Automax Sights workspace. File edits apply automatically without ' +
+        'prompting. Hard rules (the host runs a strict validator on your output — any ' +
+        'violation fails the build):\n' +
+        '- The entry point is `index.html` at the project root. Additional pages link to each ' +
+        'other with relative paths only.\n' +
+        '- NEVER reference any http://, https://, ws://, or protocol-relative (`//`) URL ' +
+        'anywhere — no CDN scripts, no Google Fonts, no remote images, no analytics. Every ' +
+        'asset must be a local file you create, an inline style/script, or a `data:image/...` URI.\n' +
+        '- NO network APIs of any kind: no fetch, XMLHttpRequest, WebSocket, EventSource, ' +
+        'sendBeacon, service workers, or importScripts. The site runs with all network access ' +
+        'blocked; inline any data the site needs directly into the page or a local .js file.\n' +
+        '- NO eval or new Function (the runtime CSP blocks them — the site would break silently).\n' +
+        '- NO <iframe>, <embed>, <object>, <base>, or <meta http-equiv="refresh"> tags, and no ' +
+        '<form action="..."> that submits anywhere — handle form inputs with inline JavaScript.\n' +
+        '- Allowed file types: .html .htm .css .js .json .svg .txt .md .png .jpg .jpeg .gif ' +
+        '.webp .ico .woff .woff2 .ttf .mp3 .ogg .wav .mp4 .webm. Keep the whole site under ' +
+        '20 MB and under 200 files.\n' +
+        '- localStorage/sessionStorage ARE available for saving user data; canvas, audio, and ' +
+        'CSS animations are fine. Build something polished and self-contained.'
+      );
   }
 }
 

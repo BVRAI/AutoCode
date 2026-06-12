@@ -80,6 +80,27 @@ export class ToolRegistry {
     this.register(new FindSymbolTool());
   }
 
+  // Factory for the `sights` mode registry (Automax V6's locked-down static
+  // website builder). File ops inside the project root only — no shell, no
+  // web, no browser/screenshot, no subagents, no ask_user (headless anyway),
+  // no skills. The path-safety layer confines every file tool to the
+  // --project-root. The V6 host additionally validates the output before it
+  // is ever rendered, so this restriction is belt, not the only suspenders.
+  static forSights(): ToolRegistry {
+    const r = new ToolRegistry();
+    r.tools.clear();
+    r.register(new ListDirectoryTool());
+    r.register(new ReadFileTool());
+    r.register(new EditFileTool());
+    r.register(new WriteFileTool());
+    r.register(new CreateDirectoryTool());
+    r.register(new DeletePathTool());
+    r.register(new GlobTool());
+    r.register(new GrepTool());
+    r.register(new TodoWriteTool());
+    return r;
+  }
+
   // Factory for constrained subagent registries. Returns a registry that
   // includes ONLY the read-only research tools — no edit/write/shell, no
   // task tool (so subagents can't spawn further subagents).

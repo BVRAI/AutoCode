@@ -25,11 +25,14 @@ export class LiveAgent implements AgentHandler {
   constructor(
     private readonly renderer: ConsoleRenderer,
     store: TranscriptStore,
-    opts: { checkpoints?: CheckpointStore; prompter: Prompter; emitter?: EventEmitter },
+    opts: { checkpoints?: CheckpointStore; prompter: Prompter; emitter?: EventEmitter; mode?: import('../session/SessionContext.js').AgentMode },
   ) {
     const router = new LlmRouter();
     const runner = new SubagentRunner(router, store);
-    this.registry = new ToolRegistry();
+    // Sights mode (Automax V6's locked-down website builder) gets a registry
+    // restricted to in-root file ops. The registry is fixed at construction —
+    // sights is CLI-only and headless, so the mode never changes in-session.
+    this.registry = opts.mode === 'sights' ? ToolRegistry.forSights() : new ToolRegistry();
     this.mcp = new McpClientManager();
     this.checkpoints = opts.checkpoints;
     // Verification settings: on unless explicitly disabled in config.json.

@@ -54,6 +54,10 @@ export function gateFor(mode: AgentMode, toolName: string): 'block' | 'approve' 
       // autocode mode. The mode-specific differences (prompt framing,
       // verify-loop skip) live elsewhere.
       return 'allow';
+    case 'sights':
+      // Headless website-builder mode — auto-apply. The restriction lives
+      // in the registry (ToolRegistry.forSights: file ops only), not here.
+      return 'allow';
   }
 }
 
@@ -333,6 +337,9 @@ export class AgentLoop {
           !mutated ||
           ctx.mode === 'planning' ||
           ctx.mode === 'admin' ||
+          // Sights builds plain static sites — there is no test command to
+          // run, and the V6 host performs its own validation pass instead.
+          ctx.mode === 'sights' ||
           !this.deps.autoVerify
         ) break;
 
