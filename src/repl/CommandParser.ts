@@ -22,7 +22,9 @@ export type LocalCommandName =
   | 'reflect'
   | 'plugins'
   | 'spinner'
-  | 'ui';
+  | 'computer-use'
+  | 'ui'
+  | 'refresh';
 
 export interface LocalCommand {
   kind: 'local';
@@ -65,12 +67,24 @@ const KNOWN: ReadonlySet<LocalCommandName> = new Set([
   'reflect',
   'plugins',
   'spinner',
+  'computer-use',
   'ui',
+  'refresh',
 ]);
 
 export function parse(line: string): ParsedInput {
   const trimmed = line.trim();
   if (trimmed.length === 0) return { kind: 'empty' };
+
+  if (/^cd(?:\s|$)/i.test(trimmed)) {
+    const arg = trimmed.slice(2).trim();
+    return {
+      kind: 'local',
+      name: 'cwd',
+      args: arg.length > 0 ? [arg] : [],
+    };
+  }
+
   if (!trimmed.startsWith('/')) return { kind: 'agent', text: trimmed };
 
   const parts = trimmed.slice(1).split(/\s+/);

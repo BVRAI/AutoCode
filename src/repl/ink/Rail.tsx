@@ -1,6 +1,6 @@
 // Bridge left rail — persistent cockpit panel. Translated from
-// tui-bridge.jsx:58–258. ~32 columns wide on a terminal; we hide it
-// entirely on terminals narrower than 100 cols.
+// tui-bridge.jsx:58–258. It can render in a compact width so cockpit mode
+// remains visibly distinct in medium-width terminals.
 
 import React from 'react';
 import { Box, Text } from 'ink';
@@ -10,6 +10,7 @@ import { basename } from 'node:path';
 import { AUTO_COMPACT_THRESHOLD } from '../../util/contextWindow.js';
 
 const RAIL_WIDTH = 32;
+const RAIL_COMPACT_WIDTH = 24;
 
 export interface RailProps {
   state: BridgeState;
@@ -18,12 +19,15 @@ export interface RailProps {
   modelProvider: string;
   modelName: string;
   version: string;
+  width?: number;
 }
 
-export function Rail({ state, sessionId, projectRoot, modelProvider, modelName, version }: RailProps): React.JSX.Element {
+export function Rail({ state, sessionId, projectRoot, modelProvider, modelName, version, width = RAIL_WIDTH }: RailProps): React.JSX.Element {
+  const railWidth = Math.max(20, width);
+  const contentWidth = Math.max(8, railWidth - 4);
   return (
     <Box
-      width={RAIL_WIDTH}
+      width={railWidth}
       flexDirection="column"
       paddingX={1}
       paddingY={1}
@@ -39,21 +43,21 @@ export function Rail({ state, sessionId, projectRoot, modelProvider, modelName, 
         <Text color={BR.inkDim}>{sessionAge(sessionId)}</Text>
       </Block>
       <Block label="PROJECT">
-        <Text color={BR.ink}>{truncate(basename(projectRoot), RAIL_WIDTH - 4)}</Text>
-        <ProjectBranch project={state.project} />
+        <Text color={BR.ink}>{truncate(basename(projectRoot), contentWidth)}</Text>
+        <ProjectBranch project={state.project} width={railWidth} />
       </Block>
       <Block label="MODEL">
-        <Text color={BR.ink}>{modelProvider} / {truncate(modelName, RAIL_WIDTH - 4 - modelProvider.length - 3)}</Text>
+        <Text color={BR.ink}>{truncate(`${modelProvider} / ${modelName}`, contentWidth)}</Text>
       </Block>
 
-      <ModeList active={state.mode} />
-      <ContextMeter usage={state.usage} />
-      <EditsList edits={state.editsThisTurn} turn={state.turn} />
-      <McpBlock entries={state.mcpStatus} />
+      <ModeList active={state.mode} compact={railWidth < RAIL_WIDTH} />
+      <ContextMeter usage={state.usage} width={railWidth} />
+      <EditsList edits={state.editsThisTurn} turn={state.turn} width={railWidth} />
+      <McpBlock entries={state.mcpStatus} width={railWidth} />
 
       <Box flexGrow={1} />
-      <Text color={BR.inkFaint}>autocode {version}</Text>
-      <Text color={BR.inkFaint}>shift+tab cycle · ^c stop</Text>
+      <Text color={BR.inkFaint}>{truncate(`autocode ${version}`, contentWidth)}</Text>
+      <Text color={BR.inkFaint}>{truncate('shift+tab cycle · ^c stop', contentWidth)}</Text>
     </Box>
   );
 }
@@ -69,7 +73,7 @@ function Wordmark(): React.JSX.Element {
   );
 }
 
-function ProjectBranch({ project }: { project: BridgeState['project'] }): React.JSX.Element {
+function ProjectBranch({ project, width }: { project: BridgeState['project']; width: number }): React.JSX.Element {
   // branch === null ⇒ not a git repo. Otherwise show the real branch (the
   // host resolves "detached" for a detached HEAD), plus a dirty badge like
   // "●3" when there are uncommitted changes.
@@ -77,7 +81,7 @@ function ProjectBranch({ project }: { project: BridgeState['project'] }): React.
     return <Text color={BR.inkFaint}>no git</Text>;
   }
   const badge = project.dirty > 0 ? ` ●${project.dirty}` : '';
-  const branch = truncate(project.branch, RAIL_WIDTH - 4 - badge.length);
+  const branch = truncate(project.branch, Math.max(4, width - 4 - badge.length));
   return (
     <Text>
       <Text color={BR.teal}>{branch}</Text>
@@ -95,7 +99,7 @@ function Block({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function ModeList({ active }: { active: BridgeState['mode'] }): React.JSX.Element {
+function ModeList({ active, compact }: { active: BridgeState['mode']; compact: boolean }): React.JSX.Element {
   // All four modes are always visible so users discover admin exists.
   // The Shift+Tab cycle stays at 3 coding modes (admin opt-in via
   // `/mode admin` or `--mode admin`), but the rail still lists admin
@@ -116,9 +120,9 @@ function ModeList({ active }: { active: BridgeState['mode'] }): React.JSX.Elemen
           <Box key={m.id}>
             <Text color={on ? m.color : BR.inkDim}>{on ? '▸ ' : '  '}</Text>
             <Text color={on ? m.color : BR.inkDim} bold={on}>
-              {m.label.padEnd(9)}
+              {m.label.padEnd(compact ? 0 : 9)}
             </Text>
-            <Text color={BR.inkFaint}>{m.hint}</Text>
+            {!compact && <Text color={BR.inkFaint}>{m.hint}</Text>}
           </Box>
         );
       })}
@@ -126,7 +130,7 @@ function ModeList({ active }: { active: BridgeState['mode'] }): React.JSX.Elemen
   );
 }
 
-function ContextMeter({ usage }: { usage: BridgeState['usage'] }): React.JSX.Element {
+function ContextMeter({ usage, width }: { usage: BridgeState['usage']; width: number }): React.JSX.Element {
   // True context fill: live tokens (≈ the last request's input — system prompt
   // + tools + conversation) over the selected model's real window (resolved by
   // the host poll). Both are 0 until the first reply lands; the bar then
@@ -135,12 +139,15 @@ function ContextMeter({ usage }: { usage: BridgeState['usage'] }): React.JSX.Ele
   const window = usage.contextWindow > 0 ? usage.contextWindow : 200_000;
   const used = usage.currentContextTokens;
   const pct = Math.max(0, Math.min(1, used / window));
-  const cells = 18;
+  const cells = Math.max(8, Math.min(18, width - 14));
   const filled = Math.round(cells * pct);
   const near = pct >= AUTO_COMPACT_THRESHOLD; // approaching auto-compaction
+  // Hit rate over the FULL prompt: Anthropic's inputTokens excludes the
+  // cached portion, so dividing by it alone overstates wildly (>100%).
+  const promptTotal = usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
   const cacheStr =
-    usage.inputTokens > 0
-      ? `${Math.round((usage.cacheReadTokens / Math.max(1, usage.inputTokens)) * 100)}%`
+    promptTotal > 0
+      ? `${Math.round((usage.cacheReadTokens / promptTotal) * 100)}%`
       : '0%';
   return (
     <Box flexDirection="column" marginBottom={1}>
@@ -173,7 +180,7 @@ function ContextMeter({ usage }: { usage: BridgeState['usage'] }): React.JSX.Ele
   );
 }
 
-function EditsList({ edits, turn }: { edits: RailEditSummary[]; turn: number }): React.JSX.Element {
+function EditsList({ edits, turn, width }: { edits: RailEditSummary[]; turn: number; width: number }): React.JSX.Element {
   if (edits.length === 0) {
     return (
       <Box flexDirection="column" marginBottom={1}>
@@ -193,7 +200,7 @@ function EditsList({ edits, turn }: { edits: RailEditSummary[]; turn: number }):
       {edits.slice(-6).map((e) => (
         <Box key={e.file}>
           <Text color={e.isNew ? BR.teal : BR.inkDim}>{e.isNew ? '✦ ' : '· '}</Text>
-          <Text color={BR.ink}>{truncate(basename(e.file), RAIL_WIDTH - 14)} </Text>
+          <Text color={BR.ink}>{truncate(basename(e.file), Math.max(4, width - 14))} </Text>
           <Text color={BR.add}>+{e.added}</Text>
           {e.deleted > 0 && <Text color={BR.del}> −{e.deleted}</Text>}
         </Box>
@@ -202,7 +209,7 @@ function EditsList({ edits, turn }: { edits: RailEditSummary[]; turn: number }):
   );
 }
 
-function McpBlock({ entries }: { entries: McpStatusEntry[] }): React.JSX.Element {
+function McpBlock({ entries, width }: { entries: McpStatusEntry[]; width: number }): React.JSX.Element {
   if (entries.length === 0) return <></>;
   return (
     <Box flexDirection="column" marginBottom={1}>
@@ -214,7 +221,7 @@ function McpBlock({ entries }: { entries: McpStatusEntry[] }): React.JSX.Element
         return (
           <Box key={e.name}>
             <Text color={dot}>● </Text>
-            <Text color={BR.ink}>{truncate(e.name, RAIL_WIDTH - 10)} </Text>
+            <Text color={BR.ink}>{truncate(e.name, Math.max(4, width - 10))} </Text>
             <Text color={BR.inkFaint}>{e.connected ? `${e.toolCount}` : 'err'}</Text>
           </Box>
         );
@@ -255,4 +262,4 @@ function sessionAge(id: string): string {
   return `${suffix} · ${ageStr}`;
 }
 
-export { RAIL_WIDTH };
+export { RAIL_WIDTH, RAIL_COMPACT_WIDTH };

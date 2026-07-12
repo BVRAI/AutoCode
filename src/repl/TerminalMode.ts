@@ -1,7 +1,6 @@
 import { createInterface } from 'node:readline';
 import { execSync } from 'node:child_process';
-import { resolve, relative } from 'node:path';
-import { existsSync, statSync } from 'node:fs';
+import { relative } from 'node:path';
 
 import { nextMode, type SessionContext, type AgentMode } from '../session/SessionContext.js';
 import type { CumulativeUsage } from '../session/TranscriptStore.js';
@@ -28,6 +27,7 @@ import { getPlugins, pluginHooksForEvent } from '../agent/Plugins.js';
 import { type EventEmitter, NullEventEmitter } from './EventEmitter.js';
 import { COMMAND_DEFS } from './commands.js';
 import { getKnownModels, modelCatalogSource } from '../llm/models.js';
+import { cwdStatus, resolveCwdTarget } from './cwd.js';
 
 const MAX_QUEUE = 5;
 
@@ -49,6 +49,7 @@ export interface AgentHandler {
   mcpTools?(): string[];
   // Optional — Ink Bridge mode wraps the event emitter at runtime.
   setEmitter?(emitter: EventEmitter): void;
+  refreshConfig?(): void;
 }
 
 // The interactive REPL. Two render paths:
@@ -114,16 +115,17 @@ export class TerminalMode {
     const { BridgeStore } = await import('./ink/store.js');
     const { createRendererSink, createBridgeEventEmitter } = await import('./ink/bridge.js');
     const { mountInkApp } = await import('./ink/InkApp.js');
-    const { AutoAcceptPrompter } = await import('./Prompter.js');
+    const { BridgePrompter } = await import('./ink/BridgePrompter.js');
 
     const store = new BridgeStore();
     this.bridgeStore = store;
     store.setModel(this.ctx.model.provider, this.ctx.model.model);
     this.renderer.setSink(createRendererSink(store));
-    // Interim: Bridge has no inline approval UI yet, so wire an auto-accept
-    // prompter — the agent does not hang waiting for confirmations the
-    // React tree can't render. Tracked for a follow-up PR.
-    this.prompter.use(new AutoAcceptPrompter(this.emitter));
+    // Real inline prompts: confirmations, default-mode approvals, ask_user
+    // choices, and text input all render as a PromptOverlay in the React
+    // tree. (Replaces the interim AutoAcceptPrompter that silently accepted
+    // everything — default mode now actually reviews.)
+    this.prompter.use(new BridgePrompter(store, this.emitter));
 
     // Wrap the existing emitter — preserves --automax JSON output.
     const innerEmitter = this.emitter;
@@ -143,15 +145,7 @@ export class TerminalMode {
     // row. getGitWorkingState is cached ~2s, so polling it on the usage timer
     // is nearly free; it keeps the branch live across mid-session checkouts.
     const refreshProjectGit = (): void => {
-      const g = getGitWorkingState(this.ctx.projectRoot);
-      if (!g) {
-        store.setProjectGit(null, 0);
-        return;
-      }
-      const branch = g.isDetachedHead ? 'detached' : g.branch;
-      const dirty =
-        g.stagedFiles.length + g.modifiedFiles.length + g.deletedFiles.length + g.untrackedCount;
-      store.setProjectGit(branch, dirty);
+      this.refreshBridgeProject();
     };
     refreshProjectGit();
 
@@ -428,6 +422,12 @@ export class TerminalMode {
       case 'mcp':
         this.handleMcp();
         return;
+      case 'refresh': {
+        const { forceRefreshRepoMap } = await import('../agent/RepoMap.js');
+        forceRefreshRepoMap(this.ctx.projectRoot);
+        this.renderer.info('Repo map rebuilt from the current file tree.');
+        return;
+      }
       case 'update':
         return this.handleUpdate();
       case 'reflect':
@@ -436,6 +436,8 @@ export class TerminalMode {
         return this.handlePlugins();
       case 'spinner':
         return this.handleSpinner(args);
+      case 'computer-use':
+        return this.handleComputerUse(args);
       case 'ui':
         return this.handleUi(args);
     }
@@ -502,6 +504,26 @@ export class TerminalMode {
     } catch (e) {
       this.renderer.error(`failed to save spinner: ${e instanceof Error ? e.message : String(e)}`);
     }
+  }
+
+  private handleComputerUse(args: string[]): void {
+    const cs = new ConfigStore();
+    const cfg = cs.load();
+    const enabled = cfg.computerUse?.enabled === true;
+    if (args.length === 0) {
+      this.renderer.info(`computer use: ${enabled ? 'on' : 'off'}`);
+      this.renderer.dim('set with /computer-use on|off');
+      return;
+    }
+    const arg = args[0]!.toLowerCase();
+    if (arg !== 'on' && arg !== 'off') {
+      this.renderer.error(`unknown /computer-use option '${arg}'. valid: on, off`);
+      return;
+    }
+    const nextEnabled = arg === 'on';
+    cs.save({ ...cfg, computerUse: { ...(cfg.computerUse ?? {}), enabled: nextEnabled } });
+    this.agent.refreshConfig?.();
+    this.renderer.dim(`computer use -> ${nextEnabled ? 'on' : 'off'}`);
   }
 
   private handlePlugins(): void {
@@ -706,17 +728,32 @@ export class TerminalMode {
     this.renderer.info(`started: ${this.ctx.startedAt}`);
   }
 
+  private refreshBridgeProject(): void {
+    if (this.bridgeStore === null) return;
+    this.bridgeStore.setProjectRoot(this.ctx.projectRoot);
+    const g = getGitWorkingState(this.ctx.projectRoot);
+    if (!g) {
+      this.bridgeStore.setProjectGit(null, 0);
+      return;
+    }
+    const branch = g.isDetachedHead ? 'detached' : g.branch;
+    const dirty = g.stagedFiles.length + g.modifiedFiles.length + g.deletedFiles.length + g.untrackedCount;
+    this.bridgeStore.setProjectGit(branch, dirty);
+  }
+
   private handleCwd(args: string[]): void {
     if (args.length === 0) {
       this.renderer.info(this.ctx.projectRoot);
       return;
     }
-    const target = resolve(args.join(' '));
-    if (!existsSync(target) || !statSync(target).isDirectory()) {
-      this.renderer.error(`not a directory: ${target}`);
+    const target = resolveCwdTarget(args.join(' '), this.ctx.projectRoot);
+    const status = cwdStatus(target);
+    if (!status.ok) {
+      this.renderer.error(`not a directory (${status.label}): ${target}`);
       return;
     }
     this.ctx.projectRoot = target;
+    this.refreshBridgeProject();
     this.renderer.info(`project root → ${target}`);
   }
 

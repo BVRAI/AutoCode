@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildRepoMap, repoFileCount } from '../../src/agent/RepoMap.js';
+import { buildRepoMap, getImportGraph, repoFileCount } from '../../src/agent/RepoMap.js';
 
 describe('RepoMap', () => {
   let root: string;
@@ -77,5 +77,49 @@ describe('RepoMap', () => {
     const map = buildRepoMap(root);
     expect(map.length).toBeLessThan(6500);
     expect(map).toContain('repo map truncated');
+  });
+
+  // ── Importance ranking (import graph + PageRank) ────────────────────────
+
+  function writeRankedFixture(dir: string): void {
+    // core.ts is imported by a/b/c; util.ts only by core; orphan.ts by nobody.
+    writeFileSync(join(dir, 'core.ts'), "import { u } from './util.js';\nexport function core() {}\n");
+    writeFileSync(join(dir, 'util.ts'), 'export const u = 1;\n');
+    writeFileSync(join(dir, 'a.ts'), "import { core } from './core.js';\nexport function fa() {}\n");
+    writeFileSync(join(dir, 'b.ts'), "import { core } from './core.js';\nexport function fb() {}\n");
+    writeFileSync(join(dir, 'c.ts'), "import { core } from './core.js';\nexport function fc() {}\n");
+    writeFileSync(join(dir, 'orphan.ts'), 'export function fo() {}\n');
+  }
+
+  it('orders the digest by importance, hub first', () => {
+    writeRankedFixture(root);
+    const map = buildRepoMap(root);
+    const firstLine = map.split('\n')[0]!;
+    expect(firstLine).toContain('core.ts');
+    expect(map.indexOf('core.ts')).toBeLessThan(map.indexOf('orphan.ts'));
+  });
+
+  it('annotates multi-importer files with their in-degree', () => {
+    writeRankedFixture(root);
+    const map = buildRepoMap(root);
+    expect(map).toContain('(imported by 3)');
+    // Single-importer files are not annotated (noise).
+    expect(map).not.toContain('(imported by 1)');
+  });
+
+  it('keeps unfit files visible as bare paths under an other-files divider', () => {
+    for (let i = 0; i < 300; i++) {
+      const syms = Array.from({ length: 10 }, (_, k) => `export function g${i}_${k}() {}`).join('\n');
+      writeFileSync(join(root, `mod${i}.ts`), syms);
+    }
+    const map = buildRepoMap(root);
+    expect(map).toContain('— other files —');
+  });
+
+  it('exposes the import graph via getImportGraph', () => {
+    writeRankedFixture(root);
+    const g = getImportGraph(root);
+    expect(g.importers.get('core.ts')).toHaveLength(3);
+    expect(g.imports.get('core.ts')).toEqual(['util.ts']);
   });
 });

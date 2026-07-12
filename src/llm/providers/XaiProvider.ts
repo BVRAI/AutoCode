@@ -26,7 +26,9 @@ export class XaiProvider implements LlmProvider {
     const res = await fetch(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify(buildBody(req)),
+      // grok models return reasoning_content; echo it back so multi-step tool
+      // chains keep the model's train of thought (xAI accepts the echo).
+      body: JSON.stringify(buildBody(req, { reasoningEcho: 'reasoning_content' })),
       signal: req.signal,
     });
     if (!res.ok) {
@@ -52,7 +54,11 @@ export class XaiProvider implements LlmProvider {
     const res = await fetch(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ ...buildBody(req), stream: true, stream_options: { include_usage: true } }),
+      body: JSON.stringify({
+        ...buildBody(req, { reasoningEcho: 'reasoning_content' }),
+        stream: true,
+        stream_options: { include_usage: true },
+      }),
       signal: req.signal,
     });
     if (!res.ok) {

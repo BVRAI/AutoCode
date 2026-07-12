@@ -93,6 +93,29 @@ describe('TranscriptStore', () => {
     expect(loaded!.usage).toEqual(usage);
   });
 
+  it('round-trips messages containing thinking blocks', () => {
+    const store = new TranscriptStore(ctx);
+    const messages: Message[] = [
+      { role: 'user', content: 'fix the bug' },
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'thinking',
+            text: 'the bug is in parse()',
+            signature: 'sig-xyz',
+            opaque: [{ type: 'reasoning.text', text: 'the bug is in parse()', index: 0 }],
+          },
+          { type: 'text', text: 'Found it.' },
+        ],
+      },
+    ];
+    const usage = { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    store.saveConversation(messages, usage);
+    const loaded = store.loadConversation();
+    expect(loaded!.messages).toEqual(messages);
+  });
+
   it('loadConversation returns null when no conversation file exists', () => {
     const store = new TranscriptStore(ctx);
     expect(store.loadConversation()).toBeNull();

@@ -27,9 +27,14 @@ describe('ToolRegistry', () => {
     const r = ToolRegistry.forSubagent('Explore');
     const names = r.schemas().map((s) => s.name);
     // Core read-only tools always present.
-    for (const required of ['find_symbol', 'glob', 'grep', 'list_directory', 'read_file']) {
+    for (const required of ['file_deps', 'find_symbol', 'glob', 'grep', 'list_directory', 'read_file']) {
       expect(names).toContain(required);
     }
+  });
+
+  it('full registry includes the file_deps graph tool', () => {
+    const names = new ToolRegistry().schemas().map((s) => s.name);
+    expect(names).toContain('file_deps');
   });
 
   it('Explore subagent registry has NO write/edit/shell tools', () => {

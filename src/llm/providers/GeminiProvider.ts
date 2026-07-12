@@ -70,6 +70,8 @@ export class GeminiProvider implements LlmProvider {
     for (const block of resp.content) {
       if (block.type === 'text' && block.text.length > 0) {
         yield { type: 'text_delta', text: block.text };
+      } else if (block.type === 'thinking' && block.text.length > 0) {
+        yield { type: 'thinking_delta', text: block.text };
       } else if (block.type === 'tool_use') {
         yield { type: 'tool_use_start', id: block.id, name: block.name };
         yield { type: 'tool_use_delta', argsJsonChunk: JSON.stringify(block.input ?? {}) };
@@ -117,6 +119,17 @@ export class GeminiProvider implements LlmProvider {
       generationConfig: {
         temperature: req.temperature ?? 1.0,
         maxOutputTokens: req.maxTokens ?? 8192,
+        // Wired but never armed today: thinkingFor() returns undefined for
+        // google until the outbound thoughtSignature re-attach pass exists
+        // (enabling thoughts without echoing signatures breaks tool use).
+        ...(req.thinking
+          ? {
+              thinkingConfig: {
+                includeThoughts: true,
+                thinkingBudget: req.thinking.budgetTokens,
+              },
+            }
+          : {}),
       },
     };
 
@@ -172,6 +185,13 @@ function messagesToGeminiContents(messages: Message[]): GeminiContent[] {
         case 'image':
           parts.push({ inlineData: { mimeType: b.mediaType, data: b.data } });
           break;
+        case 'thinking':
+          // Deferred: Gemini reasoning continuity requires re-attaching
+          // thoughtSignature onto the matching functionCall parts (not a
+          // standalone part), which needs a structural pairing pass. The
+          // provider never enables thinkingConfig today, so nothing arrives
+          // to echo — drop on outbound until thinking is actually enabled.
+          break;
       }
     }
     if (parts.length > 0) out.push({ role, parts });
@@ -200,7 +220,15 @@ function fromGeminiResponse(r: GeminiResponse, requestedModel: string): Completi
   let toolCallSeq = 0;
   if (cand?.content?.parts) {
     for (const part of cand.content.parts) {
-      if (typeof part.text === 'string' && part.text.length > 0) {
+      // Check `thought` BEFORE text — thought parts also carry `text`, and
+      // reasoning must not leak into the visible reply.
+      if (part.thought === true) {
+        content.push({
+          type: 'thinking',
+          text: typeof part.text === 'string' ? part.text : '',
+          ...(part.thoughtSignature ? { opaque: { thoughtSignature: part.thoughtSignature } } : {}),
+        });
+      } else if (typeof part.text === 'string' && part.text.length > 0) {
         content.push({ type: 'text', text: part.text });
       } else if (part.functionCall) {
         const id = `gem-${++toolCallSeq}`;
@@ -264,6 +292,7 @@ interface GeminiRequestBody {
   generationConfig?: {
     temperature?: number;
     maxOutputTokens?: number;
+    thinkingConfig?: { includeThoughts?: boolean; thinkingBudget?: number };
   };
 }
 
@@ -294,6 +323,10 @@ interface GeminiResponse {
       parts?: Array<{
         text?: string;
         functionCall?: { name: string; args?: Record<string, unknown> };
+        // Thinking-model parts: `thought: true` marks a reasoning summary;
+        // `thoughtSignature` is the opaque continuity token (Gemini 2.5+).
+        thought?: boolean;
+        thoughtSignature?: string;
       }>;
     };
     finishReason?: string;

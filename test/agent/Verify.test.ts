@@ -5,7 +5,9 @@ import { join } from 'node:path';
 import {
   resolveVerifyCommand,
   resolveVerifyCommandForFiles,
+  resolveVerifyPlanForFiles,
   runVerification,
+  scopeInferredCommand,
 } from '../../src/agent/Verify.js';
 import type { ProjectInstructions } from '../../src/agent/ProjectInstructions.js';
 
@@ -245,5 +247,185 @@ describe('runVerification', () => {
     expect(r.ok).toBe(false);
     expect(r.code).toBe(3);
     expect(r.output).toContain('boom');
+  });
+});
+
+describe('scopeInferredCommand', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'autocode-scope-'));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  // ── go ──
+  it('go: scopes changed .go files to their package dirs', () => {
+    const r = scopeInferredCommand(dir, 'go test ./...', ['pkg/auth/login.go', 'pkg/db/conn.go']);
+    expect(r.isScoped).toBe(true);
+    expect(r.command).toBe('go test ./pkg/auth/... ./pkg/db/...');
+  });
+
+  it('go: a go.mod change falls back to the full suite', () => {
+    const r = scopeInferredCommand(dir, 'go test ./...', ['go.mod', 'pkg/auth/login.go']);
+    expect(r.isScoped).toBe(false);
+    expect(r.command).toBe('go test ./...');
+  });
+
+  it('go: a root-level file keeps ./... unscoped', () => {
+    const r = scopeInferredCommand(dir, 'go test ./...', ['main.go']);
+    expect(r.isScoped).toBe(false);
+  });
+
+  // ── pytest ──
+  it('pytest: a changed test file runs itself', () => {
+    const r = scopeInferredCommand(dir, 'pytest', ['tests/test_auth.py']);
+    expect(r.isScoped).toBe(true);
+    expect(r.command).toBe('pytest tests/test_auth.py');
+  });
+
+  it('pytest: a sibling test_x.py is selected for a source change', () => {
+    mkdirSync(join(dir, 'pkg'), { recursive: true });
+    writeFileSync(join(dir, 'pkg', 'test_auth.py'), '');
+    const r = scopeInferredCommand(dir, 'pytest', ['pkg/auth.py']);
+    expect(r.isScoped).toBe(true);
+    expect(r.command).toBe('pytest pkg/test_auth.py');
+  });
+
+  it('pytest: the root tests/ mirror is selected', () => {
+    mkdirSync(join(dir, 'tests'), { recursive: true });
+    writeFileSync(join(dir, 'tests', 'test_engine.py'), '');
+    const r = scopeInferredCommand(dir, 'pytest', ['engine.py']);
+    expect(r.isScoped).toBe(true);
+    expect(r.command).toBe('pytest tests/test_engine.py');
+  });
+
+  it('pytest: an unmapped source or conftest change falls back to full', () => {
+    expect(scopeInferredCommand(dir, 'pytest', ['mystery.py']).isScoped).toBe(false);
+    expect(scopeInferredCommand(dir, 'pytest', ['conftest.py']).isScoped).toBe(false);
+  });
+
+  // ── npm test ──
+  function nodeProject(runner: 'vitest' | 'jest'): void {
+    writeFileSync(
+      join(dir, 'package.json'),
+      JSON.stringify({ scripts: { test: `${runner} run` }, devDependencies: { [runner]: '^1' } }),
+    );
+  }
+
+  it('vitest: src/a/b.ts maps to the test/ mirror', () => {
+    nodeProject('vitest');
+    mkdirSync(join(dir, 'test', 'agent'), { recursive: true });
+    writeFileSync(join(dir, 'test', 'agent', 'Verify.test.ts'), '');
+    const r = scopeInferredCommand(dir, 'npm test', ['src/agent/Verify.ts']);
+    expect(r.isScoped).toBe(true);
+    expect(r.command).toBe('npx vitest run test/agent/Verify.test.ts');
+  });
+
+  it('vitest: a same-dir spec sibling is found', () => {
+    nodeProject('vitest');
+    mkdirSync(join(dir, 'src'), { recursive: true });
+    writeFileSync(join(dir, 'src', 'util.spec.ts'), '');
+    const r = scopeInferredCommand(dir, 'npm test', ['src/util.ts']);
+    expect(r.isScoped).toBe(true);
+    expect(r.command).toBe('npx vitest run src/util.spec.ts');
+  });
+
+  it('jest: detected via devDependencies and scoped', () => {
+    nodeProject('jest');
+    mkdirSync(join(dir, 'src', '__tests__'), { recursive: true });
+    writeFileSync(join(dir, 'src', '__tests__', 'core.test.js'), '');
+    const r = scopeInferredCommand(dir, 'npm test', ['src/core.js']);
+    expect(r.isScoped).toBe(true);
+    expect(r.command).toBe('npx jest src/__tests__/core.test.js');
+  });
+
+  it('tolerates a UTF-8 BOM in package.json (PowerShell-written projects)', () => {
+    // PowerShell 5.1's utf8 encoding writes a BOM; JSON.parse rejects it raw.
+    writeFileSync(
+      join(dir, 'package.json'),
+      '﻿' + JSON.stringify({ scripts: { test: 'vitest run' }, devDependencies: { vitest: '^1' } }),
+    );
+    mkdirSync(join(dir, 'src'), { recursive: true });
+    writeFileSync(join(dir, 'src', 'util.spec.ts'), '');
+    const r = scopeInferredCommand(dir, 'npm test', ['src/util.ts']);
+    expect(r.isScoped).toBe(true);
+  });
+
+  it('npm test with an unidentifiable runner is not scoped', () => {
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts: { test: 'mocha' } }));
+    const r = scopeInferredCommand(dir, 'npm test', ['src/a.ts']);
+    expect(r.isScoped).toBe(false);
+  });
+
+  it('an unmapped source file falls back to the full suite', () => {
+    nodeProject('vitest');
+    const r = scopeInferredCommand(dir, 'npm test', ['src/no-test-anywhere.ts']);
+    expect(r.isScoped).toBe(false);
+  });
+
+  it('doc-only changes never scope', () => {
+    nodeProject('vitest');
+    const r = scopeInferredCommand(dir, 'npm test', ['README.md', 'docs/notes.txt']);
+    expect(r.isScoped).toBe(false);
+  });
+
+  it('whole-program commands are never scoped', () => {
+    for (const cmd of ['npm run build', 'npx tsc --noEmit', 'cargo test', 'mvn -q test']) {
+      expect(scopeInferredCommand(dir, cmd, ['src/a.ts']).isScoped).toBe(false);
+    }
+  });
+});
+
+describe('resolveVerifyPlanForFiles', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'autocode-plan-'));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  const inst = (relativeDir: string, verify: string): ProjectInstructions => ({
+    fileName: 'AUTOCODE.md',
+    path: join(dir, relativeDir, 'AUTOCODE.md'),
+    relativeDir,
+    depth: relativeDir === '' ? 0 : relativeDir.split('/').length,
+    content: '',
+    isAuthoritative: false,
+    verify,
+  });
+
+  it('an explicit override is never scoped', () => {
+    const plan = resolveVerifyPlanForFiles(dir, 'make check', [], ['src/a.go']);
+    expect(plan).toEqual({ command: 'make check', fullCommand: null, source: 'override' });
+  });
+
+  it('an AUTOCODE.md directive is never scoped', () => {
+    const plan = resolveVerifyPlanForFiles(dir, undefined, [inst('', 'npm run custom')], ['a.go']);
+    expect(plan).toEqual({ command: 'npm run custom', fullCommand: null, source: 'directive' });
+  });
+
+  // Inference upgrades `go build` to `go test ./...` only when a root-level
+  // *_test.go exists — the fixtures below provide one.
+  it('an inferred go command gets scoped with the full command retained', () => {
+    writeFileSync(join(dir, 'go.mod'), 'module x\n');
+    writeFileSync(join(dir, 'main_test.go'), 'package main\n');
+    const plan = resolveVerifyPlanForFiles(dir, undefined, [], ['pkg/a/x.go']);
+    expect(plan).toEqual({
+      command: 'go test ./pkg/a/...',
+      fullCommand: 'go test ./...',
+      source: 'inferred-scoped',
+    });
+  });
+
+  it('fullCommand is null when scoping did not apply', () => {
+    writeFileSync(join(dir, 'go.mod'), 'module x\n');
+    writeFileSync(join(dir, 'main_test.go'), 'package main\n');
+    const plan = resolveVerifyPlanForFiles(dir, undefined, [], ['main.go']);
+    expect(plan).toEqual({ command: 'go test ./...', fullCommand: null, source: 'inferred' });
+  });
+
+  it('resolveVerifyCommandForFiles wrapper still returns the full command', () => {
+    writeFileSync(join(dir, 'go.mod'), 'module x\n');
+    writeFileSync(join(dir, 'main_test.go'), 'package main\n');
+    const cmd = resolveVerifyCommandForFiles(dir, undefined, [], ['pkg/a/x.go']);
+    expect(cmd).toBe('go test ./...');
   });
 });

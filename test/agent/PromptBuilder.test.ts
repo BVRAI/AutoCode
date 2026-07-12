@@ -41,5 +41,21 @@ describe('PromptBuilder — large-codebase localization protocol gating', () => 
     const prompt = buildSystemPrompt(ctxFor(root));
     expect(prompt).toContain('Navigating a large codebase');
     expect(prompt).toContain('find_symbol');
+    expect(prompt).toContain('file_deps');
+  });
+});
+
+describe('PromptBuilder — reproduce-first principle', () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'autocode-prompt-'));
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  it('always includes the reproduce-bugs-first working principle', () => {
+    writeFileSync(join(root, 'a.ts'), 'export const a = 1;\n');
+    const prompt = buildSystemPrompt(ctxFor(root));
+    expect(prompt).toContain('Reproduce bugs before fixing them');
+    expect(prompt).toContain('A fix without a reproduction is a guess');
   });
 });

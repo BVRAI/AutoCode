@@ -130,6 +130,10 @@ export class LiveAgent implements AgentHandler {
     return this.mcp.discoveredTools().map((d) => `mcp__${d.serverName}__${d.toolName}`);
   }
 
+  refreshConfig(): void {
+    this.registry.syncOptionalTools();
+  }
+
   undo(grain: 'step' | 'turn' = 'step'): { turn: number; restored: number; step?: number } | null {
     if (!this.checkpoints) return null;
     return grain === 'turn' ? this.checkpoints.undoLastTurn() : this.checkpoints.undoLastStep();

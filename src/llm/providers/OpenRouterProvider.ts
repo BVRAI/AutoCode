@@ -30,7 +30,9 @@ export class OpenRouterProvider implements LlmProvider {
     const res = await fetch(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify(buildBody(req)),
+      // OpenRouter's docs require reasoning_details passed back unmodified
+      // for reasoning continuity across tool calls (Anthropic/Gemini upstreams).
+      body: JSON.stringify(buildBody(req, { reasoningEcho: 'reasoning_details' })),
       signal: req.signal,
     });
     if (!res.ok) {
@@ -58,7 +60,11 @@ export class OpenRouterProvider implements LlmProvider {
     const res = await fetch(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ ...buildBody(req), stream: true, stream_options: { include_usage: true } }),
+      body: JSON.stringify({
+        ...buildBody(req, { reasoningEcho: 'reasoning_details' }),
+        stream: true,
+        stream_options: { include_usage: true },
+      }),
       signal: req.signal,
     });
     if (!res.ok) {

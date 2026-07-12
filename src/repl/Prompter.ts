@@ -2,11 +2,11 @@ import { createInterface } from 'node:readline';
 import { type EventEmitter, NullEventEmitter } from './EventEmitter.js';
 
 // One interactive-input authority. Every yes/no confirm and free-text
-// question goes through a Prompter. In Bridge mode we use AutoAcceptPrompter
-// (inline approval cards are a follow-up); in non-TTY contexts (V6,
-// --automax, CI) we use AutoDenyPrompter (auto-decline) or PlainPrompter
-// (readline). The TuiPrompter that drove the legacy pinned-bar TUI was
-// removed when that TUI was retired.
+// question goes through a Prompter. In Bridge mode we use BridgePrompter
+// (ink/BridgePrompter.ts — renders a PromptOverlay in the React tree); in
+// non-TTY contexts (V6, --automax, CI) we use AutoDenyPrompter
+// (auto-decline) or PlainPrompter (readline). The TuiPrompter that drove
+// the legacy pinned-bar TUI was removed when that TUI was retired.
 export type ApproveVerdict = { decision: 'accept' | 'decline' | 'revise'; guidance?: string };
 
 const APPROVE_OPTIONS = ['Accept', 'Decline', 'Revise — give the agent more guidance'];
@@ -26,11 +26,10 @@ export function parseYes(answer: string): boolean {
   return t === '' || t === 'y' || t === 'yes';
 }
 
-// Bridge (Ink TUI) interim prompter — auto-accepts all approvals so the
-// agent doesn't hang on `default` mode while we wait for proper inline
-// confirmation UI in the React tree. Effectively makes Bridge behave like
-// `autocode` mode regardless of the selected mode. Tracked as a known
-// limitation; Ink-side approval cards land in the next PR.
+// Auto-accepts all approvals. NO LONGER used by the Bridge (BridgePrompter
+// renders real inline prompts now) — kept for tests and any embedding that
+// explicitly wants unattended acceptance. Never wire this as the default
+// for an interactive mode: it silently bypasses default-mode review.
 export class AutoAcceptPrompter implements Prompter {
   constructor(private readonly emitter: EventEmitter = new NullEventEmitter()) {}
   async confirm(message: string): Promise<boolean> {

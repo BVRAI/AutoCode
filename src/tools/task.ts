@@ -21,8 +21,11 @@ const DEFINITION: ToolDefinition = {
     '- Single-file lookups (just call read_file directly)\n' +
     '- Tasks that require modifying files (the subagent has read-only access)\n' +
     '- Interactive clarification with the user (the subagent cannot talk to the user)\n\n' +
+    'For multi-part research (e.g. localizing a bug that could live in several ' +
+    'subsystems), issue SEVERAL task calls in one message — they run in parallel, ' +
+    'so N focused subagents finish in the time of the slowest one.\n\n' +
     'The Explore subagent type has access to list_directory, read_file, glob, grep, ' +
-    'web_fetch, and web_search — no edit/write/shell.',
+    'find_symbol, file_deps, web_fetch, and web_search — no edit/write/shell.',
   inputSchema: {
     type: 'object',
     properties: {

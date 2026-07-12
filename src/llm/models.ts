@@ -28,6 +28,12 @@ export interface ModelInfo {
    *  catalog; undefined for bundled BYOK models (callers fall back to a
    *  family heuristic in contextWindow.ts). */
   contextWindow?: number;
+  /** Model accepts an explicit extended-thinking/reasoning request param.
+   *  False/undefined for models that either don't reason or reason
+   *  unconditionally with no param (e.g. grok-code-fast). */
+  supportsThinking?: boolean;
+  /** Provider-recommended thinking budget (tokens), when the catalog has one. */
+  thinkingBudgetDefault?: number | null;
 }
 
 export type ModelCatalogSource = 'bundled' | 'proxy';
@@ -35,28 +41,29 @@ export type ModelCatalogSource = 'bundled' | 'proxy';
 // Friendly labels + tags per model. Keys must match a model prefix in
 // RATES (or a catalog id). Missing entries fall back to the raw model id
 // as the label.
-const EXTRA_METADATA: Record<string, { label: string; notes?: string }> = {
-  // anthropic
-  'claude-opus-4-7':  { label: 'Claude Opus 4.7',   notes: 'frontier · highest quality' },
-  'claude-sonnet-4-6': { label: 'Claude Sonnet 4.6', notes: 'balanced default · great for code' },
-  'claude-haiku-4-5': { label: 'Claude Haiku 4.5',  notes: 'cheap & fast' },
-  'claude-opus-4':    { label: 'Claude Opus 4',     notes: 'prior frontier' },
-  'claude-sonnet-4':  { label: 'Claude Sonnet 4',   notes: 'prior balanced' },
+const EXTRA_METADATA: Record<string, { label: string; notes?: string; thinking?: boolean }> = {
+  // anthropic — the Claude 4 family accepts the extended-thinking param.
+  'claude-opus-4-7':  { label: 'Claude Opus 4.7',   notes: 'frontier · highest quality', thinking: true },
+  'claude-sonnet-4-6': { label: 'Claude Sonnet 4.6', notes: 'balanced default · great for code', thinking: true },
+  'claude-haiku-4-5': { label: 'Claude Haiku 4.5',  notes: 'cheap & fast', thinking: true },
+  'claude-opus-4':    { label: 'Claude Opus 4',     notes: 'prior frontier', thinking: true },
+  'claude-sonnet-4':  { label: 'Claude Sonnet 4',   notes: 'prior balanced', thinking: true },
   'claude-haiku-4':   { label: 'Claude Haiku 4',    notes: 'prior cheap & fast' },
 
-  // xai
+  // xai — grok reasoning models reason unconditionally; there is no request
+  // param to arm (they return reasoning_content on their own).
   'grok-code-fast-1': { label: 'Grok Code Fast 1',  notes: 'budget tier · coding-tuned (current default)' },
   'grok-4-fast':      { label: 'Grok 4 Fast',       notes: 'mid-tier' },
   'grok-4':           { label: 'Grok 4',            notes: 'frontier' },
 
-  // openai
-  'gpt-5.1':  { label: 'GPT-5.1',  notes: 'frontier' },
-  'gpt-5':    { label: 'GPT-5',    notes: 'frontier' },
+  // openai — o-series and the gpt-5 family accept reasoning_effort.
+  'gpt-5.1':  { label: 'GPT-5.1',  notes: 'frontier', thinking: true },
+  'gpt-5':    { label: 'GPT-5',    notes: 'frontier', thinking: true },
   'gpt-4.1':  { label: 'GPT-4.1',  notes: 'mid-tier' },
-  'o3':       { label: 'o3',       notes: 'reasoning · slow & expensive' },
-  'o4-mini':  { label: 'o4-mini',  notes: 'reasoning · cheaper' },
+  'o3':       { label: 'o3',       notes: 'reasoning · slow & expensive', thinking: true },
+  'o4-mini':  { label: 'o4-mini',  notes: 'reasoning · cheaper', thinking: true },
 
-  // openrouter
+  // openrouter — reasoning params are route-specific; leave unarmed.
   'anthropic/claude-opus-4-7':  { label: 'OpenRouter → Claude Opus 4.7',     notes: 'frontier via OR' },
   'openai/gpt-5.1':              { label: 'OpenRouter → GPT-5.1',             notes: 'frontier via OR' },
   'meta-llama/llama-3.3-70b':    { label: 'OpenRouter → Llama 3.3 70B',       notes: 'open-weights · very cheap' },
@@ -77,6 +84,7 @@ export const KNOWN_MODELS_FALLBACK: ModelInfo[] = (() => {
         inputPerM: rate.inputPerM,
         outputPerM: rate.outputPerM,
         cacheReadPerM: rate.cacheReadPerM,
+        supportsThinking: meta.thinking === true,
       });
     }
   }
@@ -128,6 +136,8 @@ export function setProxyCatalog(catalog: FullCatalog | null): void {
         outputPerM,
         cacheReadPerM,
         contextWindow: entry.context_window,
+        supportsThinking: entry.supports_thinking === true,
+        thinkingBudgetDefault: entry.thinking_budget_default,
       });
     }
   }
@@ -145,6 +155,41 @@ export function getKnownModels(): ModelInfo[] {
 
 export function getKnownProviders(): string[] {
   return Array.from(new Set(getKnownModels().map((m) => m.provider)));
+}
+
+// Cheap same-provider models for internal summarization work (compaction,
+// reflection). Summarizing a long transcript with the flagship session model
+// is pure waste — the summary quality difference is negligible. Falls back
+// to the session model when the provider has no cheaper bundled option
+// (the user's key always works for their own provider).
+const CHEAP_SUMMARIZER: Record<string, string> = {
+  anthropic: 'claude-haiku-4-5',
+  openai: 'gpt-4.1',
+  xai: 'grok-code-fast-1',
+};
+
+export function summarizerModelFor(provider: string, sessionModel: string): string {
+  return CHEAP_SUMMARIZER[provider] ?? sessionModel;
+}
+
+// Default extended-thinking budget when the catalog doesn't recommend one.
+// Anthropic's floor is 1024; 8K is enough for multi-step code reasoning
+// without dominating the output budget.
+const DEFAULT_THINKING_BUDGET = 8_192;
+
+// Resolve whether (and how) to arm extended thinking for a model. Returns
+// undefined when the model has no thinking param, when the user disabled it
+// (AUTOCODE_NO_THINKING=1), or for providers whose echo path can't sustain
+// it yet. This is what AgentLoop passes as CompletionRequest.thinking.
+export function thinkingFor(provider: string, model: string): { budgetTokens: number } | undefined {
+  if (process.env.AUTOCODE_NO_THINKING === '1') return undefined;
+  // Gemini: enabling thinkingConfig without re-attaching thoughtSignature on
+  // function calls breaks tool-use continuity — deferred until the outbound
+  // pairing pass exists (see GeminiProvider's thinking comment).
+  if (provider === 'google') return undefined;
+  const m = findModel(provider, model);
+  if (!m?.supportsThinking) return undefined;
+  return { budgetTokens: m.thinkingBudgetDefault ?? DEFAULT_THINKING_BUDGET };
 }
 
 // Lookup helper: returns the catalog entry matching a (provider, model)

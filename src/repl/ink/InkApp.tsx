@@ -2,9 +2,9 @@
 // TUI. Owns the input editor (text + cursor + history). Calls back into
 // the controller (typically TerminalMode) for submit / mode-cycle / exit.
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { Box, useApp, useInput } from 'ink';
-import { Rail } from './Rail.js';
+import { Rail, RAIL_COMPACT_WIDTH, RAIL_WIDTH } from './Rail.js';
 import { Main } from './Main.js';
 import { Inline } from './Inline.js';
 import { ThemeContext, themeByName } from './theme.js';
@@ -15,6 +15,8 @@ import { ModelPicker } from './ModelPicker.js';
 import { ProviderPicker } from './ProviderPicker.js';
 import { KeyManager } from './KeyManager.js';
 import { SlashMenu } from './SlashMenu.js';
+import { CwdPreview } from './CwdPreview.js';
+import { PromptOverlay } from './PromptOverlay.js';
 import { filterCommands } from '../commands.js';
 
 export interface InkAppHandle {
@@ -72,6 +74,8 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
   const [cursor, setCursor] = useState<number>(0);
   const [history, setHistory] = useState<string[]>([]);
   const [histPos, setHistPos] = useState<number>(-1);
+  const [scrollOffset, setScrollOffset] = useState<number>(0);
+  const previousItemCount = useRef<number>(state.items.length);
   // Slash menu state — opens when input starts with `/` and the user
   // hasn't already finished typing a complete command name + space.
   const [slashIdx, setSlashIdx] = useState<number>(0);
@@ -89,8 +93,38 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
     setInput('');
     setCursor(0);
     setSlashIdx(0);
+    setScrollOffset(0);
     props.onSubmit(text);
   }, [input, props]);
+
+  const maxScrollOffset = Math.max(0, state.items.length - 1);
+  const pageScrollStep = Math.max(3, Math.floor(rows / 3));
+  const wheelScrollStep = Math.max(1, Math.floor(rows / 10));
+  const scrollHistory = useCallback((delta: number) => {
+    setScrollOffset((offset) => Math.max(0, Math.min(maxScrollOffset, offset + delta)));
+  }, [maxScrollOffset]);
+
+  useEffect(() => {
+    const previous = previousItemCount.current;
+    const current = state.items.length;
+    previousItemCount.current = current;
+    const delta = current - previous;
+    if (delta > 0) {
+      setScrollOffset((offset) => offset > 0 ? Math.min(maxScrollOffset, offset + delta) : 0);
+    } else if (delta < 0) {
+      setScrollOffset((offset) => Math.min(offset, maxScrollOffset));
+    }
+  }, [maxScrollOffset, state.items.length]);
+
+  useEffect(() => {
+    if (props.uiMode !== 'cockpit' || !process.stdout.isTTY) return;
+    const enableMouse = '\u001B[?1000h\u001B[?1006h';
+    const disableMouse = '\u001B[?1006l\u001B[?1000l';
+    process.stdout.write(enableMouse);
+    return () => {
+      process.stdout.write(disableMouse);
+    };
+  }, [props.uiMode]);
 
   // The menu opens when the user has typed `/` followed by a partial
   // command name (no space yet — once they hit space we assume they're
@@ -106,6 +140,32 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
   }, [slashMatches.length, slashIdx]);
 
   useInput((ch, key) => {
+    if (props.uiMode === 'cockpit') {
+      const mouse = parseMouseInput(ch);
+      if (mouse.isMouse) {
+        if (mouse.wheelDelta !== 0) {
+          scrollHistory(mouse.wheelDelta * wheelScrollStep);
+        }
+        return;
+      }
+      if (key.pageUp) {
+        scrollHistory(pageScrollStep);
+        return;
+      }
+      if (key.pageDown) {
+        scrollHistory(-pageScrollStep);
+        return;
+      }
+      if (key.home) {
+        setScrollOffset(maxScrollOffset);
+        return;
+      }
+      if (key.end) {
+        setScrollOffset(0);
+        return;
+      }
+    }
+
     if (key.ctrl && ch === 'c') {
       // Typed text? Just clear it; never exit when there's input on the line.
       if (input.length > 0) {
@@ -243,16 +303,17 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
     return () => app.exit();
   }, [app]);
 
-  // Hide the rail on narrow terminals — Bridge's rail is 32 columns; below
-  // ~100 cols total the main column gets squished. Fall back to single
-  // column. Below 60 cols, even the main padding is uncomfortable — keep
-  // it readable.
-  const showRail = columns >= 100;
+  // Keep cockpit visually distinct on medium terminals: the rail only
+  // disappears when the main chat would become too narrow to use.
+  const showRail = columns >= 56;
+  const railWidth = columns >= 104 ? RAIL_WIDTH : columns >= 72 ? RAIL_COMPACT_WIDTH : 20;
 
   // Live model display — falls back to the props (set once at mount) if
   // the store hasn't received its first model update yet.
   const liveProvider = state.model.provider || props.modelProvider;
   const liveModel = state.model.name || props.modelName;
+  const liveProjectRoot = state.project.root || props.projectRoot;
+  const cwdPreviewArg = cwdPreviewArgForInput(input);
 
   // Active overlay: store-driven overlays (e.g. model picker) take
   // precedence; the slash menu is purely input-state driven.
@@ -263,7 +324,11 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
   // so the user can browse providers freely; Esc from 'model-provider'
   // closes the overlay.
   let overlay: React.ReactNode = null;
-  if (state.overlay?.kind === 'model-provider') {
+  if (state.overlay?.kind === 'prompt') {
+    // Interactive prompt (approval / confirm / choose / ask) — highest
+    // precedence: the agent is blocked awaiting the user's answer.
+    overlay = <PromptOverlay request={state.overlay.request} />;
+  } else if (state.overlay?.kind === 'model-provider') {
     overlay = (
       <ProviderPicker
         currentProvider={liveProvider}
@@ -293,6 +358,8 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
         onClose={() => props.store.setOverlay(null)}
       />
     );
+  } else if (cwdPreviewArg !== null) {
+    overlay = <CwdPreview currentRoot={liveProjectRoot} rawArg={cwdPreviewArg} />;
   } else if (slashOpen) {
     overlay = <SlashMenu commands={slashMatches} selectedIdx={slashIdx} />;
   }
@@ -310,7 +377,7 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
           spinnerId={spinnerId}
           overlay={overlay}
           exitArmed={exitArmed}
-          projectRoot={props.projectRoot}
+          projectRoot={liveProjectRoot}
           version={props.version}
           modelProvider={liveProvider}
           modelName={liveModel}
@@ -328,42 +395,49 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
             <Rail
               state={state}
               sessionId={props.sessionId}
-              projectRoot={props.projectRoot}
+              projectRoot={liveProjectRoot}
               modelProvider={liveProvider}
               modelName={liveModel}
               version={props.version}
+              width={railWidth}
             />
           )}
-          <Main state={state} input={input} cursor={cursor} spinnerId={spinnerId} overlay={overlay} exitArmed={exitArmed} />
+          <Main
+            key={`${columns}x${rows}:${showRail ? railWidth : 0}`}
+            state={state}
+            input={input}
+            cursor={cursor}
+            spinnerId={spinnerId}
+            overlay={overlay}
+            exitArmed={exitArmed}
+            rows={rows}
+            columns={showRail ? columns - railWidth : columns}
+            scrollOffset={scrollOffset}
+            maxScrollOffset={maxScrollOffset}
+          />
         </Box>
       </Box>
     </ThemeContext.Provider>
   );
 }
 
-// Synchronized output (DEC private mode 2026): bracket each frame Ink writes
-// so the terminal buffers the erase+repaint and presents it atomically. Ink's
-// renderer repaints the whole full-screen frame on every state change (e.g.
-// each keystroke), which otherwise shows as flicker; with synchronized output
-// the user only ever sees the finished frame. Terminals that don't support the
-// mode ignore the markers (no-op), so it's safe everywhere. Ink ≥6.7 emits
-// these itself; we're on Ink 5, so we wrap the output stream.
-const SYNC_BEGIN = '\x1b[?2026h';
-const SYNC_END = '\x1b[?2026l';
+function cwdPreviewArgForInput(input: string): string | null {
+  const slash = /^\/cwd\s+(.*)$/i.exec(input);
+  if (slash) return slash[1] ?? '';
+  const cd = /^cd\s+(.*)$/i.exec(input);
+  if (cd) return cd[1] ?? '';
+  return null;
+}
 
-function withSynchronizedOutput(base: NodeJS.WriteStream): NodeJS.WriteStream {
-  return new Proxy(base, {
-    get(target, prop, receiver) {
-      if (prop === 'write') {
-        return (chunk: unknown, ...rest: unknown[]): boolean => {
-          const s = typeof chunk === 'string' ? chunk : (chunk as Buffer).toString();
-          return (target.write as (...a: unknown[]) => boolean)(SYNC_BEGIN + s + SYNC_END, ...rest);
-        };
-      }
-      const value = Reflect.get(target, prop, receiver) as unknown;
-      return typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(target) : value;
-    },
-  }) as NodeJS.WriteStream;
+function parseMouseInput(input: string): { isMouse: boolean; wheelDelta: number } {
+  const match = /^\[<(\d+);\d+;\d+[mM]$/.exec(input);
+  if (!match) return { isMouse: false, wheelDelta: 0 };
+  const button = Number(match[1]);
+  if (!Number.isFinite(button) || (button & 64) === 0) return { isMouse: true, wheelDelta: 0 };
+  const direction = button & 3;
+  if (direction === 0) return { isMouse: true, wheelDelta: 1 };
+  if (direction === 1) return { isMouse: true, wheelDelta: -1 };
+  return { isMouse: true, wheelDelta: 0 };
 }
 
 // One-stop mount helper. Returns the Ink render instance — call
@@ -372,42 +446,25 @@ function withSynchronizedOutput(base: NodeJS.WriteStream): NodeJS.WriteStream {
 // the user's shell with prior scrollback intact).
 export async function mountInkApp(props: InkAppProps): Promise<{ unmount: () => void; waitUntilExit: () => Promise<void> }> {
   const { render } = await import('ink');
-  // Alt-screen is ONLY for cockpit mode (it owns the full window). Inline mode
-  // renders append-only into the normal scrollback — no takeover, no clear.
+  // Alt-screen is ONLY for cockpit mode (it owns the full window). Ink 7 owns
+  // the screen-buffer lifecycle, including cleanup on unmount/process exit.
   const altScreen = props.uiMode === 'cockpit';
-  if (altScreen) process.stdout.write('\x1b[?1049h\x1b[H\x1b[2J');
-  let exited = false;
-  const restore = (): void => {
-    if (exited) return;
-    exited = true;
-    try {
-      if (altScreen) process.stdout.write('\x1b[?1049l');
-    } catch {
-      /* shell already closed */
-    }
-  };
   const inst = render(<InkApp {...props} />, {
-    // Synchronized output only helps (and only belongs in) the full-screen
-    // cockpit, where the whole frame repaints. In inline mode it interferes
-    // with Ink's <Static> scrollback (stranding ghost frames), so use the
-    // raw stream there.
-    stdout: altScreen ? withSynchronizedOutput(process.stdout) : process.stdout,
+    stdout: process.stdout,
     stdin: process.stdin,
     exitOnCtrlC: false,
     patchConsole: false,
+    maxFps: altScreen ? 20 : 30,
+    incrementalRendering: altScreen,
+    alternateScreen: altScreen,
+    interactive: true,
   });
-  // Belt-and-suspenders: if the process exits abruptly (uncaught error,
-  // SIGTERM), still restore the main screen buffer so the user's
-  // terminal doesn't get stuck in alt-screen mode.
-  process.once('exit', restore);
   return {
     unmount: () => {
-      try {
-        inst.unmount();
-      } finally {
-        restore();
-      }
+      inst.unmount();
     },
-    waitUntilExit: () => inst.waitUntilExit().finally(restore),
+    waitUntilExit: async () => {
+      await inst.waitUntilExit();
+    },
   };
 }

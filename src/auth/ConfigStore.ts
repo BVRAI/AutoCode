@@ -76,6 +76,10 @@ export interface AutocodeConfig {
     extraBlockedHosts?: string[];
     extraAllowedHosts?: string[];
   };
+  computerUse?: {
+    enabled?: boolean;
+    defaultVisible?: boolean;
+  };
   // ISO timestamp recorded when the first-run wizard finished — either by
   // saving credentials, opening the bvrai.com signup page, or by the user
   // explicitly choosing Skip. Set once; suppresses the wizard on subsequent

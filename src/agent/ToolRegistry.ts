@@ -19,34 +19,10 @@ import { AskUserTool } from '../tools/askUser.js';
 import { TaskTool } from '../tools/task.js';
 import { UseSkillTool } from '../tools/useSkill.js';
 import { FindSymbolTool } from '../tools/findSymbol.js';
-import { ConfigStore } from '../auth/ConfigStore.js';
-
-// Honor the `webTools.enabled` config flag — when false, web_fetch and
-// web_search aren't registered at all (LLM doesn't see them).
-function webToolsEnabled(): boolean {
-  try {
-    const cfg = new ConfigStore().load();
-    return cfg.webTools?.enabled !== false;
-  } catch {
-    return true;
-  }
-}
-
-// AUTOCODE_BENCH_MODE=1 trims tools the agent literally cannot use in a
-// headless automated run (browser windows + screenshot capture — both
-// GUI-bound, both useless when nobody is at the keyboard to see the
-// output). Set by autocode-bench's runner-common.ts; never set by V6 or
-// by real interactive users. Distinct from `webTools.enabled` — that one
-// gates the network-fetching tools for users in regulated contexts who
-// still want browser convenience. Bench mode strips both classes.
-function benchMode(): boolean {
-  return process.env.AUTOCODE_BENCH_MODE === '1';
-}
-
-// Convenience: which "GUI-bound" tools to skip in bench mode.
-function guiToolsEnabled(): boolean {
-  return !benchMode();
-}
+import { FileDepsTool } from '../tools/fileDeps.js';
+import { ComputerUseTaskTool } from '../tools/computerUseTask.js';
+import { ComputerUseHostTool } from '../tools/computerUseHost.js';
+import { benchMode, computerUseEnabled, guiToolsEnabled, webToolsEnabled } from './toolAvailability.js';
 
 export class ToolRegistry {
   private readonly tools = new Map<string, Tool>();
@@ -63,14 +39,14 @@ export class ToolRegistry {
     this.register(new GrepTool());
     this.register(new TodoWriteTool());
     if (webToolsEnabled() && !benchMode()) {
-      // Network-fetching tools — gated by the user-facing config flag AND
-      // by bench mode (a bench run is headless + can't act on web data).
+      // Network-fetching tools are gated by the user-facing config flag and
+      // by bench mode, where headless runs cannot act on web data.
       this.register(new WebFetchTool());
       this.register(new WebSearchTool());
     }
     if (guiToolsEnabled()) {
-      // Browser/screenshot — keep for interactive users, drop in bench mode
-      // (a headless process can't meaningfully use either).
+      // Browser/screenshot stay available for interactive users, but not
+      // benchmark/headless runs.
       this.register(new OpenInBrowserTool());
       this.register(new CaptureScreenshotTool());
     }
@@ -78,14 +54,12 @@ export class ToolRegistry {
     this.register(new TaskTool());
     this.register(new UseSkillTool());
     this.register(new FindSymbolTool());
+    this.register(new FileDepsTool());
+    this.syncOptionalTools();
   }
 
   // Factory for the `sights` mode registry (Automax V6's locked-down static
-  // website builder). File ops inside the project root only — no shell, no
-  // web, no browser/screenshot, no subagents, no ask_user (headless anyway),
-  // no skills. The path-safety layer confines every file tool to the
-  // --project-root. The V6 host additionally validates the output before it
-  // is ever rendered, so this restriction is belt, not the only suspenders.
+  // website builder). File ops inside the project root only.
   static forSights(): ToolRegistry {
     const r = new ToolRegistry();
     r.tools.clear();
@@ -101,12 +75,9 @@ export class ToolRegistry {
     return r;
   }
 
-  // Factory for constrained subagent registries. Returns a registry that
-  // includes ONLY the read-only research tools — no edit/write/shell, no
-  // task tool (so subagents can't spawn further subagents).
+  // Factory for constrained subagent registries.
   static forSubagent(type: SubagentType): ToolRegistry {
     const r = new ToolRegistry();
-    // Clear the default full set and re-register a constrained subset.
     r.tools.clear();
     switch (type) {
       case 'Explore':
@@ -115,10 +86,20 @@ export class ToolRegistry {
         r.register(new GlobTool());
         r.register(new GrepTool());
         r.register(new FindSymbolTool());
+        r.register(new FileDepsTool());
         if (webToolsEnabled() && !benchMode()) {
           r.register(new WebFetchTool());
           r.register(new WebSearchTool());
         }
+        break;
+      case 'ComputerUse':
+        r.register(new ListDirectoryTool());
+        r.register(new ReadFileTool());
+        r.register(new GlobTool());
+        r.register(new GrepTool());
+        r.register(new FindSymbolTool());
+        r.register(new FileDepsTool());
+        r.register(new ComputerUseHostTool());
         break;
     }
     return r;
@@ -126,6 +107,18 @@ export class ToolRegistry {
 
   register(tool: Tool): void {
     this.tools.set(tool.definition.name, tool);
+  }
+
+  unregister(name: string): void {
+    this.tools.delete(name);
+  }
+
+  syncOptionalTools(): void {
+    if (computerUseEnabled() && !benchMode()) {
+      if (!this.tools.has('computer_use_task')) this.register(new ComputerUseTaskTool());
+    } else {
+      this.unregister('computer_use_task');
+    }
   }
 
   get(name: string): Tool | undefined {

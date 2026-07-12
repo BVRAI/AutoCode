@@ -52,7 +52,7 @@ program
   .option('--automax', 'emit machine-readable activity events for the Automax host', false)
   .option('--temperature <n>', 'sampling temperature for model calls (e.g. 0 for deterministic); default: provider default')
   .option('--max-cost <usd>', 'stop a turn once its accumulated model cost exceeds this many USD')
-  .option('--max-iterations <n>', 'max tool-call iterations per turn before stopping (default 40)')
+  .option('--max-iterations <n>', 'max tool-call iterations per turn before stopping (default 200)')
   .action(
     async (opts: {
       projectRoot?: string;

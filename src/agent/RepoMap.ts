@@ -1,11 +1,16 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { extname, join, relative, sep } from 'node:path';
 import { NOISE_DIRS } from '../tools/listDirectory.js';
+import { buildImportGraph, type ImportGraph } from './ImportGraph.js';
 
 const MAX_DIGEST_BYTES = 6000;
 const MAX_FILES = 400;
 const MAX_SYMBOLS_PER_FILE = 10;
 const MAX_READ_BYTES = 64_000;
+// Share of the digest budget spent on ranked symbol lines; the remainder
+// lists leftover files as bare paths so the tree stays visible even when
+// symbol detail doesn't fit (Aider's detail + coverage mix).
+const PHASE1_BUDGET_FRACTION = 0.75;
 
 const SOURCE_EXT = new Set([
   '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
@@ -22,21 +27,54 @@ export const LARGE_REPO_FILE_THRESHOLD = 25;
 interface RepoMapInfo {
   digest: string;
   fileCount: number;
+  graph: ImportGraph;
 }
 
 const mapCache = new Map<string, RepoMapInfo>();
+// Roots whose files changed since their map was built. The rebuild is
+// deferred to a turn boundary — see refreshRepoMapIfStale.
+const dirtyRoots = new Set<string>();
 
 // A compact digest of the project — file tree + top-level symbols — injected
 // into the system prompt so the agent can navigate without blind re-reads.
-// Cached per project root for the life of the process.
+// Cached per project root; refreshed at turn boundaries after mutations.
 export function getRepoMap(projectRoot: string): string {
   return repoMapInfo(projectRoot).digest;
+}
+
+// Mark a root's map stale (a file was created/edited/deleted). Cheap — the
+// actual rebuild happens at the next turn boundary.
+export function invalidateRepoMap(projectRoot: string): void {
+  if (mapCache.has(projectRoot)) dirtyRoots.add(projectRoot);
+}
+
+// Rebuild a stale map. Called at TURN boundaries (AgentLoop.submit), not
+// per-edit: the digest is part of the cached system-prompt prefix, so
+// rebuilding between iterations would bust the provider prompt cache
+// repeatedly within a single turn. Returns true when a rebuild happened.
+export function refreshRepoMapIfStale(projectRoot: string): boolean {
+  if (!dirtyRoots.has(projectRoot)) return false;
+  dirtyRoots.delete(projectRoot);
+  mapCache.set(projectRoot, buildRepoMapInfo(projectRoot));
+  return true;
+}
+
+// Unconditional rebuild — the /refresh command.
+export function forceRefreshRepoMap(projectRoot: string): void {
+  dirtyRoots.delete(projectRoot);
+  mapCache.set(projectRoot, buildRepoMapInfo(projectRoot));
 }
 
 // Number of source files scanned for the repo map (capped at MAX_FILES). A
 // stable per-session "how big is this repo" signal used for prompt gating.
 export function repoFileCount(projectRoot: string): number {
   return repoMapInfo(projectRoot).fileCount;
+}
+
+// The file-level import graph built during the repo-map scan — consumed by
+// the file_deps tool. Same cache and lifecycle as the digest.
+export function getImportGraph(projectRoot: string): ImportGraph {
+  return repoMapInfo(projectRoot).graph;
 }
 
 function repoMapInfo(projectRoot: string): RepoMapInfo {
@@ -57,22 +95,95 @@ function buildRepoMapInfo(projectRoot: string): RepoMapInfo {
   files.sort();
   const fileCount = files.length;
 
-  const lines: string[] = [];
-  let bytes = 0;
-  let truncated = false;
+  // Read each file ONCE — symbol extraction and the import graph share it.
+  const rels: string[] = [];
+  const textByRel = new Map<string, string>();
+  const symbolsByRel = new Map<string, string[]>();
   for (const abs of files) {
     const rel = relative(projectRoot, abs).split(sep).join('/');
-    const symbols = extractSymbols(abs);
-    const line = symbols.length > 0 ? `${rel}  ·  ${symbols.join(', ')}` : rel;
-    if (bytes + line.length + 1 > MAX_DIGEST_BYTES) {
-      truncated = true;
-      break;
+    rels.push(rel);
+    let text = '';
+    try {
+      text = readFileSync(abs, 'utf8');
+    } catch {
+      /* unreadable — empty text, no symbols, no edges */
     }
+    if (text.length > MAX_READ_BYTES) text = text.slice(0, MAX_READ_BYTES);
+    textByRel.set(rel, text);
+    symbolsByRel.set(rel, extractSymbolsFromText(text, extname(abs)));
+  }
+  const graph = buildImportGraph(rels, (rel) => textByRel.get(rel) ?? null);
+
+  // Importance ordering — the fix for the old alphabetical digest, which on
+  // a big repo showed an arbitrary a-to-d slice instead of the files that
+  // matter. Score = PageRank × (1 + in-degree): PageRank alone over-rewards
+  // the single import of a high-rank hub (funnel effect — on a small graph a
+  // leaf utility fed only by core.ts can outrank core.ts itself), while raw
+  // in-degree alone misses hub-of-hubs files. The product wants both breadth
+  // (many importers) and depth (important importers).
+  const inDeg = (rel: string): number => graph.importers.get(rel)?.length ?? 0;
+  const score = (rel: string): number => (graph.rank.get(rel) ?? 0) * (1 + inDeg(rel));
+  const ordered = [...rels].sort((a, b) => {
+    if (score(b) !== score(a)) return score(b) - score(a);
+    if (inDeg(b) !== inDeg(a)) return inDeg(b) - inDeg(a);
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
+
+  // Phase 1 — ranked symbol lines within the phase budget.
+  const lines: string[] = [];
+  let bytes = 0;
+  const phase1Budget = Math.floor(MAX_DIGEST_BYTES * PHASE1_BUDGET_FRACTION);
+  let idx = 0;
+  for (; idx < ordered.length; idx++) {
+    const rel = ordered[idx]!;
+    const symbols = symbolsByRel.get(rel) ?? [];
+    const n = inDeg(rel);
+    const line =
+      (symbols.length > 0 ? `${rel}  ·  ${symbols.join(', ')}` : rel) +
+      (n >= 2 ? `  (imported by ${n})` : '');
+    if (bytes + line.length + 1 > phase1Budget) break;
     lines.push(line);
     bytes += line.length + 1;
   }
-  const digest = lines.length === 0 ? '' : lines.join('\n') + (truncated ? '\n… (repo map truncated)' : '');
-  return { digest, fileCount };
+
+  // Phase 2 — leftover files as comma-packed bare paths (alphabetical: the
+  // tail reads as a tree listing, not a ranking).
+  let truncated = false;
+  if (idx < ordered.length) {
+    const rest = ordered.slice(idx).sort();
+    const header = '— other files —';
+    lines.push(header);
+    bytes += header.length + 1;
+    let current = '';
+    for (const rel of rest) {
+      const candidate = current === '' ? rel : `${current}, ${rel}`;
+      if (candidate.length > 100 && current !== '') {
+        if (bytes + current.length + 1 > MAX_DIGEST_BYTES) {
+          truncated = true;
+          current = '';
+          break;
+        }
+        lines.push(current);
+        bytes += current.length + 1;
+        current = rel;
+      } else {
+        current = candidate;
+      }
+    }
+    if (current !== '') {
+      if (bytes + current.length + 1 > MAX_DIGEST_BYTES) truncated = true;
+      else lines.push(current);
+    }
+    if (rest.length > 0 && idx < ordered.length && lines[lines.length - 1] === header && truncated === false) {
+      // Nothing from phase 2 fit at all — drop the dangling header.
+      lines.pop();
+      truncated = true;
+    }
+  }
+
+  const digest =
+    lines.length === 0 ? '' : lines.join('\n') + (truncated ? '\n… (repo map truncated)' : '');
+  return { digest, fileCount, graph };
 }
 
 function collect(dir: string, out: string[], depth: number): void {
@@ -102,18 +213,34 @@ function collect(dir: string, out: string[], depth: number): void {
 }
 
 // Per-language regex for matching a top-level declaration of a *named*
-// identifier. The pattern always captures the bound name in group 1 (or 2
-// for the TS `export const X` branch). Anchored to start-of-line so indented
-// / nested declarations are skipped. Shared between RepoMap (which extracts
-// ALL declared symbols in a file) and the find_symbol tool (which searches
-// for a specific name).
+// identifier. The pattern always captures the bound name in group 1 (or
+// group 2 for languages with a second branch, e.g. TS `export const X`,
+// Java/C# method signatures). Anchored to start-of-line (some languages
+// permit leading whitespace for class-member declarations). Shared between
+// RepoMap (which extracts ALL declared symbols in a file) and the
+// find_symbol tool (which searches for a specific name). Every language
+// advertised in find_symbol's `language` enum MUST have a pattern here —
+// a silent null means the tool claims support it doesn't have.
 export function declarationPatternForExt(ext: string): RegExp | null {
   if (['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'].includes(ext)) {
     return /^(?:export\s+(?:default\s+)?)?(?:async\s+)?(?:function|class|interface|type|enum)\s+([\w$]+)|^export\s+const\s+([\w$]+)/gm;
   }
   if (ext === '.py') return /^\s*(?:def|class)\s+([A-Za-z_]\w*)/gm;
   if (ext === '.go') return /^(?:func|type)\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)/gm;
-  if (ext === '.rs') return /^\s*(?:pub\s+)?(?:fn|struct|enum|trait)\s+([A-Za-z_]\w*)/gm;
+  if (ext === '.rs') return /^\s*(?:pub(?:\([^)]*\))?\s+)?(?:fn|struct|enum|trait)\s+([A-Za-z_]\w*)/gm;
+  if (ext === '.java') {
+    // Branch 1: type declarations (class/interface/enum/record).
+    // Branch 2: modifier-prefixed method signatures (requires ≥1 modifier so
+    // control-flow lines like `if (…)` can't match).
+    return /^\s*(?:(?:public|private|protected|static|final|abstract|sealed|synchronized|strictfp)\s+)*(?:class|interface|enum|record)\s+([A-Za-z_]\w*)|^\s*(?:(?:public|private|protected|static|final|abstract|synchronized)\s+)+[\w<>[\],\s?]+?\s+([A-Za-z_]\w*)\s*\(/gm;
+  }
+  if (ext === '.rb') return /^\s*(?:def\s+(?:self\.)?|class\s+|module\s+)([A-Za-z_]\w*[?!=]?)/gm;
+  if (ext === '.php') {
+    return /^\s*(?:(?:public|private|protected|static|abstract|final)\s+)*(?:function\s+&?|class\s+|interface\s+|trait\s+|enum\s+)([A-Za-z_]\w*)/gm;
+  }
+  if (ext === '.cs') {
+    return /^\s*(?:(?:public|private|protected|internal|static|sealed|abstract|partial|readonly|virtual|override|async)\s+)*(?:class|interface|struct|enum|record)\s+([A-Za-z_]\w*)|^\s*(?:(?:public|private|protected|internal|static|virtual|override|async|sealed|abstract)\s+)+[\w<>[\],\s?]+?\s+([A-Za-z_]\w*)\s*\(/gm;
+  }
   return null;
 }
 
@@ -122,16 +249,9 @@ export const SCANNED_SOURCE_EXT = SOURCE_EXT;
 
 // Cheap, per-language extraction of top-level declaration names. Anchored to
 // the start of a line so indented (local / member) declarations are skipped.
-function extractSymbols(absPath: string): string[] {
-  let text: string;
-  try {
-    text = readFileSync(absPath, 'utf8');
-  } catch {
-    return [];
-  }
-  if (text.length > MAX_READ_BYTES) text = text.slice(0, MAX_READ_BYTES);
-
-  const re = declarationPatternForExt(extname(absPath));
+// Takes text (not a path) so the repo-map scan reads each file exactly once.
+function extractSymbolsFromText(text: string, ext: string): string[] {
+  const re = declarationPatternForExt(ext);
   if (!re) return [];
 
   const names: string[] = [];

@@ -5,8 +5,11 @@ import type { SessionContext } from '../session/SessionContext.js';
 import type { ToolExecutionContext, SubagentType } from '../tools/types.js';
 import { ToolRegistry } from './ToolRegistry.js';
 import { buildSubagentSystemPrompt } from './SubagentPromptBuilder.js';
+import { defaultMaxOutputTokens } from '../util/contextWindow.js';
+import { thinkingFor } from '../llm/models.js';
 
-const MAX_SUBAGENT_ITERATIONS = 16;
+const MAX_EXPLORE_ITERATIONS = 16;
+const MAX_COMPUTER_USE_ITERATIONS = 10;
 const LOOP_DETECT_WINDOW = 10;
 const LOOP_DETECT_THRESHOLD = 3;
 
@@ -44,6 +47,7 @@ export class SubagentRunner {
     const registry = ToolRegistry.forSubagent(input.type);
     const systemPrompt = buildSubagentSystemPrompt(input.type, input.parent);
     const messages: Message[] = [{ role: 'user', content: input.prompt }];
+    const maxIterations = input.type === 'ComputerUse' ? MAX_COMPUTER_USE_ITERATIONS : MAX_EXPLORE_ITERATIONS;
 
     const totalUsage = {
       inputTokens: 0,
@@ -54,7 +58,7 @@ export class SubagentRunner {
     let lastText = '';
     const recentSigs: string[] = [];
 
-    for (let iter = 0; iter < MAX_SUBAGENT_ITERATIONS; iter++) {
+    for (let iter = 0; iter < maxIterations; iter++) {
       const response = await this.router.complete(
         input.parent.model.provider as ProviderName,
         {
@@ -62,6 +66,9 @@ export class SubagentRunner {
           system: systemPrompt,
           messages,
           tools: registry.schemas(),
+          maxTokens: defaultMaxOutputTokens(input.parent.model.model),
+          temperature: input.parent.sampling?.temperature ?? 0,
+          thinking: thinkingFor(input.parent.model.provider, input.parent.model.model),
         },
       );
 
@@ -85,6 +92,7 @@ export class SubagentRunner {
       }
 
       const results: ContentBlock[] = [];
+      const images: ContentBlock[] = [];
       for (const tu of toolUses) {
         if (tu.type !== 'tool_use') continue;
         const sig = `${tu.name}:${stableStringify(tu.input)}`;
@@ -113,29 +121,44 @@ export class SubagentRunner {
           content: result.content,
           isError: result.isError,
         });
-      }
-
-      // Loop detection — same pattern as parent.
-      const loop = detectLoop(recentSigs, LOOP_DETECT_THRESHOLD);
-      if (loop) {
-        results.push({
-          type: 'tool_result',
-          toolUseId: 'loop-detected',
-          content:
-            `You called \`${loop}\` with the same arguments ${LOOP_DETECT_THRESHOLD}+ times recently. ` +
-            `Stop calling tools and write your final answer with what you have.`,
-          isError: true,
-        });
-        recentSigs.length = 0;
+        const img = (result.metadata as { image?: unknown } | undefined)?.image;
+        if (img && typeof img === 'object' && (img as { type?: string }).type === 'image') {
+          images.push(img as ContentBlock);
+        }
       }
 
       messages.push({ role: 'user', content: results });
+
+      // Loop detection — same pattern as parent. The advisory rides in a
+      // separate text-only user message (NOT a tool_result with a synthetic
+      // id, which providers reject as referencing a nonexistent tool call).
+      const loop = detectLoop(recentSigs, LOOP_DETECT_THRESHOLD);
+      if (loop) {
+        messages.push({
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text:
+                `[harness advisory] You called \`${loop}\` with the same arguments ${LOOP_DETECT_THRESHOLD}+ times recently. ` +
+                `Stop calling tools and write your final answer with what you have.`,
+            },
+          ],
+        });
+        recentSigs.length = 0;
+      }
+      if (images.length > 0) {
+        messages.push({
+          role: 'user',
+          content: [...images, { type: 'text', text: '(images returned by the computer-use host above)' }],
+        });
+      }
     }
 
     return {
       text: lastText || '(subagent did not produce a final answer within iteration cap)',
       usage: totalUsage,
-      iterations: MAX_SUBAGENT_ITERATIONS,
+      iterations: maxIterations,
       error: 'iteration cap reached',
     };
   }

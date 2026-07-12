@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { resolveInsideRoot, toRelative } from '../util/pathSafety.js';
+import { gateAfterWrite } from './syntaxGate.js';
 import {
   optionalString,
   requireString,
@@ -54,9 +55,20 @@ export class WriteFileTool implements Tool {
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, content, 'utf8');
     const rel = toRelative(ctx.session.projectRoot, target);
+    // Syntax gate — see editFile.ts. A create that fails the gate is removed;
+    // an overwrite is reverted to the prior content.
+    const gate = await gateAfterWrite({
+      target,
+      relPath: rel,
+      projectRoot: ctx.session.projectRoot,
+      original: before,
+      existedBefore: exists,
+      content,
+    });
+    if (gate.action === 'reverted') return gate.result;
     return {
       summary: `${exists ? 'overwrote' : 'created'} ${rel} (${content.length} bytes)`,
-      content: `OK`,
+      content: gate.action === 'kept-with-warning' ? `OK\n\n${gate.warning}` : `OK`,
       metadata: { bytes: content.length, mode, existed: exists, before, after: content, path: rel },
     };
   }

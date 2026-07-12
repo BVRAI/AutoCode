@@ -64,6 +64,26 @@ export interface McpStatusEntry {
   error?: string;
 }
 
+// An interactive prompt surfaced as a Bridge overlay (the BridgePrompter
+// pushes one of these; PromptOverlay renders it; the embedded resolve
+// callback completes the prompter's pending promise). One at a time —
+// BridgePrompter serializes requests through an internal queue.
+export type PromptRequest =
+  | { type: 'confirm'; message: string; resolve: (yes: boolean) => void }
+  | { type: 'ask'; message: string; resolve: (answer: string) => void }
+  | {
+      type: 'choose';
+      question: string;
+      options: string[];
+      multiSelect: boolean;
+      resolve: (picked: number[]) => void;
+    }
+  | {
+      type: 'approve';
+      label: string;
+      resolve: (verdict: { decision: 'accept' | 'decline' | 'revise'; guidance?: string }) => void;
+    };
+
 export interface BridgeState {
   turn: number;
   busy: boolean;
@@ -98,6 +118,7 @@ export interface BridgeState {
     | { kind: 'model-provider' }
     | { kind: 'model-models'; provider: string }
     | { kind: 'byok' }
+    | { kind: 'prompt'; request: PromptRequest }
     | null;
   // Active model — surfaced for the rail's MODEL row and for the model
   // picker to show "current" highlight. Updated by the bench / user.
@@ -105,7 +126,7 @@ export interface BridgeState {
   // Project git summary for the rail's PROJECT row. `branch === null` means
   // the folder is not a git repo (rail shows "no git"). Refreshed on the
   // rail's poll timer, so it tracks branch switches mid-session.
-  project: { branch: string | null; dirty: number };
+  project: { root: string; branch: string | null; dirty: number };
   // Sticky plan panel (inline mode) — mirrors the todo_write list so a
   // multi-phase task always shows its overall progress above the prompt.
   plan: { items: PlanItem[]; collapsed: boolean };
@@ -131,7 +152,7 @@ const INITIAL: BridgeState = {
   items: [],
   overlay: null,
   model: { provider: '', name: '' },
-  project: { branch: null, dirty: 0 },
+  project: { root: '', branch: null, dirty: 0 },
   plan: { items: [], collapsed: true },
 };
 
@@ -260,7 +281,12 @@ export class BridgeStore {
   setProjectGit(branch: string | null, dirty: number): void {
     const cur = this.state.project;
     if (cur.branch === branch && cur.dirty === dirty) return;
-    this.emit({ ...this.state, project: { branch, dirty } });
+    this.emit({ ...this.state, project: { ...cur, branch, dirty } });
+  }
+
+  setProjectRoot(root: string): void {
+    if (this.state.project.root === root) return;
+    this.emit({ ...this.state, project: { ...this.state.project, root } });
   }
 
   // Mirror the todo_write list into the sticky plan panel. Equality-guarded on

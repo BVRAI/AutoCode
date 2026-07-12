@@ -13,7 +13,24 @@ import {
 } from './types.js';
 
 const DEFAULT_TIMEOUT = 300;
-const MAX_OUTPUT_BYTES = 100_000;
+// Model-facing output budget. ~30K chars ≈ 7-8K tokens — the industry norm
+// (Claude Code middle-truncates at 30K chars). The old 100K cap could flood
+// an eighth of a 200K-token context window with a single noisy command.
+export const MAX_MODEL_OUTPUT_CHARS = 30_000;
+// stderr gets its own reserved budget, applied BEFORE stdout claims the
+// remainder — a flood of stdout must never starve the error text out of
+// the result.
+const STDERR_RESERVED_CHARS = 10_000;
+// Middle-truncation split: the tail gets the larger share because test
+// runners and compilers print their failure summary at the END of the run.
+const HEAD_FRACTION = 0.3;
+// Per-stream in-memory bound during capture — enough to middle-truncate
+// accurately without holding a runaway process's full output in memory.
+const CAPTURE_HEAD_CHARS = 200_000;
+const CAPTURE_TAIL_CHARS = 200_000;
+// Background (dev-server) startup capture is head-only: early startup errors
+// appear at the start, and only a few seconds of output are captured anyway.
+const BG_STARTUP_CHARS = 20_000;
 const BACKGROUND_GRACE_MS = 3_000;
 
 // Background processes (e.g. dev servers) — killed when autocode exits so a
@@ -37,7 +54,9 @@ const DEFINITION: ToolDefinition = {
     'and anything targeting paths outside the project or protected system zones are hard-blocked. ' +
     'Set background:true for long-running processes like a dev server — autocode starts it, captures ' +
     'a few seconds of startup output, and leaves it running (killed when the session ends). ' +
-    'stdout and stderr are captured and returned (truncated to 100KB total).',
+    'stdout and stderr are captured with separate budgets and middle-truncated to ~30,000 characters ' +
+    'total — the beginning and end are kept and an omission marker shows how much was cut (failure ' +
+    'summaries at the end of test/build output survive). Full byte counts are in metadata.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -102,42 +121,88 @@ export class RunShellTool implements Tool {
           (bg.exited
             ? `Process already exited (code ${bg.code ?? 'n/a'}).\n`
             : `Process is running (pid ${bg.pid ?? 'n/a'}); it will be stopped when the session ends.\n`) +
-          (bg.output.length > 0 ? `--- startup output ---\n${bg.output}` : '(no startup output)'),
+          (bg.output.length > 0
+            ? `--- startup output ---\n${bg.output}${bg.clipped ? '\n… [startup output truncated]' : ''}`
+            : '(no startup output)'),
         isError: bg.exited && bg.code !== 0,
         metadata: { background: true, pid: bg.pid, exited: bg.exited, exitCode: bg.code },
       };
     }
 
     const result = await runCommand(command, cwd, timeoutSec * 1000);
-    const display = trimOutput(result.stdout, result.stderr);
+    const trimmed = trimOutput(result.stdout, result.stderr);
     const summary =
       `exit ${result.code ?? 'n/a'} in ${toRelative(ctx.session.projectRoot, cwd) || '.'}` +
       (result.timedOut ? ' (timed out)' : '');
     return {
       summary,
-      content: display,
+      content: trimmed.content,
       isError: result.code !== 0 || result.timedOut,
       metadata: {
         exitCode: result.code,
         timedOut: result.timedOut,
-        stdoutBytes: result.stdout.length,
-        stderrBytes: result.stderr.length,
+        stdoutBytes: result.stdout.bytes,
+        stderrBytes: result.stderr.bytes,
+        stdoutChars: result.stdout.chars,
+        stderrChars: result.stderr.chars,
+        stdoutTruncated: trimmed.stdoutTruncated,
+        stderrTruncated: trimmed.stderrTruncated,
         verdict,
       },
     };
   }
 }
 
+// One captured output stream. `head`/`tail` hold the retained slices (the
+// middle may already have been dropped during capture); `chars`/`bytes` are
+// the TRUE totals the process produced, kept honest for metadata even when
+// the text itself was clipped.
+export interface CapturedStream {
+  head: string;
+  tail: string;
+  chars: number; // UTF-16 code units produced
+  bytes: number; // raw bytes produced
+}
+
+// Bounded stream capture: fill `head` up to CAPTURE_HEAD_CHARS, then roll a
+// CAPTURE_TAIL_CHARS window over the rest. This lets trimOutput reconstruct
+// a faithful middle-truncated view without ever holding a runaway process's
+// full output in memory (the old code accumulated unbounded strings).
+export function createCapture(): { push(d: Buffer): void; snapshot(): CapturedStream } {
+  let head = '';
+  let tail = '';
+  let chars = 0;
+  let bytes = 0;
+  return {
+    push(d: Buffer): void {
+      const s = d.toString('utf8');
+      chars += s.length;
+      bytes += d.length;
+      if (head.length < CAPTURE_HEAD_CHARS) {
+        const room = CAPTURE_HEAD_CHARS - head.length;
+        head += s.slice(0, room);
+        if (s.length > room) tail = (tail + s.slice(room)).slice(-CAPTURE_TAIL_CHARS);
+      } else {
+        tail = (tail + s).slice(-CAPTURE_TAIL_CHARS);
+      }
+    },
+    snapshot(): CapturedStream {
+      return { head, tail, chars, bytes };
+    },
+  };
+}
+
 interface CommandResult {
   code: number | null;
-  stdout: string;
-  stderr: string;
+  stdout: CapturedStream;
+  stderr: CapturedStream;
   timedOut: boolean;
 }
 
 interface BackgroundResult {
   pid?: number;
   output: string;
+  clipped: boolean;
   exited: boolean;
   code: number | null;
 }
@@ -157,18 +222,26 @@ function runBackground(command: string, cwd: string): Promise<BackgroundResult> 
     child.unref();
 
     let output = '';
+    let clipped = false;
     let exited = false;
     let code: number | null = null;
+    // Head-only cap: for a dev server the interesting failures (port in use,
+    // missing module) print immediately, so the start is the right end to keep.
     const cap = (d: Buffer): void => {
-      if (output.length < MAX_OUTPUT_BYTES) output += d.toString('utf8');
+      if (output.length >= BG_STARTUP_CHARS) {
+        clipped = true;
+        return;
+      }
+      const s = d.toString('utf8');
+      const room = BG_STARTUP_CHARS - output.length;
+      output += s.slice(0, room);
+      if (s.length > room) clipped = true;
     };
     child.stdout?.on('data', (d: Buffer) => {
       cap(d);
-      process.stdout.write(d);
     });
     child.stderr?.on('data', (d: Buffer) => {
       cap(d);
-      process.stderr.write(d);
     });
     child.on('close', (c) => {
       exited = true;
@@ -181,7 +254,7 @@ function runBackground(command: string, cwd: string): Promise<BackgroundResult> 
       bgChildren.delete(child);
     });
 
-    setTimeout(() => resolve({ pid: child.pid, output, exited, code }), BACKGROUND_GRACE_MS);
+    setTimeout(() => resolve({ pid: child.pid, output, clipped, exited, code }), BACKGROUND_GRACE_MS);
   });
 }
 
@@ -191,8 +264,8 @@ function runCommand(command: string, cwd: string, timeoutMs: number): Promise<Co
     // corrupted quoted arguments containing spaces.
     const child = spawn(command, { cwd, shell: true });
 
-    let stdout = '';
-    let stderr = '';
+    const outCap = createCapture();
+    const errCap = createCapture();
     let timedOut = false;
 
     const timer = setTimeout(() => {
@@ -205,28 +278,78 @@ function runCommand(command: string, cwd: string, timeoutMs: number): Promise<Co
     }, timeoutMs);
 
     child.stdout?.on('data', (d: Buffer) => {
-      stdout += d.toString('utf8');
-      process.stdout.write(d);
+      outCap.push(d);
     });
     child.stderr?.on('data', (d: Buffer) => {
-      stderr += d.toString('utf8');
-      process.stderr.write(d);
+      errCap.push(d);
     });
     child.on('close', (code) => {
       clearTimeout(timer);
-      resolve({ code, stdout, stderr, timedOut });
+      resolve({ code, stdout: outCap.snapshot(), stderr: errCap.snapshot(), timedOut });
     });
     child.on('error', (err) => {
       clearTimeout(timer);
-      resolve({ code: 1, stdout, stderr: stderr + `\n[spawn error] ${err.message}`, timedOut });
+      errCap.push(Buffer.from(`\n[spawn error] ${err.message}`, 'utf8'));
+      resolve({ code: 1, stdout: outCap.snapshot(), stderr: errCap.snapshot(), timedOut });
     });
   });
 }
 
-function trimOutput(stdout: string, stderr: string): string {
-  const combined =
-    (stdout.length > 0 ? `--- stdout ---\n${stdout}\n` : '') +
-    (stderr.length > 0 ? `--- stderr ---\n${stderr}\n` : '');
-  if (combined.length <= MAX_OUTPUT_BYTES) return combined || '(no output)';
-  return combined.slice(0, MAX_OUTPUT_BYTES) + `\n… truncated (${combined.length - MAX_OUTPUT_BYTES} bytes more)`;
+function omissionMarker(n: number): string {
+  return `\n… [${n} chars omitted — output was middle-truncated; failures usually appear near the end] …\n`;
+}
+
+// Render one captured stream within a char budget, keeping the beginning and
+// the end. The tail gets the larger share (HEAD_FRACTION is the head's) —
+// test runners and compilers put the verdict at the end, and losing it is
+// exactly the failure mode the old head-only truncation had.
+export function middleTruncate(
+  stream: CapturedStream,
+  budget: number,
+): { text: string; truncated: boolean } {
+  const captureGap = stream.chars - stream.head.length - stream.tail.length;
+  if (captureGap === 0) {
+    // Contiguous — the capture kept everything the process produced.
+    const full = stream.head + stream.tail;
+    if (full.length <= budget) return { text: full, truncated: false };
+    const headKeep = Math.floor(budget * HEAD_FRACTION);
+    const tailKeep = budget - headKeep;
+    return {
+      text:
+        full.slice(0, headKeep) +
+        omissionMarker(full.length - headKeep - tailKeep) +
+        full.slice(full.length - tailKeep),
+      truncated: true,
+    };
+  }
+  // The capture itself already dropped a middle span — always truncated,
+  // and the marker must count what capture dropped plus what we cut now.
+  const headKeep = Math.min(stream.head.length, Math.floor(budget * HEAD_FRACTION));
+  const tailKeep = Math.min(stream.tail.length, Math.max(0, budget - headKeep));
+  return {
+    text:
+      stream.head.slice(0, headKeep) +
+      omissionMarker(stream.chars - headKeep - tailKeep) +
+      stream.tail.slice(stream.tail.length - tailKeep),
+    truncated: true,
+  };
+}
+
+// Combine both streams under the total model-facing budget. stderr is
+// budgeted FIRST (up to its reserve) so a flood of stdout can never push the
+// error text out; stdout takes whatever the rendered stderr left over.
+export function trimOutput(
+  stdout: CapturedStream,
+  stderr: CapturedStream,
+): { content: string; stdoutTruncated: boolean; stderrTruncated: boolean } {
+  const err = middleTruncate(stderr, Math.min(STDERR_RESERVED_CHARS, MAX_MODEL_OUTPUT_CHARS));
+  const out = middleTruncate(stdout, Math.max(0, MAX_MODEL_OUTPUT_CHARS - err.text.length));
+  const sections =
+    (out.text.length > 0 ? `--- stdout ---\n${out.text}\n` : '') +
+    (err.text.length > 0 ? `--- stderr ---\n${err.text}\n` : '');
+  return {
+    content: sections || '(no output)',
+    stdoutTruncated: out.truncated,
+    stderrTruncated: err.truncated,
+  };
 }

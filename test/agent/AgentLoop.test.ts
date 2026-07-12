@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { AgentLoop, gateFor, findCompactionCut, type AgentDeps } from '../../src/agent/AgentLoop.js';
+import {
+  AgentLoop,
+  gateFor,
+  findCompactionCut,
+  maskOldToolResults,
+  type AgentDeps,
+} from '../../src/agent/AgentLoop.js';
 import type { Message } from '../../src/llm/types.js';
 
 // loadState / cumulativeUsage / clearConversation touch only the conversation
@@ -109,5 +115,83 @@ describe('findCompactionCut', () => {
       { role: 'user', content: 'real-turn-2' },
     ];
     expect(findCompactionCut(convo as never, 1)).toBe(2);
+  });
+});
+
+describe('maskOldToolResults', () => {
+  const BIG = 'x'.repeat(3_000);
+
+  // A conversation shaped like real agent history: old turn with bulky tool
+  // results, then recent turns whose outputs must survive.
+  function convo(): Message[] {
+    return [
+      { role: 'user', content: 'old task' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', text: 'planning' },
+          { type: 'text', text: 'reading' },
+          { type: 'tool_use', id: 't1', name: 'read_file', input: { path: 'a.ts' } },
+        ],
+      },
+      { role: 'user', content: [{ type: 'tool_result', toolUseId: 't1', content: BIG }] },
+      { role: 'user', content: 'middle task' },
+      { role: 'user', content: [{ type: 'tool_result', toolUseId: 't2', content: BIG }] },
+      { role: 'user', content: 'recent task' },
+      { role: 'user', content: [{ type: 'tool_result', toolUseId: 't3', content: BIG }] },
+    ];
+  }
+
+  it('masks only tool_results older than the keepPairs-th user turn', () => {
+    const c = convo();
+    const n = maskOldToolResults(c, 2);
+    expect(n).toBe(1); // only the t1 result, before 'middle task'
+    const first = (c[2]!.content as Array<{ type: string; content: string }>)[0]!;
+    expect(first.content).toMatch(/cleared to save context/);
+    // Recent results untouched.
+    const recent = (c[6]!.content as Array<{ type: string; content: string }>)[0]!;
+    expect(recent.content).toBe(BIG);
+  });
+
+  it('is idempotent — a second pass masks nothing new', () => {
+    const c = convo();
+    expect(maskOldToolResults(c, 2)).toBe(1);
+    expect(maskOldToolResults(c, 2)).toBe(0);
+  });
+
+  it('skips short tool results (no meaningful savings)', () => {
+    const c: Message[] = [
+      { role: 'user', content: 'old' },
+      { role: 'user', content: [{ type: 'tool_result', toolUseId: 't', content: 'tiny' }] },
+      { role: 'user', content: 'new1' },
+      { role: 'user', content: 'new2' },
+    ];
+    expect(maskOldToolResults(c, 2)).toBe(0);
+    expect((c[1]!.content as Array<{ content: string }>)[0]!.content).toBe('tiny');
+  });
+
+  it('skips the pass entirely when total savings are trivial', () => {
+    const c: Message[] = [
+      { role: 'user', content: 'old' },
+      { role: 'user', content: [{ type: 'tool_result', toolUseId: 't', content: 'y'.repeat(600) }] },
+      { role: 'user', content: 'new1' },
+      { role: 'user', content: 'new2' },
+    ];
+    // 600 chars saved < 2000 threshold — not worth a prompt-cache bust.
+    expect(maskOldToolResults(c, 2)).toBe(0);
+  });
+
+  it('leaves text, tool_use, and thinking blocks untouched', () => {
+    const c = convo();
+    maskOldToolResults(c, 2);
+    const asst = c[1]!.content as Array<{ type: string; text?: string }>;
+    expect(asst[0]).toEqual({ type: 'thinking', text: 'planning' });
+    expect(asst[1]).toEqual({ type: 'text', text: 'reading' });
+    expect(asst[2]).toMatchObject({ type: 'tool_use', id: 't1' });
+  });
+
+  it('returns 0 when the conversation is too short to have an old span', () => {
+    const c: Message[] = [{ role: 'user', content: 'only turn' }];
+    expect(maskOldToolResults(c, 2)).toBe(0);
   });
 });

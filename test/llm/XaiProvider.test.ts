@@ -73,4 +73,50 @@ describe('XaiProvider', () => {
     const p = new XaiProvider({ kind: 'byok', apiKey: 'k' });
     await expect(p.complete(req)).rejects.toThrow(/xai 429.*rate limited/);
   });
+
+  it('sends prior reasoning_content back in the outgoing body', async () => {
+    const p = new XaiProvider({ kind: 'byok', apiKey: 'k' });
+    await p.complete({
+      ...req,
+      messages: [
+        { role: 'user', content: 'go' },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', text: 'my plan' },
+            { type: 'text', text: 'on it' },
+          ],
+        },
+        { role: 'user', content: 'continue' },
+      ],
+    });
+    const [, init] = fetchSpy.mock.calls[0]!;
+    const body = JSON.parse((init as RequestInit).body as string) as {
+      messages: Array<{ role: string; reasoning_content?: string }>;
+    };
+    const assistant = body.messages.find((m) => m.role === 'assistant')!;
+    expect(assistant.reasoning_content).toBe('my plan');
+  });
+
+  it('parses reasoning_content from the response into a thinking block', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          ...sampleResp,
+          choices: [
+            {
+              index: 0,
+              finish_reason: 'stop',
+              message: { role: 'assistant', content: 'hi', reasoning_content: 'hmm' },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    const p = new XaiProvider({ kind: 'byok', apiKey: 'k' });
+    const resp = await p.complete(req);
+    expect(resp.content[0]).toEqual({ type: 'thinking', text: 'hmm' });
+    expect(resp.content[1]).toEqual({ type: 'text', text: 'hi' });
+  });
 });

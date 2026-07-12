@@ -36,7 +36,30 @@ export class LlmRouter {
     if (!p.completeStream) {
       throw new Error(`provider ${provider} does not support streaming`);
     }
-    yield* p.completeStream(req);
+    // Same retry/backoff as complete(), but ONLY for failures raised before
+    // the first event is delivered (connect errors, 429/5xx on the POST).
+    // Once events have flowed, a mid-stream error is NOT retried — replaying
+    // a partial stream would duplicate deltas the consumer already rendered.
+    for (let attempt = 0; ; attempt++) {
+      let yielded = false;
+      try {
+        for await (const evt of p.completeStream(req)) {
+          yielded = true;
+          yield evt;
+        }
+        return;
+      } catch (e) {
+        if (
+          yielded ||
+          req.signal?.aborted === true ||
+          !isRetryable(e) ||
+          attempt >= MAX_RETRIES - 1
+        ) {
+          throw e;
+        }
+        await sleep(BACKOFF_BASE_MS * 2 ** attempt);
+      }
+    }
   }
 
   private providerFor(name: ProviderName): LlmProvider {

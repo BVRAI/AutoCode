@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolveInsideRoot, toRelative } from '../util/pathSafety.js';
+import { gateAfterWrite } from './syntaxGate.js';
 import {
   optionalBoolean,
   requireString,
@@ -71,9 +72,22 @@ export class EditFileTool implements Tool {
     ctx.checkpoint?.snapshotBeforeWrite(target);
     writeFileSync(target, updated, 'utf8');
     const rel = toRelative(ctx.session.projectRoot, target);
+    // Syntax gate: a parse-breaking edit is rolled back and reported so the
+    // model retries instead of spiraling on downstream errors.
+    const gate = await gateAfterWrite({
+      target,
+      relPath: rel,
+      projectRoot: ctx.session.projectRoot,
+      original,
+      existedBefore: true,
+      content: updated,
+    });
+    if (gate.action === 'reverted') return gate.result;
     return {
       summary: `edited ${rel} (${replaceAll ? count + ' replacements' : '1 replacement'})`,
-      content: `OK: ${oldText.length} → ${newText.length} chars, ${count} replacement(s)`,
+      content:
+        `OK: ${oldText.length} → ${newText.length} chars, ${count} replacement(s)` +
+        (gate.action === 'kept-with-warning' ? `\n\n${gate.warning}` : ''),
       metadata: { replacements: count, replaceAll, before: original, after: updated, path: rel },
     };
   }

@@ -102,6 +102,20 @@ export function createBridgeEventEmitter(
             openToolId = store.startTool(name, target);
             break;
           }
+          case 'tool_result': {
+            if (openToolId) {
+              const name = String(data['name'] ?? 'tool');
+              const summary = String(data['summary'] ?? '');
+              const content = String(data['content'] ?? '');
+              const isError = data['isError'] === true;
+              store.finishTool(openToolId, isError ? 'err' : 'ok', {
+                detail: summary || undefined,
+                body: resultBodyFor(name, content, isError),
+              });
+              openToolId = null;
+            }
+            break;
+          }
           case 'file_edit_proposed': {
             const path = String(data['path'] ?? '');
             const summary =
@@ -152,7 +166,9 @@ export function createBridgeEventEmitter(
         /* never let a UI bug kill the agent */
       }
       // Pass through to inner emitter (e.g. --automax JSON) if present.
-      inner?.emit(type, data);
+      // `tool_result` is a Bridge-internal UI detail; the host already gets
+      // public tool lifecycle through tool_call/completed/failed.
+      if (type !== 'tool_result') inner?.emit(type, data);
     },
   };
 }
@@ -163,6 +179,22 @@ function pickTarget(args: Record<string, unknown>): string | undefined {
     if (typeof v === 'string') return v;
   }
   return undefined;
+}
+
+function resultBodyFor(name: string, content: string, isError: boolean): string | undefined {
+  const trimmed = content.trim();
+  if (trimmed.length === 0 || trimmed === '(no output)') return undefined;
+  if (name !== 'run_shell' && !isError) return undefined;
+  return excerpt(trimmed, 18, 1800);
+}
+
+function excerpt(text: string, maxLines: number, maxChars: number): string {
+  const lines = text.split(/\r?\n/);
+  const sliced = lines.slice(0, maxLines).join('\n');
+  const lineSuffix = lines.length > maxLines ? `\n... +${lines.length - maxLines} more line${lines.length - maxLines === 1 ? '' : 's'}` : '';
+  const withLineSuffix = sliced + lineSuffix;
+  if (withLineSuffix.length <= maxChars) return withLineSuffix;
+  return withLineSuffix.slice(0, maxChars) + `\n... +${withLineSuffix.length - maxChars} more chars`;
 }
 
 // Used elsewhere when we want to render a raw unified diff inside a tool card.
