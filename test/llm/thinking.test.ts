@@ -93,10 +93,16 @@ describe('AnthropicProvider thinking request param', () => {
     return JSON.parse((call[1] as { body: string }).body) as Record<string, unknown>;
   }
 
-  it('sends thinking param, forces temperature 1, and keeps max_tokens above the budget', async () => {
+  // ── Legacy shape: Opus 4.6 / Sonnet 4.6 and older ────────────────────────
+  // These models still accept sampling params and need an explicit thinking budget.
+  // (Previously these three cases were asserted against claude-opus-4-7, which no
+  // longer accepts either — see the modern-shape block below.)
+  const legacyReq = { ...baseReq, model: 'claude-sonnet-4-6' };
+
+  it('legacy: sends the budget, forces temperature 1, keeps max_tokens above the budget', async () => {
     const p = new AnthropicProvider({ kind: 'byok', apiKey: 'k' });
     await p.complete({
-      ...baseReq,
+      ...legacyReq,
       maxTokens: 4096,
       temperature: 0,
       thinking: { budgetTokens: 8192 },
@@ -107,18 +113,57 @@ describe('AnthropicProvider thinking request param', () => {
     expect(body.max_tokens).toBe(8192 + 8192);
   });
 
-  it('omits thinking and honors temperature when not requested', async () => {
+  it('legacy: omits thinking and honors temperature when not requested', async () => {
     const p = new AnthropicProvider({ kind: 'byok', apiKey: 'k' });
-    await p.complete({ ...baseReq, temperature: 0 });
+    await p.complete({ ...legacyReq, temperature: 0 });
     const body = sentBody();
     expect(body.thinking).toBeUndefined();
     expect(body.temperature).toBe(0);
   });
 
-  it('clamps the budget to the API minimum of 1024', async () => {
+  it('legacy: clamps the budget to the API minimum of 1024', async () => {
     const p = new AnthropicProvider({ kind: 'byok', apiKey: 'k' });
-    await p.complete({ ...baseReq, thinking: { budgetTokens: 100 } });
+    await p.complete({ ...legacyReq, thinking: { budgetTokens: 100 } });
     const body = sentBody();
     expect(body.thinking).toEqual({ type: 'enabled', budget_tokens: 1024 });
   });
+
+  // ── Modern shape: Opus 4.7+ / Sonnet 5 / Opus 5 / Fable 5 ────────────────
+  // Sampling params AND budget_tokens were REMOVED on these models — sending either
+  // returns a 400, which made the entire frontier tier unreachable while temperature
+  // went out on every request.
+  it('modern: never sends temperature, and uses adaptive thinking instead of a budget', async () => {
+    const p = new AnthropicProvider({ kind: 'byok', apiKey: 'k' });
+    await p.complete({
+      ...baseReq,
+      model: 'claude-opus-4-7',
+      maxTokens: 4096,
+      temperature: 0,
+      thinking: { budgetTokens: 8192 },
+    });
+    const body = sentBody();
+    expect(body.thinking).toEqual({ type: 'adaptive' });
+    expect(body.temperature).toBeUndefined();
+    // Adaptive thinking paces itself, so no budget headroom is added.
+    expect(body.max_tokens).toBe(4096);
+  });
+
+  it('modern: omits temperature even when thinking is off', async () => {
+    const p = new AnthropicProvider({ kind: 'byok', apiKey: 'k' });
+    await p.complete({ ...baseReq, model: 'claude-opus-4-7', temperature: 0 });
+    const body = sentBody();
+    expect(body.thinking).toBeUndefined();
+    expect(body.temperature).toBeUndefined();
+  });
+
+  it.each(['claude-opus-4-7-20251001', 'claude-sonnet-5', 'claude-opus-5', 'claude-opus-4-8'])(
+    'modern: %s is recognised (dated variants and newer ids included)',
+    async (model) => {
+      const p = new AnthropicProvider({ kind: 'byok', apiKey: 'k' });
+      await p.complete({ ...baseReq, model, thinking: { budgetTokens: 8192 } });
+      const body = sentBody();
+      expect(body.temperature).toBeUndefined();
+      expect(body.thinking).toEqual({ type: 'adaptive' });
+    },
+  );
 });

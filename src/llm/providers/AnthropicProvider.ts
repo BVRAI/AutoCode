@@ -51,16 +51,18 @@ export class AnthropicProvider implements LlmProvider {
     const url = `${base}/messages`;
 
     const thinking = thinkingParam(req);
+    const budget = thinkingBudgetOf(thinking);
     const contextManagement = this.contextManagementParam(req);
     const body = {
       model: req.model,
-      // With thinking enabled max_tokens must EXCEED the thinking budget —
-      // keep at least 8K of visible output beyond it.
-      max_tokens: thinking
-        ? Math.max(req.maxTokens ?? 8192, thinking.budget_tokens + 8192)
-        : (req.maxTokens ?? 8192),
-      // Anthropic requires temperature 1 when extended thinking is on.
-      temperature: thinking ? 1.0 : (req.temperature ?? 1.0),
+      // With an explicit thinking budget, max_tokens must EXCEED it — keep at least
+      // 8K of visible output beyond. Adaptive thinking needs no such headroom.
+      max_tokens: budget ? Math.max(req.maxTokens ?? 8192, budget + 8192) : (req.maxTokens ?? 8192),
+      // Sampling params are REMOVED on the modern shape (400 if sent). On older models
+      // Anthropic requires temperature 1 whenever extended thinking is on.
+      ...(usesModernRequestShape(req.model)
+        ? {}
+        : { temperature: thinking ? 1.0 : (req.temperature ?? 1.0) }),
       ...(thinking ? { thinking } : {}),
       ...(contextManagement ? { context_management: contextManagement } : {}),
       // The cache breakpoint sits on the stable `system` block. Any volatile
@@ -122,13 +124,15 @@ export class AnthropicProvider implements LlmProvider {
     const url = `${base}/messages`;
 
     const thinking = thinkingParam(req);
+    const budget = thinkingBudgetOf(thinking);
     const contextManagement = this.contextManagementParam(req);
     const body = {
       model: req.model,
-      max_tokens: thinking
-        ? Math.max(req.maxTokens ?? 8192, thinking.budget_tokens + 8192)
-        : (req.maxTokens ?? 8192),
-      temperature: thinking ? 1.0 : (req.temperature ?? 1.0),
+      max_tokens: budget ? Math.max(req.maxTokens ?? 8192, budget + 8192) : (req.maxTokens ?? 8192),
+      // See the streaming twin above: sampling params 400 on the modern shape.
+      ...(usesModernRequestShape(req.model)
+        ? {}
+        : { temperature: thinking ? 1.0 : (req.temperature ?? 1.0) }),
       ...(thinking ? { thinking } : {}),
       ...(contextManagement ? { context_management: contextManagement } : {}),
       stream: true,
@@ -311,10 +315,43 @@ export function withRollingCacheBreakpoint(
 }
 
 // Map the provider-neutral thinking request to Anthropic's param shape.
-function thinkingParam(req: CompletionRequest): { type: 'enabled'; budget_tokens: number } | null {
+// ── Request shape by model generation ───────────────────────────────────────
+//
+// Claude's request surface changed with Opus 4.7. On 4.7 and later — plus Sonnet 5,
+// Opus 5 and Fable 5 — BOTH the sampling params (temperature / top_p / top_k) and the
+// fixed thinking budget were REMOVED, and sending either returns a 400. Extended
+// thinking on those models is configured as `{type:'adaptive'}` instead, letting the
+// model choose its own depth per turn.
+//
+// Older models keep the previous surface: temperature is accepted, and thinking needs
+// an explicit budget_tokens.
+//
+// This matters beyond tidiness: before this, every request carried `temperature`
+// unconditionally, so selecting any 4.7+ model would 400 on EVERY call — the whole
+// frontier tier was unreachable.
+//
+// Prefix match so dated variants (claude-opus-4-7-20251001) and an `anthropic/` prefix
+// still resolve.
+const MODERN_REQUEST_SHAPE =
+  /^(?:anthropic\/)?claude-(?:fable-5|mythos-5|opus-5|opus-4-8|opus-4-7|sonnet-5)\b/;
+
+function usesModernRequestShape(model: string): boolean {
+  return MODERN_REQUEST_SHAPE.test(model.trim());
+}
+
+type ThinkingParam = { type: 'adaptive' } | { type: 'enabled'; budget_tokens: number };
+
+function thinkingParam(req: CompletionRequest): ThinkingParam | null {
   if (!req.thinking || req.thinking.budgetTokens <= 0) return null;
+  // On the modern shape the caller's budget is advisory only — the model paces itself.
+  if (usesModernRequestShape(req.model)) return { type: 'adaptive' };
   // Anthropic's documented minimum budget is 1024.
   return { type: 'enabled', budget_tokens: Math.max(1024, req.thinking.budgetTokens) };
+}
+
+/** Thinking budget to reserve headroom for, or 0 when the model paces itself. */
+function thinkingBudgetOf(thinking: ThinkingParam | null): number {
+  return thinking && thinking.type === 'enabled' ? thinking.budget_tokens : 0;
 }
 
 export function toAnthropicMessage(m: Message): { role: 'user' | 'assistant'; content: unknown } {
