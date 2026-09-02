@@ -1,0 +1,32 @@
+/* PAR-MED New Website — Custom Styles
+   Most styling is powered by Tailwind via CDN + inline styles in index.html.
+   Use this file for overrides or additional design system tokens.
+*/
+
+:root {
+  --pm-navy: #0f172a;
+  --pm-teal: #0d9488;
+  --pm-teal-dark: #0f766e;
+}
+
+/* Example: subtle focus styles beyond Tailwind */
+input:focus,
+select:focus,
+textarea:focus {
+  box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.15);
+}
+
+/* Portfolio card subtle polish */
+.property-card {
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+}
+
+/* Nice print styles if someone prints the page */
+@media print {
+  nav,
+  footer,
+  #contact,
+  .portfolio-filter-btn {
+    display: none !important;
+  }
+}

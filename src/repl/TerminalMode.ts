@@ -13,6 +13,7 @@ import { parse, type ParsedInput, type LocalCommandName } from './CommandParser.
 import { runInit } from './InitCommand.js';
 import { runAuth } from './AuthCommand.js';
 import { runLogin, printAlreadyAuthenticatedNotice } from './LoginCommand.js';
+import { runProxyStatus } from './ProxyStatusCommand.js';
 import { isAutomaxHosted } from '../util/host.js';
 import { PrompterRef } from './Prompter.js';
 import { runUpdate } from '../update/UpdateChecker.js';
@@ -362,6 +363,9 @@ export class TerminalMode {
         return;
       case 'status':
         this.printStatus();
+        return;
+      case 'proxy':
+        await runProxyStatus(this.renderer, this.ctx.model.provider);
         return;
       case 'cwd':
         this.handleCwd(args);

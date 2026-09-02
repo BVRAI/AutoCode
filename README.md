@@ -86,6 +86,7 @@ Inside the `autocode>` prompt:
 ```
 /help              Show available commands
 /status            Show session id, project root, model
+/proxy             Verify the live BVRAI proxy connection
 /cwd               Show project root
 /cwd <path>        Change project root
 /model             Show current model

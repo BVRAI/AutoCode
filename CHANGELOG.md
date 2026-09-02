@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `/proxy` command to verify whether the current authentication can reach the
+  BVRAI proxy without exposing the active credential.
 - Update pipeline: startup check against npm for newer releases. **Auto-update is
   opt-out** (autocode is too young to leave users stranded on broken versions);
   disable via `autoUpdate: false` in `~/.autocode/config.json` or the env var

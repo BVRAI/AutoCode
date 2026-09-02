@@ -1,6 +1,7 @@
 export type LocalCommandName =
   | 'help'
   | 'status'
+  | 'proxy'
   | 'cwd'
   | 'model'
   | 'stop'
@@ -46,6 +47,7 @@ export type ParsedInput = LocalCommand | AgentInput | Empty;
 const KNOWN: ReadonlySet<LocalCommandName> = new Set([
   'help',
   'status',
+  'proxy',
   'cwd',
   'model',
   'stop',

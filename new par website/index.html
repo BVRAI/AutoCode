@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PAR-MED | Medical Office Property Management | Ontario</title>
+  <meta name="description" content="PAR-MED Property Services Inc. — First-class property management, leasing, and design exclusively for Ontario's medical office buildings since 1988.">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&amp;family=Playfair+Display:wght@700&amp;display=swap');
+    
+    :root {
+      --primary: #0f172a;
+      --accent: #0d9488;
+    }
+    
+    body {
+      font-family: 'Inter', system_ui, sans-serif;
+    }
+    
+    .heading-serif {
+      font-family: 'Playfair Display', Georgia, serif;
+    }
+
+    .nav-link {
+      position: relative;
+      transition: color 0.2s ease;
+    }
+    
+    .nav-link:after {
+      content: '';
+      position: absolute;
+      width: 0;
+      height: 2px;
+      bottom: -2px;
+      left: 0;
+      background-color: #0d9488;
+      transition: width 0.3s ease;
+    }
+    
+    .nav-link:hover:after {
+      width: 100%;
+    }
+
+    .property-card {
+      transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), 
+                  box-shadow 0.3s cubic-bezier(0.4, 0.0, 0.2, 1);
+    }
+    
+    .property-card:hover {
+      transform: translateY(-8px);
+      box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+    }
+
+    .section-header {
+      position: relative;
+      display: inline-block;
+    }
+    
+    .section-header:after {
+      content: '';
+      position: absolute;
+      bottom: -8px;
+      left: 0;
+      width: 60px;
+      height: 3px;
+      background: linear-gradient(to right, #0d9488, #14b8a6);
+      border-radius: 3px;
+    }
+
+    .medical-gradient {
+      background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+    }
+
+    .stat-number {
+      font-variant-numeric: tabular-nums;
+    }
+
+    .nav-active {
+      color: #0d9488;
+      font-weight: 600;
+    }
+
+    .modal {
+      animation: fadeInScale 0.2s ease forwards;
+    }
+
+    @keyframes fadeInScale {
+      from { opacity: 0; transform: scale(0.95); }
+      to { opacity: 1; transform: scale(1); }
+    }
+
+    .portfolio-filter-btn {
+      transition: all 0.2s ease;
+    }
+    
+    .portfolio-filter-btn.active {
+      background-color: #0d9488;
+      color: white;
+      border-color: #0d9488;
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800">
+  <!-- Navbar -->
+  <nav class="bg-white border-b border-slate-200 sticky top-0 z-50">
+    <div class="max-w-screen-2xl mx-auto">
+      <div class="px-8 py-5 flex items-center justify-between">
+        <!-- Logo -->
+        <div class="flex items-center gap-x-3">
+          <div class="w-10 h-10 bg-teal-600 rounded-xl flex items-center justify-center shadow-inner">
+            <span class="text-white font-bold text-2xl tracking-tighter">PM</span>
+          </div>
+          <div>
+            <div class="font-semibold text-2xl tracking-tighter text-slate-900">PAR-MED</div>
+            <div class="text-[10px] text-slate-500 -mt-1 font-medium tracking-[1px]">PROPERTY SERVICES</div>
+          </div>
+        </div>
+
+        <!-- Desktop Navigation -->
+        <div class="hidden md:flex items-center gap-x-8 text-sm font-medium">
+          <a href="#about" class="nav-link text-slate-600 hover:text-slate-900">About</a>
+          <a href="#services" class="nav-link text-slate-600 hover:text-slate-900">Services</a>
+          <a href="#portfolio" class="nav-link text-slate-600 hover:text-slate-900">Portfolio</a>
+          <a href="#why-us" class="nav-link text-slate-600 hover:text-slate-900">Why Us</a>
+        </div>
+
+        <!-- Right side actions -->
+        <div class="hidden md:flex items-center gap-x-4">
+          <a href="#contact" 
+             class="px-6 py-2.5 rounded-2xl text-sm font-semibold border border-slate-300 hover:bg-slate-100 transition-colors">
+            Contact
+          </a>
+          <a href="#contact"
+             class="px-6 py-2.5 bg-teal-600 hover:bg-teal-700 transition-colors text-white text-sm font-semibold rounded-2xl shadow-sm">
+            Get in Touch
+          </a>
+        </div>
+
+        <!-- Mobile Menu Button -->
+        <button id="mobile-menu-btn"
+                class="md:hidden w-10 h-10 flex items-center justify-center text-slate-700 hover:bg-slate-100 rounded-2xl">
+          <i class="fa-solid fa-bars text-xl"></i>
+        </button>
+      </div>
+    </div>
+
+    <!-- Mobile Menu -->
+    <div id="mobile-menu" class="hidden md:hidden border-t border-slate-200 bg-white px-6 py-6">
+      <div class="flex flex-col gap-y-4 text-lg font-medium">
+        <a href="#about" class="py-1 text-slate-700 mobile-link">About</a>
+        <a href="#services" class="py-1 text-slate-700 mobile-link">Services</a>
+        <a href="#portfolio" class="py-1 text-slate-700 mobile-link">Portfolio</a>
+        <a href="#why-us" class="py-1 text-slate-700 mobile-link">Why Us</a>
+        <div class="pt-4 border-t mt-2 flex flex-col gap-3">
+          <a href="#contact" class="py-3 px-5 text-center border border-slate-300 rounded-3xl text-sm font-semibold">Contact Us</a>
+          <a href="#contact" class="py-3 px-5 text-center bg-teal-600 text-white rounded-3xl text-sm font-semibold">Get in Touch</a>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <header class="medical-gradient text-white">
+    <div class="max-w-screen-2xl mx-auto px-8 pt-20 pb-16 md:pt-24 md:pb-20">
+      <div class="max-w-4xl">
+        <div class="inline-flex items-center gap-2 bg-white/10 backdrop-blur-sm px-4 h-8 rounded-3xl text-xs font-semibold tracking-wider mb-6">
+          <div class="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></div>
+          SERVING ONTARIO SINCE 1988
+        </div>
+
+        <h1 class="text-6xl md:text-7xl font-semibold tracking-tighter leading-[0.95]">
+          First-class management<br>for Ontario's<br>medical communities.
+        </h1>
+        
+        <p class="mt-6 max-w-lg text-xl text-slate-300">
+          Expert property management, leasing, and design services exclusively for medical office buildings.
+        </p>
+
+        <div class="flex flex-wrap gap-4 mt-10">
+          <a href="#portfolio" 
+             class="group inline-flex items-center justify-center px-8 h-14 bg-white text-slate-900 font-semibold rounded-3xl hover:bg-slate-100 transition-all text-base shadow">
+            Explore Our Portfolio
+            <i class="fa-solid fa-arrow-right ml-3 group-hover:translate-x-1 transition"></i>
+          </a>
+          
+          <a href="#contact"
+             class="inline-flex items-center justify-center px-8 h-14 border border-white/60 hover:bg-white/10 text-white font-semibold rounded-3xl transition-all text-base backdrop-blur-sm">
+            Speak with Our Team
+          </a>
+        </div>
+
+        <div class="mt-8 flex items-center gap-x-6 text-sm text-slate-400">
+          <div class="flex -space-x-2">
+            <div class="w-7 h-7 bg-slate-300 rounded-full border border-white overflow-hidden"><img src="https://i.pravatar.cc/28?img=32" alt=""></div>
+            <div class="w-7 h-7 bg-slate-300 rounded-full border border-white overflow-hidden"><img src="https://i.pravatar.cc/28?img=28" alt=""></div>
+            <div class="w-7 h-7 bg-slate-300 rounded-full border border-white overflow-hidden"><img src="https://i.pravatar.cc/28?img=47" alt=""></div>
+          </div>
+          <span>Trusted by 60+ medical properties</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Trust Stats -->
+  <div class="bg-white border-b">
+    <div class="max-w-screen-2xl mx-auto px-8 py-7">
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-8 text-center md:text-left">
+        <div>
+          <div class="text-4xl font-semibold tracking-tighter text-slate-900 stat-number">35+</div>
+          <div class="text-sm text-slate-500 mt-0.5 font-medium">Years of Experience</div>
+        </div>
+        <div>
+          <div class="text-4xl font-semibold tracking-tighter text-slate-900 stat-number">60</div>
+          <div class="text-sm text-slate-500 mt-0.5 font-medium">Medical Office Buildings</div>
+        </div>
+        <div>
+          <div class="text-4xl font-semibold tracking-tighter text-slate-900 stat-number">300+</div>
+          <div class="text-sm text-slate-500 mt-0.5 font-medium">Leases Completed Annually</div>
+        </div>
+        <div>
+          <div class="text-4xl font-semibold tracking-tighter text-slate-900 stat-number">99%</div>
+          <div class="text-sm text-slate-500 mt-0.5 font-medium">Tenant Retention</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- About -->
+  <section id="about" class="max-w-screen-2xl mx-auto px-8 pt-20 pb-16 scroll-mt-20">
+    <div class="grid md:grid-cols-12 gap-x-12 items-center">
+      <div class="md:col-span-7">
+        <div class="uppercase text-teal-600 text-xs tracking-[2.5px] font-semibold mb-3">EST. 1988 • TORONTO</div>
+        <h2 class="text-5xl tracking-tighter font-semibold leading-none">We specialize exclusively in medical real estate.</h2>
+        
+        <div class="prose prose-slate mt-6 text-[17px] max-w-2xl text-slate-600">
+          <p>PAR-MED Property Services Inc. is Ontario's leading third-party manager of medical office buildings. We understand the unique demands of healthcare properties — zero tolerance for downtime, specialized tenant requirements, and the need for impeccable building presentation.</p>
+          <p>Our team of dedicated professionals manages over 60 properties with full in-house leasing, design, asset management, and operations capabilities.</p>
+        </div>
+      </div>
+
+      <div class="md:col-span-5 mt-10 md:mt-0 bg-slate-900 text-white rounded-3xl p-8 md:p-10">
+        <div class="font-semibold text-lg mb-6">Our commitment to medical properties</div>
+        
+        <div class="space-y-6 text-sm">
+          <div class="flex gap-4">
+            <i class="fa-solid fa-building w-6 mt-0.5 text-teal-400"></i>
+            <div>Full-service property management with on-site operators at every building</div>
+          </div>
+          <div class="flex gap-4">
+            <i class="fa-solid fa-handshake w-6 mt-0.5 text-teal-400"></i>
+            <div>Specialized leasing team focused solely on medical tenants</div>
+          </div>
+          <div class="flex gap-4">
+            <i class="fa-solid fa-drafting-compass w-6 mt-0.5 text-teal-400"></i>
+            <div>In-house design and construction management</div>
+          </div>
+          <div class="flex gap-4">
+            <i class="fa-solid fa-chart-line w-6 mt-0.5 text-teal-400"></i>
+            <div>Asset management that protects and grows property value</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Services -->
+  <section id="services" class="bg-white py-16 scroll-mt-20 border-y">
+    <div class="max-w-screen-2xl mx-auto px-8">
+      <div class="text-center mb-12">
+        <div class="text-teal-600 text-sm font-semibold tracking-widest mb-2">WHAT WE DELIVER</div>
+        <h2 class="text-4xl font-semibold tracking-tighter">Full-service expertise for medical buildings</h2>
+      </div>
+
+      <div class="grid md:grid-cols-2 gap-6">
+        <!-- Landlords -->
+        <div class="group border border-slate-200 hover:border-teal-200 transition-colors bg-white rounded-3xl p-9">
+          <div class="w-12 h-12 bg-teal-100 text-teal-600 rounded-2xl flex items-center justify-center mb-6">
+            <i class="fa-solid fa-building text-2xl"></i>
+          </div>
+          <h3 class="font-semibold text-2xl tracking-tight mb-4">For Property Owners &amp; Landlords</h3>
+          <p class="text-slate-600 mb-6">Maximize the performance and value of your medical office asset with a partner who truly understands healthcare tenants.</p>
+          
+          <ul class="space-y-[13px] text-sm">
+            <li class="flex items-start gap-3"><i class="fa-solid fa-check text-teal-500 mt-1"></i> <span>Strategic asset management &amp; financial oversight</span></li>
+            <li class="flex items-start gap-3"><i class="fa-solid fa-check text-teal-500 mt-1"></i> <span>Professional leasing that attracts quality medical tenants</span></li>
+            <li class="flex items-start gap-3"><i class="fa-solid fa-check text-teal-500 mt-1"></i> <span>Construction &amp; renovation project management</span></li>
+            <li class="flex items-start gap-3"><i class="fa-solid fa-check text-teal-500 mt-1"></i> <span>Preventive maintenance programs tailored to clinical operations</span></li>
+          </ul>
+        </div>
+
+        <!-- Tenants -->
+        <div class="group border border-slate-200 hover:border-teal-200 transition-colors bg-white rounded-3xl p-9">
+          <div class="w-12 h-12 bg-slate-900 text-white rounded-2xl flex items-center justify-center mb-6">
+            <i class="fa-solid fa-user-md text-2xl"></i>
+          </div>
+          <h3 class="font-semibold text-2xl tracking-tight mb-4">For Medical Professionals &amp; Tenants</h3>
+          <p class="text-slate-600 mb-6">Find and secure the ideal medical office space that supports excellent patient care and efficient practice operations.</p>
+          
+          <ul class="space-y-[13px] text-sm">
+            <li class="flex items-start gap-3"><i class="fa-solid fa-check text-teal-500 mt-1"></i> <span>Access to prime medical office locations across Ontario</span></li>
+            <li class="flex items-start gap-3"><i class="fa-solid fa-check text-teal-500 mt-1"></i> <span>Expert guidance through the lease process</span></li>
+            <li class="flex items-start gap-3"><i class="fa-solid fa-check text-teal-500 mt-1"></i> <span>Tailored space planning and build-out support</span></li>
+            <li class="flex items-start gap-3"><i class="fa-solid fa-check text-teal-500 mt-1"></i> <span>Reliable property management with clinical awareness</span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Portfolio -->
+  <section id="portfolio" class="max-w-screen-2xl mx-auto px-8 py-20 scroll-mt-20">
+    <div class="flex flex-col md:flex-row md:items-end justify-between mb-10 gap-4">
+      <div>
+        <div class="text-teal-600 font-semibold tracking-widest text-sm">OUR PROPERTIES</div>
+        <h2 class="text-4xl font-semibold tracking-tighter mt-1">Featured Medical Office Buildings</h2>
+      </div>
+      
+      <!-- Portfolio filters -->
+      <div class="flex flex-wrap gap-2 text-sm font-medium">
+        <button class="portfolio-filter-btn active px-5 py-1.5 border text-sm rounded-3xl border-teal-600 text-teal-600" data-filter="all">All</button>
+        <button class="portfolio-filter-btn px-5 py-1.5 border border-slate-300 hover:bg-white rounded-3xl text-slate-600" data-filter="toronto">Toronto</button>
+        <button class="portfolio-filter-btn px-5 py-1.5 border border-slate-300 hover:bg-white rounded-3xl text-slate-600" data-filter="gta">GTA East</button>
+        <button class="portfolio-filter-btn px-5 py-1.5 border border-slate-300 hover:bg-white rounded-3xl text-slate-600" data-filter="west">GTA West</button>
+      </div>
+    </div>
+
+    <div id="portfolio-grid" class="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <!-- Populated via JS -->
+    </div>
+
+    <div class="mt-10 text-center">
+      <a href="#" 
+         onclick="showFullPortfolio()"
+         class="inline-flex items-center text-sm font-semibold text-teal-700 hover:text-teal-800">
+        View Our Complete Portfolio <i class="fa-solid fa-chevron-right ml-2 text-xs"></i>
+      </a>
+    </div>
+  </section>
+
+  <!-- Why Us -->
+  <section id="why-us" class="bg-slate-900 py-16 text-white scroll-mt-20">
+    <div class="max-w-screen-2xl mx-auto px-8">
+      <div class="grid md:grid-cols-2 gap-x-16 items-center">
+        <div>
+          <h2 class="text-5xl font-semibold tracking-tighter">Why medical buildings<br>need PAR-MED.</h2>
+          <p class="mt-4 max-w-md text-slate-400">Healthcare practices cannot close their doors. Downtime isn't an option. That is why we built a company around the specific operating realities of medical real estate.</p>
+          
+          <div class="mt-8 flex items-center gap-x-4">
+            <a href="#contact" class="px-8 py-3 bg-white text-slate-900 font-medium rounded-3xl text-sm flex items-center gap-x-2 hover:bg-slate-100 transition">
+              Talk to a specialist
+            </a>
+          </div>
+        </div>
+
+        <div class="mt-10 md:mt-0 grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+          <div class="border border-white/15 p-7 rounded-3xl">
+            <div class="font-medium text-lg mb-2 text-white">Zero-downtime maintenance</div>
+            <p class="text-slate-400">Our teams understand the clinical impact of even small disruptions and prioritize after-hours work.</p>
+          </div>
+          <div class="border border-white/15 p-7 rounded-3xl">
+            <div class="font-medium text-lg mb-2 text-white">In-house expertise</div>
+            <p class="text-slate-400">No third-party contractors for core services. Our leasing, design, and management are all done by PAR-MED staff.</p>
+          </div>
+          <div class="border border-white/15 p-7 rounded-3xl">
+            <div class="font-medium text-lg mb-2 text-white">Deep tenant relationships</div>
+            <p class="text-slate-400">We know how physicians, clinics, and labs operate — and we help them succeed inside our buildings.</p>
+          </div>
+          <div class="border border-white/15 p-7 rounded-3xl">
+            <div class="font-medium text-lg mb-2 text-white">Financial performance focus</div>
+            <p class="text-slate-400">We treat every asset as if it were our own and aggressively protect and improve NOI and value.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Contact -->
+  <section id="contact" class="max-w-screen-2xl mx-auto px-8 py-20 scroll-mt-24">
+    <div class="max-w-5xl mx-auto">
+      <div class="grid md:grid-cols-5 gap-x-16">
+        <!-- Contact info -->
+        <div class="md:col-span-2">
+          <div class="text-sm tracking-widest text-teal-600 font-medium">LET'S WORK TOGETHER</div>
+          <h2 class="mt-3 text-4xl font-semibold tracking-tighter">Ready to discuss<br>your property?</h2>
+          
+          <div class="mt-8 space-y-5 text-sm">
+            <div>
+              <div class="font-semibold text-xs text-slate-500">MAIN OFFICE</div>
+              <div class="text-base mt-0.5">80 Richmond Street West, Suite 700<br>Toronto, ON M5H 2A4</div>
+            </div>
+            <div>
+              <div class="font-semibold text-xs text-slate-500">PHONE</div>
+              <a href="tel:+14163645959" class="text-lg hover:text-teal-600 transition">(416) 364-5959</a>
+            </div>
+            <div>
+              <div class="font-semibold text-xs text-slate-500">EMAIL</div>
+              <a href="mailto:info@par-med.com" class="text-lg hover:text-teal-600">info@par-med.com</a>
+            </div>
+          </div>
+        </div>
+
+        <!-- Contact form -->
+        <div class="md:col-span-3 mt-12 md:mt-0">
+          <form id="contact-form" class="bg-white rounded-3xl border p-8 md:p-10 shadow-sm">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div>
+                <label class="block text-sm font-medium mb-1.5">Full Name</label>
+                <input type="text" name="name" required 
+                       class="w-full px-4 py-3 border border-slate-300 rounded-2xl text-base focus:outline-none focus:border-teal-600">
+              </div>
+              <div>
+                <label class="block text-sm font-medium mb-1.5">Email Address</label>
+                <input type="email" name="email" required 
+                       class="w-full px-4 py-3 border border-slate-300 rounded-2xl text-base focus:outline-none focus:border-teal-600">
+              </div>
+            </div>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-5 mt-5">
+              <div>
+                <label class="block text-sm font-medium mb-1.5">Phone Number</label>
+                <input type="tel" name="phone" 
+                       class="w-full px-4 py-3 border border-slate-300 rounded-2xl text-base focus:outline-none focus:border-teal-600">
+              </div>
+              <div>
+                <label class="block text-sm font-medium mb-1.5">I am a</label>
+                <select name="type" class="w-full px-4 py-3 border border-slate-300 rounded-2xl text-base focus:outline-none focus:border-teal-600 bg-white">
+                  <option>Property Owner / Landlord</option>
+                  <option>Medical Professional / Tenant</option>
+                  <option>Prospective Tenant</option>
+                  <option>Investor / Broker</option>
+                  <option>Other</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="mt-5">
+              <label class="block text-sm font-medium mb-1.5">Message</label>
+              <textarea name="message" rows="4" required
+                        class="w-full px-4 py-3 border border-slate-300 rounded-3xl text-base focus:outline-none focus:border-teal-600 resize-y"></textarea>
+            </div>
+
+            <button type="submit"
+                    class="mt-6 w-full md:w-auto flex justify-center items-center gap-x-2 bg-teal-600 hover:bg-teal-700 transition-colors text-white font-semibold py-3.5 px-10 rounded-3xl">
+              Send Message
+              <i class="fa-solid fa-paper-plane ml-1"></i>
+            </button>
+            
+            <p class="text-xs mt-4 text-slate-500">We typically respond within one business day.</p>
+          </form>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="border-t bg-white">
+    <div class="max-w-screen-2xl mx-auto px-8 pt-12 pb-9">
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-y-6 text-sm">
+        <div>
+          <div class="flex items-center gap-x-3">
+            <div class="w-8 h-8 bg-teal-600 text-white flex items-center justify-center rounded-xl text-sm font-bold">PM</div>
+            <span class="font-semibold tracking-tight">PAR-MED Property Services Inc.</span>
+          </div>
+          <div class="text-xs mt-4 text-slate-500 max-w-[280px]">
+            &copy; 2025 PAR-MED. All rights reserved.<br>
+            A leader in medical office building management across Ontario.
+          </div>
+        </div>
+
+        <div class="text-xs md:text-right leading-relaxed text-slate-500">
+          80 Richmond Street West, Suite 700<br>
+          Toronto, Ontario M5H 2A4<br>
+          +1 (416) 364-5959 &nbsp;|&nbsp; info@par-med.com
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Property Modal -->
+  <div id="property-modal" class="hidden fixed inset-0 bg-black/70 z-[70] flex items-center justify-center p-5">
+    <div class="modal bg-white max-w-xl w-full rounded-3xl overflow-hidden shadow-xl">
+      <div class="p-8">
+        <div class="flex justify-between items-start">
+          <div>
+            <div id="modal-city" class="text-xs font-semibold tracking-widest text-teal-600"></div>
+            <h3 id="modal-title" class="font-semibold text-2xl tracking-tight mt-1"></h3>
+          </div>
+          <button onclick="closeModal()" class="text-slate-400 hover:text-slate-600 text-2xl leading-none">&times;</button>
+        </div>
+        
+        <div class="my-6 border-t"></div>
+
+        <div id="modal-details" class="space-y-2 text-sm"></div>
+        
+        <div class="mt-8 flex gap-3">
+          <button onclick="closeModal()" 
+                  class="flex-1 py-3 rounded-3xl text-sm border font-semibold">Close</button>
+          <a href="#contact"
+             onclick="closeModal()"
+             class="flex-1 text-center py-3 bg-teal-600 hover:bg-teal-700 transition text-white text-sm rounded-3xl font-semibold">Inquire About This Property</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/main.js"></script>
+  
+  <script>
+    // Tailwind configuration
+    function initTailwind() {
+      document.querySelectorAll('script[src*="tailwindcss"]').forEach(script => {
+        // Already initialized
+      });
+      
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              'serif-custom': ['Playfair Display', 'Georgia', 'serif']
+            }
+          }
+        }
+      };
+    }
+
+    // Simple form handling
+    function setupContactForm() {
+      const form = document.getElementById('contact-form');
+      if (!form) return;
+
+      form.addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        const submitBtn = form.querySelector('button[type="submit"]');
+        const originalText = submitBtn.innerHTML;
+        
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = `
+          <span class="inline-flex items-center">
+            Sending...
+            <i class="fa-solid fa-circle-notch fa-spin ml-3"></i>
+          </span>
+        `;
+
+        setTimeout(() => {
+          form.innerHTML = `
+            <div class="text-center py-8">
+              <div class="mx-auto mb-4 w-16 h-16 bg-emerald-100 text-emerald-600 flex items-center justify-center rounded-full">
+                <i class="fa-solid fa-check text-3xl"></i>
+              </div>
+              <h4 class="text-2xl font-semibold text-slate-900">Thank you!</h4>
+              <p class="mt-2 text-slate-600">We've received your message and will get back to you within 24 hours.</p>
+            </div>
+          `;
+        }, 1350);
+      });
+    }
+
+    // Initialize everything
+    function initializeWebsite() {
+      initTailwind();
+      setupContactForm();
+      
+      // Mobile menu
+      const mobileBtn = document.getElementById('mobile-menu-btn');
+      const mobileMenu = document.getElementById('mobile-menu');
+      
+      if (mobileBtn && mobileMenu) {
+        mobileBtn.addEventListener('click', () => {
+          mobileMenu.classList.toggle('hidden');
+          const icon = mobileBtn.querySelector('i');
+          icon.classList.toggle('fa-bars');
+          icon.classList.toggle('fa-times');
+        });
+      }
+
+      // Close mobile menu when clicking nav links
+      document.querySelectorAll('.mobile-link').forEach(link => {
+        link.addEventListener('click', () => {
+          mobileMenu.classList.add('hidden');
+          const icon = mobileBtn.querySelector('i');
+          icon.classList.add('fa-bars');
+          icon.classList.remove('fa-times');
+        });
+      });
+
+      // Render portfolio on load
+      if (typeof renderPortfolio === 'function') {
+        renderPortfolio();
+      }
+
+      // Portfolio filters
+      setupPortfolioFilters();
+
+      // Smooth scrolling
+      document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+        anchor.addEventListener('click', function(e) {
+          const target = document.querySelector(this.getAttribute('href'));
+          if (target) {
+            e.preventDefault();
+            const offset = 80;
+            const top = target.getBoundingClientRect().top + window.scrollY - offset;
+            window.scrollTo({ top, behavior: 'smooth' });
+          }
+        });
+      });
+
+      console.log('%c[PAR-MED] Modern redesign loaded successfully.', 'color:#64748b; font-size:10px');
+    }
+
+    function setupPortfolioFilters() {
+      document.querySelectorAll('.portfolio-filter-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          // Toggle active styles
+          document.querySelectorAll('.portfolio-filter-btn').forEach(b => b.classList.remove('active', 'border-teal-600', 'text-teal-600'));
+          document.querySelectorAll('.portfolio-filter-btn').forEach(b => b.classList.add('border-slate-300', 'text-slate-600'));
+          
+          btn.classList.add('active', 'border-teal-600', 'text-teal-600');
+          btn.classList.remove('border-slate-300', 'text-slate-600');
+
+          const filter = btn.dataset.filter;
+          filterPortfolio(filter);
+        });
+      });
+    }
+
+    // Initialize on load
+    window.addEventListener('DOMContentLoaded', initializeWebsite);
+  </script>
+</body>
+</html>

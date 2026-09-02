@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { parse } from '../../src/repl/CommandParser.js';
+import { COMMAND_DEFS } from '../../src/repl/commands.js';
 
 describe('CommandParser.parse', () => {
   it('treats blank input as empty', () => {
@@ -8,6 +9,18 @@ describe('CommandParser.parse', () => {
 
   it('parses /help', () => {
     expect(parse('/help')).toEqual({ kind: 'local', name: 'help', args: [] });
+  });
+
+  it('parses /proxy', () => {
+    expect(parse('/proxy')).toEqual({ kind: 'local', name: 'proxy', args: [] });
+  });
+
+  it('exposes /proxy in slash-command discovery', () => {
+    expect(COMMAND_DEFS).toContainEqual(expect.objectContaining({
+      name: 'proxy',
+      signature: '/proxy',
+      args: 'none',
+    }));
   });
 
   it('parses /cwd with a path', () => {

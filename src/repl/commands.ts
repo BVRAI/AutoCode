@@ -20,6 +20,7 @@ export interface CommandDef {
 export const COMMAND_DEFS: ReadonlyArray<CommandDef> = [
   { name: 'help',     signature: '/help',                                     summary: 'Show this menu',                                            args: 'none' },
   { name: 'status',   signature: '/status',                                   summary: 'Show session info',                                         args: 'none' },
+  { name: 'proxy',    signature: '/proxy',                                    summary: 'Check the BVRAI proxy connection',                           args: 'none' },
   { name: 'cwd',      signature: '/cwd [path]',                               summary: 'Show or change the project root',                           args: 'optional' },
   { name: 'model',    signature: '/model [provider model]',                   summary: 'Pick a model (no args = picker)',                           args: 'optional' },
   { name: 'init',     signature: '/init',                                     summary: 'Scaffold an AUTOCODE.md for this project',                  args: 'none' },

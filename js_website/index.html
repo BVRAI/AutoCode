@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Joan Sinclair | Family Mediator &amp; Counsellor | GTA &amp; Hamilton</title>
+  <meta name="description" content="Joan Sinclair, MSW, RSW, Acc.FM, CP Med — Compassionate family mediation and counselling in the Greater Toronto Area and Hamilton region. Free 30-minute consultation.">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&amp;family=Playfair+Display:wght@500;600&amp;display=swap');
+
+    :root {
+      --sage: #5f7a6f;
+      --warm-navy: #1e2937;
+    }
+
+    body {
+      font-family: 'Inter', system_ui, sans-serif;
+    }
+
+    .heading-serif {
+      font-family: 'Playfair Display', Georgia, serif;
+    }
+
+    .nav-link {
+      position: relative;
+      transition: color 0.2s ease;
+    }
+    .nav-link:hover {
+      color: #5f7a6f;
+    }
+
+    .section-title {
+      position: relative;
+      display: inline-block;
+    }
+
+    .warm-card {
+      transition: transform 0.3s cubic-bezier(0.4, 0.0, 0.2, 1), box-shadow 0.3s ease;
+    }
+    .warm-card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+    }
+
+    .calm-gradient {
+      background: linear-gradient(145deg, #f8f7f4 0%, #f1efeb 100%);
+    }
+
+    .nav-scrolled {
+      box-shadow: 0 1px 0 0 rgba(0,0,0,0.04);
+    }
+
+    .testimony {
+      transition: all 0.3s ease;
+    }
+  </style>
+</head>
+<body class="bg-[#f8f7f4] text-[#2f3a36]">
+
+  <!-- Navbar -->
+  <nav id="navbar" class="bg-white border-b border-[#e6e2d9] sticky top-0 z-50 transition-all">
+    <div class="max-w-screen-2xl mx-auto">
+      <div class="px-8 py-5 flex items-center justify-between">
+        <!-- Logo -->
+        <div class="flex items-center gap-x-3">
+          <div class="w-9 h-9 bg-[#5f7a6f] rounded-2xl flex items-center justify-center">
+            <span class="text-white font-semibold text-xl tracking-tight">JS</span>
+          </div>
+          <div>
+            <div class="font-semibold text-xl tracking-tighter text-[#1e2937]">Joan Sinclair</div>
+            <div class="text-[10px] text-[#5f7a6f] -mt-0.5 font-medium tracking-[0.5px]">MSW, RSW, Acc.FM, CP Med</div>
+          </div>
+        </div>
+
+        <!-- Desktop Nav -->
+        <div class="hidden md:flex items-center gap-x-9 text-sm font-medium">
+          <a href="#about" class="nav-link text-[#3f4a45]">About</a>
+          <a href="#services" class="nav-link text-[#3f4a45]">Services</a>
+          <a href="#process" class="nav-link text-[#3f4a45]">How I Work</a>
+          <a href="#testimonials" class="nav-link text-[#3f4a45]">Testimonials</a>
+        </div>
+
+        <!-- CTA Buttons -->
+        <div class="hidden md:flex items-center gap-x-3">
+          <a href="#contact" 
+             class="px-5 py-2.5 text-sm font-medium rounded-3xl border border-[#d4cfc4] hover:bg-[#f8f7f4] transition">
+            Contact
+          </a>
+          <a href="#contact" 
+             class="px-6 py-2.5 text-sm font-semibold bg-[#5f7a6f] text-white rounded-3xl hover:bg-[#4e665c] transition">
+            Book Free Consultation
+          </a>
+        </div>
+
+        <!-- Mobile Menu Button -->
+        <button id="mobile-menu-btn"
+                class="md:hidden w-10 h-10 flex items-center justify-center text-[#4a564f] hover:bg-[#f1efeb] rounded-2xl">
+          <i class="fa-solid fa-bars text-xl"></i>
+        </button>
+      </div>
+    </div>
+
+    <!-- Mobile Menu -->
+    <div id="mobile-menu" class="hidden md:hidden border-t border-[#e6e2d9] bg-white px-6 py-6">
+      <div class="flex flex-col gap-y-4 text-base font-medium">
+        <a href="#about" class="py-1 mobile-link">About</a>
+        <a href="#services" class="py-1 mobile-link">Services</a>
+        <a href="#process" class="py-1 mobile-link">How I Work</a>
+        <a href="#testimonials" class="py-1 mobile-link">Testimonials</a>
+        <div class="pt-4 border-t flex flex-col gap-3">
+          <a href="#contact" class="py-3 text-center border border-[#d4cfc4] rounded-3xl text-sm font-medium">Contact Me</a>
+          <a href="#contact" class="py-3 text-center bg-[#5f7a6f] text-white rounded-3xl text-sm font-semibold">Book Free Consultation</a>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <header class="calm-gradient pt-16 pb-20 md:pt-20 md:pb-24">
+    <div class="max-w-screen-2xl mx-auto px-8">
+      <div class="max-w-3xl">
+        <div class="inline-flex items-center px-4 py-1.5 rounded-3xl bg-white/70 text-[#5f7a6f] text-sm font-medium tracking-wide mb-6">
+          <i class="fa-solid fa-heart mr-2"></i>
+          30+ YEARS SUPPORTING FAMILIES
+        </div>
+        
+        <h1 class="text-6xl md:text-7xl font-semibold tracking-tighter leading-[0.92] text-[#1e2937]">
+          A calmer path<br>through difficult<br>transitions.
+        </h1>
+        
+        <p class="mt-6 max-w-md text-xl text-[#4a564f]">
+          Thoughtful, confidential family mediation and counselling for separation, relationships, and life transitions across the GTA and Hamilton.
+        </p>
+
+        <div class="mt-10 flex flex-wrap gap-4">
+          <a href="#contact" 
+             class="inline-flex items-center justify-center px-8 h-14 bg-[#5f7a6f] hover:bg-[#4e665c] text-white font-semibold rounded-3xl text-base shadow-sm transition">
+            Book Your Free 30-Minute Consultation
+          </a>
+          <a href="#services" 
+             class="inline-flex items-center justify-center px-7 h-14 border border-[#c9c3b7] hover:bg-white rounded-3xl font-semibold text-base transition">
+            Learn About My Approach
+          </a>
+        </div>
+
+        <div class="mt-8 text-sm text-[#6b766f]">
+          Serving Toronto • Mississauga • Oakville • Burlington • Hamilton • Stoney Creek
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Credentials -->
+  <div class="border-b border-[#e6e2d9] bg-white">
+    <div class="max-w-screen-2xl mx-auto px-8 py-6">
+      <div class="flex flex-wrap items-center justify-center md:justify-start gap-x-10 gap-y-4 text-sm text-[#4a564f]">
+        <div class="flex items-center gap-x-2">
+          <i class="fa-solid fa-check text-[#5f7a6f]"></i>
+          <span>MSW (U of T)</span>
+        </div>
+        <div>Registered Social Worker (RSW)</div>
+        <div>Accredited Family Mediator (Acc.FM)</div>
+        <div>Certified Professional Mediator</div>
+        <div>Advanced Imago Couples Therapist</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- About -->
+  <section id="about" class="max-w-screen-2xl mx-auto px-8 pt-20 pb-16 scroll-mt-16">
+    <div class="grid md:grid-cols-12 gap-x-12 items-center">
+      <div class="md:col-span-7">
+        <div class="uppercase text-[#5f7a6f] text-xs tracking-[2px] font-semibold mb-3">ABOUT JOAN SINCLAIR</div>
+        <h2 class="text-4xl md:text-5xl font-semibold tracking-tighter text-[#1e2937] leading-none">
+          Helping families<br>find clarity and<br>peace during hard times.
+        </h2>
+        
+        <div class="prose prose-lg max-w-2xl text-[#4a564f] mt-6 leading-relaxed">
+          <p>For over three decades, I have supported individuals and families through some of life’s most challenging transitions. I believe that even in moments of deep conflict, people can find respectful, lasting solutions when they are guided with compassion and skill.</p>
+          <p>My approach is collaborative and non-judgmental. I help clients communicate more effectively, understand each other’s perspectives, and create agreements that protect what matters most — especially the well-being of children.</p>
+        </div>
+
+        <div class="mt-8">
+          <a href="#contact" class="font-medium text-[#5f7a6f] hover:text-[#4e665c] inline-flex items-center gap-x-2">
+            Let’s talk about how I can help <i class="fa-solid fa-arrow-right"></i>
+          </a>
+        </div>
+      </div>
+
+      <div class="md:col-span-5 mt-12 md:mt-4 bg-white rounded-3xl border border-[#e6e2d9] p-9">
+        <h3 class="font-semibold text-lg mb-5">My Commitment to You</h3>
+        <ul class="space-y-4 text-[#4a564f]">
+          <li class="flex gap-3"><i class="fa-solid fa-check mt-1 text-[#5f7a6f]"></i> A safe, respectful, and confidential process</li>
+          <li class="flex gap-3"><i class="fa-solid fa-check mt-1 text-[#5f7a6f]"></i> Focus on protecting children and relationships</li>
+          <li class="flex gap-3"><i class="fa-solid fa-check mt-1 text-[#5f7a6f]"></i> Clear, practical agreements that last</li>
+          <li class="flex gap-3"><i class="fa-solid fa-check mt-1 text-[#5f7a6f]"></i> Support that reduces stress and cost of litigation</li>
+          <li class="flex gap-3"><i class="fa-solid fa-check mt-1 text-[#5f7a6f]"></i> Free initial consultation to see if we’re a fit</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- Services -->
+  <section id="services" class="bg-white py-16 border-y border-[#e6e2d9] scroll-mt-16">
+    <div class="max-w-screen-2xl mx-auto px-8">
+      <div class="max-w-2xl mb-12">
+        <div class="text-[#5f7a6f] font-semibold tracking-[1.5px] text-sm">HOW I CAN HELP</div>
+        <h2 class="mt-2 text-4xl font-semibold tracking-tighter text-[#1e2937]">Services offered</h2>
+      </div>
+
+      <div class="grid md:grid-cols-2 gap-6">
+        <!-- Family Mediation -->
+        <div class="warm-card bg-[#f8f7f4] rounded-3xl p-9 border border-[#e6e2d9]">
+          <div class="flex items-center gap-x-3 mb-6">
+            <div class="w-11 h-11 bg-white flex items-center justify-center rounded-2xl border">
+              <i class="fa-solid fa-handshake text-[#5f7a6f] text-2xl"></i>
+            </div>
+            <div>
+              <h3 class="font-semibold text-2xl tracking-tight">Family Mediation</h3>
+              <div class="text-sm text-[#5f7a6f]">Closed &amp; Confidential</div>
+            </div>
+          </div>
+          <p class="text-[#4a564f] mb-6">I help couples and families reach fair, respectful agreements during separation, divorce, and other transitions without going to court.</p>
+          
+          <div class="space-y-2 text-sm">
+            <div class="flex items-start gap-2"><i class="fa-solid fa-check text-[#5f7a6f] mt-1 text-sm"></i> <span>Parenting plans &amp; decision-making</span></div>
+            <div class="flex items-start gap-2"><i class="fa-solid fa-check text-[#5f7a6f] mt-1 text-sm"></i> <span>Child &amp; spousal support</span></div>
+            <div class="flex items-start gap-2"><i class="fa-solid fa-check text-[#5f7a6f] mt-1 text-sm"></i> <span>Property &amp; debt division</span></div>
+            <div class="flex items-start gap-2"><i class="fa-solid fa-check text-[#5f7a6f] mt-1 text-sm"></i> <span>Cohabitation and paternity agreements</span></div>
+            <div class="flex items-start gap-2"><i class="fa-solid fa-check text-[#5f7a6f] mt-1 text-sm"></i> <span>Parent-teen &amp; family business mediation</span></div>
+          </div>
+        </div>
+
+        <!-- Counselling -->
+        <div class="warm-card bg-[#f8f7f4] rounded-3xl p-9 border border-[#e6e2d9]">
+          <div class="flex items-center gap-x-3 mb-6">
+            <div class="w-11 h-11 bg-white flex items-center justify-center rounded-2xl border">
+              <i class="fa-solid fa-user-friends text-[#5f7a6f] text-2xl"></i>
+            </div>
+            <div>
+              <h3 class="font-semibold text-2xl tracking-tight">Individual, Couple &amp; Family Counselling</h3>
+            </div>
+          </div>
+          <p class="text-[#4a564f] mb-6">I provide compassionate support for individuals and families navigating relationship challenges, life transitions, and emotional difficulties.</p>
+          
+          <div class="space-y-2 text-sm">
+            <div class="flex items-start gap-2"><i class="fa-solid fa-check text-[#5f7a6f] mt-1 text-sm"></i> <span>Relationship and couples counselling</span></div>
+            <div class="flex items-start gap-2"><i class="fa-solid fa-check text-[#5f7a6f] mt-1 text-sm"></i> <span>Separation and divorce adjustment</span></div>
+            <div class="flex items-start gap-2"><i class="fa-solid fa-check text-[#5f7a6f] mt-1 text-sm"></i> <span>Adult children and aging parents</span></div>
+            <div class="flex items-start gap-2"><i class="fa-solid fa-check text-[#5f7a6f] mt-1 text-sm"></i> <span>Communication and conflict skills</span></div>
+            <div class="flex items-start gap-2"><i class="fa-solid fa-check text-[#5f7a6f] mt-1 text-sm"></i> <span>Imago Relationship Therapy</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- How I Work -->
+  <section id="process" class="max-w-screen-2xl mx-auto px-8 pt-20 pb-16 scroll-mt-16">
+    <div class="max-w-2xl mb-10">
+      <div class="text-[#5f7a6f] text-sm font-semibold tracking-wider">THE PROCESS</div>
+      <h2 class="text-4xl font-semibold tracking-tighter mt-2 text-[#1e2937]">How we work together</h2>
+    </div>
+
+    <div class="grid md:grid-cols-3 gap-6">
+      <div class="bg-white p-8 rounded-3xl border">
+        <div class="text-[#5f7a6f] font-mono text-sm mb-3">01</div>
+        <div class="font-semibold text-xl mb-3">Free Consultation</div>
+        <p class="text-[#4a564f]">We start with a confidential 30-minute call to discuss your situation and see if mediation or counselling is the right path forward.</p>
+      </div>
+      <div class="bg-white p-8 rounded-3xl border">
+        <div class="text-[#5f7a6f] font-mono text-sm mb-3">02</div>
+        <div class="font-semibold text-xl mb-3">Individual Meetings</div>
+        <p class="text-[#4a564f]">We meet separately first so each person can speak openly and feel heard before we move into joint conversations.</p>
+      </div>
+      <div class="bg-white p-8 rounded-3xl border">
+        <div class="text-[#5f7a6f] font-mono text-sm mb-3">03</div>
+        <div class="font-semibold text-xl mb-3">Joint Sessions &amp; Agreements</div>
+        <p class="text-[#4a564f]">We work together (with caucusing when helpful) to reach practical agreements. I prepare clear documents for you and your lawyers.</p>
+      </div>
+    </div>
+
+    <div class="text-center mt-10 text-sm text-[#6b766f]">
+      All sessions are completely confidential. Mediation is conducted in a <span class="font-medium text-[#3f4a45]">closed format</span>.
+    </div>
+  </section>
+
+  <!-- Testimonials -->
+  <section id="testimonials" class="bg-white py-16 border-y border-[#e6e2d9] scroll-mt-16">
+    <div class="max-w-screen-2xl mx-auto px-8">
+      <div class="max-w-xl mb-10">
+        <div class="uppercase text-[#5f7a6f] text-xs tracking-[2px] font-medium">REAL CLIENT EXPERIENCES</div>
+        <h2 class="text-4xl tracking-tighter font-semibold mt-2">What people say</h2>
+      </div>
+
+      <div class="grid md:grid-cols-3 gap-6">
+        <div class="testimony bg-[#f8f7f4] p-8 rounded-3xl border border-[#e6e2d9]">
+          <p class="italic">"Joan helped us navigate a very emotional separation with grace and professionalism. She made sure our children’s needs stayed at the centre of every decision."</p>
+          <div class="mt-6 font-medium text-sm">— M. R., Oakville</div>
+        </div>
+        <div class="testimony bg-[#f8f7f4] p-8 rounded-3xl border border-[#e6e2d9]">
+          <p class="italic">"I was terrified going into mediation. Joan created a safe space where we could both speak honestly. We ended up with an agreement we both felt good about."</p>
+          <div class="mt-6 font-medium text-sm">— David T., Hamilton</div>
+        </div>
+        <div class="testimony bg-[#f8f7f4] p-8 rounded-3xl border border-[#e6e2d9]">
+          <p class="italic">"The combination of her counselling background and mediation expertise was exactly what we needed. Highly recommend."</p>
+          <div class="mt-6 font-medium text-sm">— Sarah &amp; Michael K., Toronto</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Areas Served -->
+  <section class="max-w-screen-2xl mx-auto px-8 py-16">
+    <div class="text-center">
+      <div class="text-[#5f7a6f] text-sm font-medium tracking-wider">SERVING FAMILIES ACROSS</div>
+      <h3 class="text-3xl font-semibold tracking-tighter mt-2 mb-8">Greater Toronto Area &amp; Hamilton Region</h3>
+      
+      <div class="flex flex-wrap justify-center gap-x-10 gap-y-2 text-[#4a564f] text-lg">
+        <div>Toronto</div>
+        <div>Mississauga</div>
+        <div>Oakville</div>
+        <div>Burlington</div>
+        <div>Hamilton</div>
+        <div>Stoney Creek</div>
+        <div>Ancaster</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Contact -->
+  <section id="contact" class="bg-[#1e2937] text-[#e8e2d9] py-20 scroll-mt-16">
+    <div class="max-w-screen-2xl mx-auto px-8">
+      <div class="grid md:grid-cols-12 gap-x-14">
+        
+        <div class="md:col-span-5">
+          <div class="text-[#5f7a6f] tracking-[1.5px] text-xs font-medium mb-4">NEXT STEP</div>
+          <h2 class="text-5xl tracking-tighter font-semibold text-white leading-none">
+            Ready to talk?<br>Let’s start with a free conversation.
+          </h2>
+          <p class="mt-6 text-lg text-[#a8a39a]">I offer a complimentary 30-minute consultation so we can determine whether I’m the right fit for your situation.</p>
+
+          <div class="mt-10 space-y-3 text-sm">
+            <div><span class="text-[#9d988e]">Phone:</span> <a href="tel:4168993613" class="font-medium hover:text-white">416-899-3613</a></div>
+            <div><span class="text-[#9d988e]">Email:</span> <a href="mailto:joansinclair@familymediationtoronto.ca" class="font-medium hover:text-white">joansinclair@familymediationtoronto.ca</a></div>
+          </div>
+        </div>
+
+        <!-- Contact Form -->
+        <div class="md:col-span-7 mt-12 md:mt-0">
+          <form id="contact-form" class="space-y-5">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div>
+                <label class="block text-xs font-medium tracking-wider text-[#a8a39a] mb-1.5">FULL NAME</label>
+                <input type="text" name="name" required class="w-full bg-[#2f3a36] border border-[#4a564f] rounded-2xl px-5 py-3 text-white placeholder:text-[#7a7368] focus:outline-none focus:border-[#5f7a6f]">
+              </div>
+              <div>
+                <label class="block text-xs font-medium tracking-wider text-[#a8a39a] mb-1.5">EMAIL ADDRESS</label>
+                <input type="email" name="email" required class="w-full bg-[#2f3a36] border border-[#4a564f] rounded-2xl px-5 py-3 text-white placeholder:text-[#7a7368] focus:outline-none focus:border-[#5f7a6f]">
+              </div>
+            </div>
+            
+            <div>
+              <label class="block text-xs font-medium tracking-wider text-[#a8a39a] mb-1.5">PHONE NUMBER</label>
+              <input type="tel" name="phone" class="w-full bg-[#2f3a36] border border-[#4a564f] rounded-2xl px-5 py-3 text-white placeholder:text-[#7a7368] focus:outline-none focus:border-[#5f7a6f]">
+            </div>
+
+            <div>
+              <label class="block text-xs font-medium tracking-wider text-[#a8a39a] mb-1.5">HOW CAN I HELP YOU?</label>
+              <textarea name="message" rows="4" required class="w-full bg-[#2f3a36] border border-[#4a564f] rounded-3xl px-5 py-4 text-white placeholder:text-[#7a7368] focus:outline-none focus:border-[#5f7a6f] resize-y"></textarea>
+            </div>
+
+            <button type="submit"
+                    class="w-full md:w-auto mt-3 bg-[#5f7a6f] hover:bg-[#6e8b7e] transition font-semibold px-10 py-4 rounded-3xl text-white">
+              Send Message — I’ll Respond Within 24 Hours
+            </button>
+            
+            <p class="text-xs text-[#8c857b]">Your information is kept strictly confidential.</p>
+          </form>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="bg-[#111a1f] text-[#8c857b] py-9">
+    <div class="max-w-screen-2xl mx-auto px-8 text-xs flex flex-col md:flex-row md:justify-between gap-y-2">
+      <div>© Joan Sinclair, MSW, RSW, Acc.FM, CP Med. All rights reserved.</div>
+      <div>74 Garfield Avenue South, Hamilton, ON L8M 2S2</div>
+    </div>
+  </footer>
+
+  <script src="js/main.js"></script>
+  
+  <script>
+    // Tailwind customization
+    function initializeTailwind() {
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              'serif-custom': ['Playfair Display', 'Georgia', 'serif']
+            }
+          }
+        }
+      };
+    }
+
+    function initializeWebsite() {
+      initializeTailwind();
+
+      // Navbar scroll effect
+      const navbar = document.getElementById('navbar');
+      window.addEventListener('scroll', () => {
+        if (window.scrollY > 20) {
+          navbar.classList.add('nav-scrolled', 'bg-white');
+        } else {
+          navbar.classList.remove('nav-scrolled');
+        }
+      });
+
+      // Mobile menu
+      const mobileBtn = document.getElementById('mobile-menu-btn');
+      const mobileMenu = document.getElementById('mobile-menu');
+      
+      if (mobileBtn && mobileMenu) {
+        mobileBtn.addEventListener('click', () => {
+          const isHidden = mobileMenu.classList.toggle('hidden');
+          const icon = mobileBtn.querySelector('i');
+          if (!isHidden) {
+            icon.classList.remove('fa-bars');
+            icon.classList.add('fa-times');
+          } else {
+            icon.classList.add('fa-bars');
+            icon.classList.remove('fa-times');
+          }
+        });
+      }
+
+      // Close mobile menu on nav click
+      document.querySelectorAll('.mobile-link').forEach(link => {
+        link.addEventListener('click', () => {
+          mobileMenu.classList.add('hidden');
+          const icon = mobileBtn.querySelector('i');
+          icon.classList.add('fa-bars');
+          icon.classList.remove('fa-times');
+        });
+      });
+
+      // Contact form handling
+      const form = document.getElementById('contact-form');
+      if (form) {
+        form.addEventListener('submit', function(e) {
+          e.preventDefault();
+          
+          const btn = form.querySelector('button[type="submit"]');
+          const originalText = btn.innerHTML;
+
+          btn.disabled = true;
+          btn.innerHTML = `Sending... <i class="fa-solid fa-spinner fa-spin ml-2"></i>`;
+
+          setTimeout(() => {
+            form.innerHTML = `
+              <div class="py-12 text-center">
+                <i class="fa-solid fa-check-circle text-5xl text-[#5f7a6f]"></i>
+                <h4 class="font-semibold text-2xl text-white mt-6">Thank you.</h4>
+                <p class="mt-3 text-[#a8a39a]">I’ve received your message and will contact you within 24 hours to schedule your free consultation.</p>
+              </div>
+            `;
+          }, 1400);
+        });
+      }
+
+      // Smooth scrolling
+      document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+        anchor.addEventListener('click', function(e) {
+          const target = document.querySelector(this.getAttribute('href'));
+          if (target) {
+            e.preventDefault();
+            const offset = 80;
+            const top = target.getBoundingClientRect().top + window.scrollY - offset;
+            window.scrollTo({ top, behavior: 'smooth' });
+          }
+        });
+      });
+
+      console.log('%c[Joan Sinclair] Modern website initialized.', 'color:#6b766f;font-size:10px');
+    }
+
+    window.addEventListener('DOMContentLoaded', initializeWebsite);
+  </script>
+</body>
+</html>

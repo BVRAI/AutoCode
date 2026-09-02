@@ -1,0 +1,33 @@
+/* Joan Sinclair — Modern Website
+   Supplemental styles (most styling is handled via Tailwind CDN + inline styles)
+*/
+
+:root {
+  --sage: #5f7a6f;
+  --warm-navy: #1e2937;
+  --warm-bg: #f8f7f4;
+}
+
+/* Small refinements beyond Tailwind */
+input, textarea {
+  transition: border-color 0.2s ease;
+}
+
+input:focus, textarea:focus {
+  outline: none;
+  border-color: #5f7a6f;
+  background-color: #25332e;
+}
+
+/* Subtle hover polish on cards */
+.warm-card {
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), 
+              box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Print-friendly styles */
+@media print {
+  nav, #contact, footer {
+    display: none !important;
+  }
+}
