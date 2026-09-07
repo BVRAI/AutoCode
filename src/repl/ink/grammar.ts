@@ -101,6 +101,10 @@ export function describeCall(name: string, args: Record<string, unknown>): CallD
       return { label: 'Retrieve', arg: idList(args['ids']), group: null, activity: 'Reading' };
     case 'list_directory':
       return { label: 'List', arg: path || '.', group: 'list', activity: 'Listing' };
+    case 'review': {
+      const files = Array.isArray(args['files']) ? (args['files'] as unknown[]).length : 0;
+      return { label: 'Review', arg: `${files} file${files === 1 ? '' : 's'}`, group: null, activity: 'Reviewing' };
+    }
     case 'task': {
       const localize = str(args['subagent_type']) === 'Localize';
       return {
@@ -247,6 +251,18 @@ export function describeResult(
       if (tokens > 0) parts.push(`${formatTokens(tokens)} tokens`);
       if (ms !== null) parts.push(formatDuration(ms));
       return { summary: parts.length > 0 ? `Done (${parts.join(' · ')})` : 'Done', lines };
+    }
+    case 'review': {
+      // Findings stay visible (up to eight lines) — they are for the user.
+      const md = result.metadata ?? {};
+      const findings = Array.isArray(md['findings']) ? (md['findings'] as unknown[]).length : 0;
+      const verdict = md['verdict'];
+      const summary = result.isError
+        ? 'Review unavailable'
+        : verdict === 'approve'
+          ? `Approved${findings > 0 ? ` (${plural(findings, 'note')})` : ''}`
+          : `Changes requested (${plural(findings, 'finding')})`;
+      return { summary: `${summary}${expandHint(opts.verbose)}`, lines, ...take(content, 8) };
     }
     case 'todo_write': {
       // The tool renders the whole list back ("[x] t1. text"); prefer that so

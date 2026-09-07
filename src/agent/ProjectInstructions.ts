@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { homedir } from 'node:os';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { NOISE_DIRS } from '../tools/listDirectory.js';
 import { parseFrontmatter } from '../util/frontmatter.js';
 
@@ -81,7 +82,7 @@ export function loadProjectInstructions(root: string): ProjectInstructions[] {
     // `verify:`) before the content reaches the system prompt — the agent
     // should not see the directive as an instruction.
     const fm = parseFrontmatter(raw);
-    const stripped = fm.hasFrontmatter ? fm.body : raw;
+    const stripped = resolveImports(fm.hasFrontmatter ? fm.body : raw, f.path);
     const remaining = Math.max(0, TOTAL_BYTE_CAP - totalBytes);
     const truncated = stripped.length > remaining;
     const content = truncated ? stripped.slice(0, remaining) + '\n[…truncated]' : stripped;
@@ -112,6 +113,39 @@ interface Candidate {
   relativeDir: string;
   depth: number;
   candidateIndex: number;
+}
+
+const IMPORT_CAP_BYTES = 50_000;
+const IMPORT_FILE_CAP_BYTES = 20_000;
+
+/**
+ * `@path/to/file.md` on a line of its own pulls that file in (Claude Code's
+ * CLAUDE.md imports), relative to the instruction file; one level deep,
+ * bounded. Unreadable imports stay as the literal line so the agent sees
+ * what was intended.
+ */
+export function resolveImports(content: string, instructionPath: string): string {
+  const dir = dirname(instructionPath);
+  let budget = IMPORT_CAP_BYTES;
+  return content
+    .split(/\r?\n/)
+    .map((line) => {
+      const m = /^@([\w./~\\-]+(?:\/[\w.\\-]+)*)\s*$/.exec(line.trim());
+      if (!m) return line;
+      const target = resolve(dir, m[1]!.replace(/^~[\\/]/, `${homedir()}/`));
+      try {
+        if (!statSync(target).isFile()) return line;
+        let text = readFileSync(target, 'utf8');
+        if (text.length > IMPORT_FILE_CAP_BYTES) text = `${text.slice(0, IMPORT_FILE_CAP_BYTES)}\n[…import truncated]`;
+        if (text.length > budget) return line;
+        budget -= text.length;
+        const rel = relative(dir, target).replace(/\\/g, '/');
+        return `<imported from="${rel}">\n${text.trim()}\n</imported>`;
+      } catch {
+        return line;
+      }
+    })
+    .join('\n');
 }
 
 function findInstructionFiles(root: string): Candidate[] {

@@ -1,0 +1,34 @@
+       11 -       out[k!] = v ?? true;
+       11 +       out[k!] = v === undefined ? true : v;
+       12       }
+       13     }
+       14     return out;
+
+⏺ Made a bare flag count as true explicitly.
+⏺ Review(1 file)
+  ⎿  Changes requested (2 findings) (ctrl+o to expand)
+     Changes requested — The change is a no-op and misses the empty-value case.
+     [high] src/util.ts:11  `--flag=` still yields an empty string instead of true; the new ternar… 
+     [low] no test covers bare flags
+  ⚠   ✗ review found 1 high-severity issue — asking the agent to fix
+⏺ Update(src/util.ts)
+  ⎿  Updated src/util.ts with 1 addition and 1 removal
+        8     for (const a of argv) {
+        9       if (a.startsWith('--')) {
+       10         const [k, v] = a.slice(2).split('=');
+       11 -       out[k!] = v === undefined ? true : v;
+       11 +       out[k!] = v === undefined || v === '' ? true : v;
+       12       }
+       13     }
+       14     return out;
+
+⏺ Fixed: an empty --flag= now counts as true too, as the review pointed out.
+
+✻ Cooked for #DUR · done #CLOCK
+
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ >                                                                                                │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+⏵⏵ auto mode on  ·  ? for shortcuts  ·  shift+tab to cycle
+xai/grok-code-fast-1  ·  1% context                                                            $#COST
+

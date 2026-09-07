@@ -1,0 +1,16 @@
+{
+  "cols": 100,
+  "rows": 30,
+  "theme": "dark",
+  "mode": "autocode",
+  "fake": "./hooks.fake.json",
+  "project": "../fixtures/project-hooks",
+  "steps": [
+    { "waitFor": "/help for commands", "timeoutMs": 30000 },
+    { "type": "run the tests and tell me if they pass" },
+    { "key": "enter" },
+    { "waitFor": "TURN_END", "timeoutMs": 60000 },
+    { "waitIdle": 800 },
+    { "snapshot": "after-turn" }
+  ]
+}

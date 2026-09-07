@@ -1,0 +1,33 @@
+{
+  "chunk": 8,
+  "delayMs": 4,
+  "turns": [
+    {
+      "when": "plan how to add",
+      "tools": [{ "name": "read_file", "input": { "path": "src/cli.ts" } }],
+      "usage": { "inputTokens": 1100, "outputTokens": 30 }
+    },
+    {
+      "text": "# Plan: --verbose flag with tool timings\n\n1. **Parse the flag** in `src/cli.ts`: read `args.verbose === true` next to `mode`.\n2. **Thread it into `run()`** as a second parameter (`run(mode, verbose)`), keeping the default behaviour unchanged when the flag is absent.\n3. **Print timings** inside `run()` when `verbose` is set: wrap each tool invocation with `performance.now()` and log `name: Nms` to stderr so stdout stays clean.\n4. **Document it** in `README.md` under Usage.\n5. **Verify** with `npm test` and a manual `node src/cli.ts --verbose`.\n\nRisks: none of note — the flag is additive and defaults off.",
+      "usage": { "inputTokens": 1500, "outputTokens": 220 }
+    },
+    {
+      "when": "approved and saved",
+      "tools": [
+        {
+          "name": "edit_file",
+          "input": {
+            "path": "src/cli.ts",
+            "old_text": "const mode = args.mode ?? 'default';\nrun(mode);",
+            "new_text": "const mode = args.mode ?? 'default';\nconst verbose = args.verbose === true;\nrun(mode, verbose);"
+          }
+        }
+      ],
+      "usage": { "inputTokens": 2200, "outputTokens": 80 }
+    },
+    {
+      "text": "Second turn done: the flag is parsed and threaded into `run()` as the plan's first two steps describe.",
+      "usage": { "inputTokens": 2600, "outputTokens": 40 }
+    }
+  ]
+}

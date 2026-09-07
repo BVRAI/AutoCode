@@ -19,11 +19,19 @@ import { resolveVerifyPlanForFiles, runVerification } from './Verify.js';
 import { adoptIndexIfReady, invalidateRepoMap, refreshRepoMapIfStale } from './RepoMap.js';
 import { indexEnabled, peekIndex, startIndex } from '../index/IndexManager.js';
 import { trace, traced, tracedSync } from '../util/trace.js';
+import { checkStagesDisabled, resolveCheckStages } from './VerifyStages.js';
+import { describeUnrelated, extractFailingPaths, triageFailures } from './FailureTriage.js';
+import { blockingFindings, buildReviewRequest, buildTurnDiff, parseReviewResult, renderFixRequest, renderReviewResult } from './Reviewer.js';
+import { benchMode } from './toolAvailability.js';
 import { loadProjectInstructions } from './ProjectInstructions.js';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { findSkill, getSkills } from './Skills.js';
+import { getRules, renderRule, rulesForPath } from './Rules.js';
 import type { EventEmitter } from '../repl/EventEmitter.js';
 import { runSessionReflection, type Proposal, type SessionSnapshot } from './SessionReflection.js';
-import { blockingReason, runHooksForEvent, type HookSpec } from './HookRunner.js';
-import { getPlugins, pluginHooksForEvent } from './Plugins.js';
+import { additionalContext, blockingReason, permissionDecision, updatedInput } from './HookRunner.js';
+import type { HookHub } from './HookHub.js';
 
 // Runaway backstop, not a working limit. Hard step caps truncate exactly the
 // careful behavior we want on repo-level tasks (top harnesses run hundreds of
@@ -37,6 +45,8 @@ const MAX_RETRIES_PER_TOOL = 3;
 // How many times the harness will feed a verification failure back to the
 // agent to fix before giving up (round 0 is the user's actual turn).
 const MAX_VERIFY_ROUNDS = 3;
+// Claude Code's cap on Stop hooks re-engaging the agent within one turn.
+const MAX_STOP_HOOK_ROUNDS = 8;
 
 // Tools that change the project — gated according to the session mode.
 const MUTATING_TOOLS = new Set([
@@ -101,13 +111,17 @@ export interface AgentDeps {
   autoVerify: boolean;
   // Explicit verification command — overrides the inferred default.
   verifyCommand?: string;
+  // Independent review of each turn's diff by a Review subagent (Phase 4.1).
+  // Off in bench mode and with AUTOCODE_NO_REVIEW=1 regardless.
+  review: boolean;
   // Machine-readable activity stream for the Automax V6 host. NullEventEmitter
   // when --automax is off; StdoutEventEmitter when it is on.
   emitter: EventEmitter;
-  // User-defined event hooks loaded from ~/.autocode/config.json. Fire at
-  // PreToolUse + PostToolUse. Stop-event hooks are fired by TerminalMode
-  // at /exit time (not here). Optional — absent means no hooks configured.
-  hooks?: { pre_tool?: HookSpec[]; post_tool?: HookSpec[] };
+  // Every hook the session has (user config, project hooks.json, plugins),
+  // fired here for UserPromptSubmit, PreToolUse, PermissionRequest,
+  // PostToolUse, PostToolUseFailure, Stop, PreCompact and PostCompact.
+  // SessionStart/SessionEnd fire from the CLI, Subagent* from the runner.
+  hooks?: HookHub;
 }
 
 export class AgentLoop {
@@ -133,6 +147,18 @@ export class AgentLoop {
   // submit(); this Set is the union across all turns in the session.
   private readonly sessionFilesChanged = new Set<string>();
   private sessionToolCalls = 0;
+  // What compaction must bring back (Phase 4.7): skills the agent loaded
+  // (use_skill or /<skill>) and the files it changed most recently.
+  private readonly invokedSkills = new Set<string>();
+  private readonly recentlyChanged = new Map<string, number>();
+  // Path-scoped rules already shown this session (each is injected once).
+  private readonly injectedRules = new Set<string>();
+  // The assistant's final text of the last completed turn (plan approval).
+  private lastTurnText = '';
+
+  lastAssistantText(): string {
+    return this.lastTurnText;
+  }
   // The current turn's user text — personalizes the repo map's query slice.
   // Fixed for the whole turn so the prompt stays byte-stable across
   // iterations (the slice lives in the volatile suffix, after the cache
@@ -200,11 +226,13 @@ export class AgentLoop {
   async compactConversation(
     ctx: SessionContext,
     keepPairs = 4,
+    trigger: 'manual' | 'auto' = 'manual',
   ): Promise<{ before: number; after: number; summarized: boolean }> {
     const before = this.conversation.length;
     const cut = findCompactionCut(this.conversation, keepPairs);
     if (cut <= 0) return { before, after: before, summarized: false };
 
+    await this.deps.hooks?.fire('PreCompact', { trigger });
     const older = this.conversation.slice(0, cut);
     const kept = this.conversation.slice(cut);
     let summary: string | null = null;
@@ -218,7 +246,49 @@ export class AgentLoop {
       this.conversation.push({ role: 'user', content: `[Summary of earlier conversation]\n${summary}` });
     }
     this.conversation.push(...kept);
+    const restored = this.compactionRestoreMessage(ctx);
+    if (restored) this.conversation.push({ role: 'user', content: restored });
+    await this.deps.hooks?.fire('PostCompact', { trigger });
     return { before, after: this.conversation.length, summarized: summary !== null };
+  }
+
+  // After compaction the summary keeps decisions but loses material the agent
+  // was working from: bring back the skills it loaded and the head of the
+  // five most recently changed files (Claude Code's re-read behaviour).
+  private compactionRestoreMessage(ctx: SessionContext): string | null {
+    const parts: string[] = [];
+    let skillBudget = 20_000;
+    if (this.invokedSkills.size > 0) {
+      const skills = getSkills(ctx.projectRoot);
+      for (const name of this.invokedSkills) {
+        const s = findSkill(skills, name);
+        if (!s || skillBudget <= 0) continue;
+        const body = s.body.slice(0, skillBudget);
+        parts.push(`<skill name="${name}">\n${body}\n</skill>`);
+        skillBudget -= body.length;
+      }
+    }
+    const recent = [...this.recentlyChanged.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+    let fileBudget = 30_000;
+    for (const [rel] of recent) {
+      if (fileBudget <= 0) break;
+      try {
+        const text = readFileSync(join(ctx.projectRoot, rel), 'utf8');
+        const lines = text.split(/\r?\n/);
+        const head = lines.slice(0, 200).join('\n').slice(0, fileBudget);
+        if (head.length === 0) continue;
+        parts.push(`<file path="${rel}"${lines.length > 200 ? ` lines="1-200 of ${lines.length}"` : ''}>\n${head}\n</file>`);
+        fileBudget -= head.length;
+      } catch {
+        /* deleted since; nothing to restore */
+      }
+    }
+    if (parts.length === 0) return null;
+    return (
+      '[Context restored after compaction] The skills you loaded and the files you changed most recently, ' +
+      'so you can continue without re-reading them:\n\n' +
+      parts.join('\n\n')
+    );
   }
 
   private async summarizeMessages(messages: Message[], ctx: SessionContext): Promise<string> {
@@ -340,9 +410,27 @@ export class AgentLoop {
       }
       tracedSync('adoptIndexIfReady', () => adoptIndexIfReady(ctx.projectRoot, ctx.model));
     }
-    const userText = typeof input === 'string' ? input : textOf(input);
+    let userText = typeof input === 'string' ? input : textOf(input);
     this.turnQuery = userText;
     trace('turn: start');
+    for (const m of userText.matchAll(/<skill name="([^"]+)">/g)) this.invokedSkills.add(m[1]!);
+    // UserPromptSubmit hooks can refuse the prompt (exit 2, reason shown) or
+    // add context that rides along inside the user message.
+    if (this.deps.hooks?.has('UserPromptSubmit')) {
+      const outcomes = await this.deps.hooks.fire('UserPromptSubmit', { prompt: userText.slice(0, 8_000) });
+      const reason = blockingReason(outcomes);
+      if (reason !== null) {
+        this.deps.renderer.error(`Prompt blocked by a UserPromptSubmit hook: ${reason}`);
+        this.deps.emitter.emit('failed', { error: `blocked by UserPromptSubmit hook: ${reason}` });
+        return;
+      }
+      const extra = additionalContext(outcomes);
+      if (extra.length > 0) {
+        const note = `\n\n[hook context]\n${extra.join('\n')}`;
+        input = typeof input === 'string' ? `${input}${note}` : [...input, { type: 'text', text: note.trim() }];
+        userText = `${userText}${note}`;
+      }
+    }
     this.deps.store.appendTranscript({ role: 'user', text: userText });
     this.conversation.push({ role: 'user', content: input });
 
@@ -394,10 +482,13 @@ export class AgentLoop {
         mode: ctx.mode,
         model: `${ctx.model.provider}/${ctx.model.model}`,
       });
-      let mutated = false;
       // Round 0 is the user's actual turn; rounds 1.. are verification-driven
       // fix attempts. After any round that changed files, the harness runs the
-      // project's verification command and, on failure, feeds the output back.
+      // typecheck/lint stages and the project's verification command and, on
+      // failure, feeds the output back. Wrapped so the review round below can
+      // run the same loop once more after a fix.
+      const runWithVerification = async (): Promise<boolean> => {
+      let mutated = false;
       for (let round = 0; round <= MAX_VERIFY_ROUNDS; round++) {
         const r = await this.runIterations(ctx, toolExecCtx, userText, totals, filesChanged, turnState);
         mutated = mutated || r.mutated;
@@ -452,6 +543,47 @@ export class AgentLoop {
             }
             this.approvedVerifyCommands.add(plan.command);
           }
+        }
+
+        // Typecheck / lint stages first (Phase 4.1): cheaper than the suite
+        // and they catch what tests report late. A failing stage costs one
+        // fix round like a failing test run.
+        const stages = checkStagesDisabled() || benchMode()
+          ? []
+          : resolveCheckStages(ctx.projectRoot, [...filesChanged], { skipCommands: [plan.command, plan.fullCommand ?? ''] });
+        let stageFailed = false;
+        for (const stage of stages) {
+          this.deps.renderer.spinner.start(`verifying — ${stage.label}: $ ${stage.command}`);
+          const s = await runVerification(stage.command, ctx.projectRoot, () => this.cancelled);
+          this.deps.renderer.spinner.stop();
+          if (this.cancelled) break;
+          if (s.ok || /not recognized|command not found|ENOENT|npm ERR! could not determine executable|Cannot find module/i.test(s.output.slice(0, 400)) && s.code !== 1) {
+            if (s.ok) this.deps.renderer.status(`  ✓ ${stage.label} passed`);
+            else this.deps.renderer.dim(`  (${stage.label} unavailable — skipped)`);
+            continue;
+          }
+          stageFailed = true;
+          if (round === MAX_VERIFY_ROUNDS) {
+            this.deps.renderer.warn(`  ✗ ${stage.label} still failing after ${MAX_VERIFY_ROUNDS} fix attempt(s) ($ ${stage.command})`);
+            break;
+          }
+          this.deps.renderer.warn(`  ✗ ${stage.label} failed ($ ${stage.command}) — asking the agent to fix`);
+          this.conversation.push({
+            role: 'user',
+            content:
+              `The ${stage.label} (\`${stage.command}\`) failed (exit ${s.code ?? '?'}) after your changes:\n\n` +
+              '```\n' +
+              s.output +
+              '\n```\n\n' +
+              'Fix the reported problems, then stop — checks and verification re-run automatically. If a problem is ' +
+              'pre-existing and unrelated to your changes, say so briefly and stop.',
+          });
+          break;
+        }
+        if (this.cancelled) break;
+        if (stageFailed) {
+          if (round === MAX_VERIFY_ROUNDS) break;
+          continue;
         }
 
         this.deps.renderer.spinner.start(`verifying — $ ${plan.command}`);
@@ -519,6 +651,19 @@ export class AgentLoop {
           );
           break;
         }
+        // Failures only in files this turn did not touch and that do not
+        // reach the changed files through the import graph are pre-existing:
+        // report them once instead of looping on them (Phase 4.1).
+        const failing = extractFailingPaths(v.output, ctx.projectRoot);
+        const triage = triageFailures(peekIndex(ctx.projectRoot), [...filesChanged], failing);
+        if (triage.decidable && triage.related.length === 0 && triage.unrelated.length > 0) {
+          const note = describeUnrelated(triage, plan.command);
+          this.deps.renderer.warn(`  ✗ ${note}`);
+          this.conversation.push({ role: 'user', content: `[harness] ${note} Mention it to the user in one sentence and stop.` });
+          const again = await this.runIterations(ctx, toolExecCtx, userText, totals, filesChanged, turnState);
+          mutated = mutated || again.mutated;
+          break;
+        }
         this.deps.renderer.warn(`  ✗ verification failed ($ ${plan.command}) — asking the agent to fix`);
         this.conversation.push({
           role: 'user',
@@ -532,9 +677,40 @@ export class AgentLoop {
             'them; say so briefly and stop.',
         });
       }
+      return mutated;
+      };
+
+      let mutated = await runWithVerification();
+      // Independent review of the diff before the turn ends (Phase 4.1): a
+      // fresh-context reader reports bugs, regressions and scope creep; a
+      // high-severity finding buys exactly one fix round, verified again.
+      if (mutated && !this.cancelled && this.shouldReview(ctx)) {
+        const fixRequest = await this.reviewTurn(ctx, userText, filesChanged, totals);
+        if (fixRequest && !this.cancelled) {
+          this.conversation.push({ role: 'user', content: fixRequest });
+          mutated = (await runWithVerification()) || mutated;
+        }
+      }
+      // Stop hooks: exit 2 (or a deny decision) asks the agent to keep going
+      // with the hook's reason, at most MAX_STOP_HOOK_ROUNDS times per turn.
+      let stopRounds = 0;
+      while (!this.cancelled && this.deps.hooks?.has('Stop')) {
+        const outcomes = await this.deps.hooks.fire('Stop', { stop_hook_active: stopRounds > 0 });
+        const reason = blockingReason(outcomes);
+        if (reason === null) break;
+        if (stopRounds >= MAX_STOP_HOOK_ROUNDS) {
+          this.deps.renderer.warn(`  ✗ Stop hook still asks to continue after ${MAX_STOP_HOOK_ROUNDS} rounds — stopping anyway`);
+          break;
+        }
+        stopRounds += 1;
+        this.deps.renderer.warn(`  ↻ Stop hook asks to continue (${stopRounds}/${MAX_STOP_HOOK_ROUNDS})`);
+        this.conversation.push({ role: 'user', content: `[Stop hook] ${reason}` });
+        mutated = (await runWithVerification()) || mutated;
+      }
       if (this.cancelled) {
         this.deps.emitter.emit('failed', { error: 'cancelled by user' });
       } else {
+        this.lastTurnText = turnState.lastAssistantText;
         this.deps.emitter.emit('completed', {
           summary: turnState.lastAssistantText,
           filesChanged: [...filesChanged],
@@ -588,7 +764,7 @@ export class AgentLoop {
       // fires once masking holds the line.
       if (shouldAutoCompact(this.lastInputTokens, ctx.model.provider, ctx.model.model)) {
         this.deps.renderer.dim('  (auto-compacting — conversation context is getting large)');
-        await this.compactConversation(ctx);
+        await this.compactConversation(ctx, 4, 'auto');
         this.lastInputTokens = 0;
       } else if (shouldMaskObservations(this.lastInputTokens, ctx.model.provider, ctx.model.model)) {
         const masked = maskOldToolResults(this.conversation);
@@ -838,15 +1014,28 @@ export class AgentLoop {
         }
         const scope = approvalScope(tu.name, tu.input);
         if (gate === 'approve' && !this.alwaysApproved.has(scope.key)) {
-          // The dialog shows the preview (the command, or the edit as a diff);
-          // "Yes, and don't ask again" remembers the scope for the session.
-          const preview = formatToolPreview(tu.name, tu.input);
-          const verdict = await this.deps.approve(`Run ${tu.name}?`, {
-            tool: tu.name,
-            args: tu.input,
-            preview,
-            scope: scope.label,
-          });
+          // PermissionRequest hooks see the call before the user does and
+          // can allow or deny it outright (Claude Code's contract).
+          const permOutcomes = (await this.deps.hooks?.fire('PermissionRequest', { tool_name: tu.name, tool_input: tu.input })) ?? [];
+          const perm = permissionDecision(permOutcomes);
+          const hookReason = blockingReason(permOutcomes);
+          let verdict: Awaited<ReturnType<AgentDeps['approve']>>;
+          if (perm.decision === 'allow') {
+            this.deps.renderer.dim(`  hook[PermissionRequest]: allowed ${tu.name}${perm.reason ? ` — ${perm.reason}` : ''}`);
+            verdict = { decision: 'accept' };
+          } else if (perm.decision === 'deny' || hookReason !== null) {
+            verdict = { decision: 'revise', guidance: perm.reason ?? hookReason ?? 'denied by a PermissionRequest hook' };
+          } else {
+            // The dialog shows the preview (the command, or the edit as a
+            // diff); "Yes, and don't ask again" remembers the scope.
+            const preview = formatToolPreview(tu.name, tu.input);
+            verdict = await this.deps.approve(`Run ${tu.name}?`, {
+              tool: tu.name,
+              args: tu.input,
+              preview,
+              scope: scope.label,
+            });
+          }
           if (verdict.decision === 'accept_always') this.alwaysApproved.add(scope.key);
           if (verdict.decision !== 'accept' && verdict.decision !== 'accept_always') {
             const content =
@@ -865,29 +1054,18 @@ export class AgentLoop {
           }
         }
 
-        // PreToolUse hooks — user-defined gates that can refuse this call by
-        // exiting with code 2 (the canonical Claude Code semantics). Other
-        // non-zero codes are advisory; output is surfaced to the user either
-        // way. The block path injects a synthetic tool_result so the model
-        // sees why and can adapt.
-        const preHooks = [
-          ...(this.deps.hooks?.pre_tool ?? []),
-          ...pluginHooksForEvent(getPlugins(ctx.projectRoot), 'pre_tool'),
-        ];
-        const preOutcomes = await runHooksForEvent(preHooks, {
-          event: 'pre_tool',
-          toolName: tu.name,
-          toolArgs: tu.input,
-          projectRoot: ctx.projectRoot,
-          sessionId: ctx.sessionId,
-        });
-        for (const o of preOutcomes) {
-          if (o.stdout.trim().length > 0) this.deps.renderer.dim(`  hook[pre]: ${o.stdout.trim()}`);
-          if (o.stderr.trim().length > 0 && !o.blocked) this.deps.renderer.dim(`  hook[pre]: ${o.stderr.trim()}`);
+        // PreToolUse hooks — can block the call (exit 2 or a `deny`
+        // decision; stderr / reason goes back to the model as the tool
+        // result), rewrite its input (`updatedInput`), or add context.
+        const preOutcomes = (await this.deps.hooks?.fire('PreToolUse', { tool_name: tu.name, tool_input: tu.input })) ?? [];
+        const rewritten = updatedInput(preOutcomes);
+        if (rewritten) {
+          tu.input = rewritten;
+          this.deps.renderer.dim(`  hook[PreToolUse]: input of ${tu.name} updated`);
         }
         const blockReason = blockingReason(preOutcomes);
         if (blockReason !== null) {
-          this.deps.renderer.warn(`  ✗ ${tu.name} blocked by pre_tool hook`);
+          this.deps.renderer.warn(`  ✗ ${tu.name} blocked by a PreToolUse hook`);
           toolResults.push({
             type: 'tool_result',
             toolUseId: tu.id,
@@ -896,7 +1074,7 @@ export class AgentLoop {
           });
           this.deps.emitter.emit('tool_result', {
             name: tu.name,
-            summary: 'blocked by pre_tool hook',
+            summary: 'blocked by PreToolUse hook',
             content: blockReason,
             isError: true,
           });
@@ -913,6 +1091,9 @@ export class AgentLoop {
         const result = await this.deps.registry.execute(tu.name, tu.input, toolExecCtx);
         const dt = Date.now() - t0;
         this.deps.renderer.spinner.stop();
+        if (tu.name === 'use_skill' && !result.isError && typeof tu.input['name'] === 'string') {
+          this.invokedSkills.add(tu.input['name'] as string);
+        }
         this.deps.emitter.emit('tool_result', {
           name: tu.name,
           summary: result.summary,
@@ -932,6 +1113,7 @@ export class AgentLoop {
             for (const p of pathsTouched(tu.input)) {
               filesChanged.add(p);
               this.sessionFilesChanged.add(p);
+              this.recentlyChanged.set(p, Date.now());
             }
           } else if (tu.name === 'run_shell') {
             // Shell commands can change files too (sed -i, codegen, mv, npm
@@ -978,6 +1160,21 @@ export class AgentLoop {
             '';
           content = `<external_untrusted_content tool="${tu.name}" source=${JSON.stringify(url)}>\n${content}\n</external_untrusted_content>`;
         }
+        // Path-scoped project rules ride in with the first result that
+        // touches a file they cover — precise, and outside the cached prefix.
+        if (!result.isError) {
+          const touched = FILE_MUTATING_TOOLS.has(tu.name) ? pathsTouched(tu.input) : tu.name === 'read_file' && typeof tu.input['path'] === 'string' ? [String(tu.input['path'])] : [];
+          const notes: string[] = [];
+          for (const p of touched) {
+            const rel = p.replace(/\\/g, '/').replace(/^\.\//, '');
+            for (const rule of rulesForPath(getRules(ctx.projectRoot), rel)) {
+              if (this.injectedRules.has(rule.name)) continue;
+              this.injectedRules.add(rule.name);
+              notes.push(renderRule(rule));
+            }
+          }
+          if (notes.length > 0) content = `${content}\n\n${notes.join('\n\n')}`;
+        }
         toolResults.push({
           type: 'tool_result',
           toolUseId: tu.id,
@@ -991,28 +1188,22 @@ export class AgentLoop {
           toolImages.push(img as ImageBlock);
         }
 
-        // PostToolUse hooks — advisory only. Lint after edits, audit log,
-        // formatter, etc. Non-zero exit codes surface as warnings but never
-        // change the tool's verdict.
-        const postHooks = [
-          ...(this.deps.hooks?.post_tool ?? []),
-          ...pluginHooksForEvent(getPlugins(ctx.projectRoot), 'post_tool'),
-        ];
-        const postOutcomes = await runHooksForEvent(postHooks, {
-          event: 'post_tool',
-          toolName: tu.name,
-          toolArgs: tu.input,
-          toolResultText: result.content,
-          toolResultIsError: result.isError,
-          projectRoot: ctx.projectRoot,
-          sessionId: ctx.sessionId,
-        });
-        for (const o of postOutcomes) {
-          if (o.timedOut) this.deps.renderer.warn(`  hook[post] ${o.command} → timed out`);
-          else if (o.exitCode !== 0) this.deps.renderer.warn(`  hook[post] ${o.command} → exit ${o.exitCode ?? '?'}`);
-          if (o.stdout.trim().length > 0) this.deps.renderer.dim(`  hook[post]: ${o.stdout.trim()}`);
-          if (o.stderr.trim().length > 0 && o.exitCode !== 0) {
-            this.deps.renderer.dim(`  hook[post]: ${o.stderr.trim()}`);
+        // PostToolUse / PostToolUseFailure hooks — advisory (lint after
+        // edits, audit log, formatter); `additionalContext` from a hook is
+        // appended to the tool result so the model sees it.
+        const postEvent = result.isError ? 'PostToolUseFailure' : 'PostToolUse';
+        const postOutcomes =
+          (await this.deps.hooks?.fire(postEvent, {
+            tool_name: tu.name,
+            tool_input: tu.input,
+            tool_response: result.content.slice(0, 8_000),
+            tool_error: result.isError ? result.content.slice(0, 8_000) : undefined,
+          })) ?? [];
+        const extra = additionalContext([...preOutcomes, ...postOutcomes]);
+        if (extra.length > 0) {
+          const last = toolResults[toolResults.length - 1];
+          if (last && last.type === 'tool_result' && last.toolUseId === tu.id && typeof last.content === 'string') {
+            last.content = `${last.content}\n\n[hook context]\n${extra.join('\n')}`;
           }
         }
       }
@@ -1063,6 +1254,105 @@ export class AgentLoop {
     this.deps.renderer.warn(`(stopped after ${maxIterations} iterations)`);
     this.deps.store.touch(null);
     return { mutated };
+  }
+
+  private shouldReview(ctx: SessionContext): boolean {
+    if (!this.deps.review || benchMode() || process.env.AUTOCODE_NO_REVIEW === '1') return false;
+    if (ctx.mode !== 'default' && ctx.mode !== 'autocode') return false;
+    return Boolean(this.deps.subagentFactory && this.deps.checkpoints);
+  }
+
+  // Run the Review subagent over the turn's diff. Rendered as a `Review(N
+  // files)` row like a tool call. Returns the fix request for the main agent
+  // when the review found high-severity issues, null otherwise.
+  private async reviewTurn(
+    ctx: SessionContext,
+    userText: string,
+    filesChanged: Set<string>,
+    totals: { in: number; out: number; cacheRead: number; cacheWrite: number },
+  ): Promise<string | null> {
+    const factory = this.deps.subagentFactory;
+    const changes = this.deps.checkpoints?.changesForCurrentTurn() ?? [];
+    if (!factory || changes.length === 0) return null;
+    const diff = buildTurnDiff(ctx.projectRoot, changes);
+    if (diff.files.length === 0) return null;
+    const files = diff.files.length > 0 ? diff.files : [...filesChanged];
+
+    this.deps.emitter.emit('tool_call', { name: 'review', args: { files } });
+    this.deps.renderer.spinner.start('reviewing changes');
+    const t0 = Date.now();
+    let result: ReturnType<typeof parseReviewResult> = null;
+    let raw = '';
+    let error: string | undefined;
+    let iterations = 0;
+    let toolUses = 0;
+    let usage: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number } | undefined;
+    try {
+      const run = await factory({
+        type: 'Review',
+        prompt: buildReviewRequest({ request: userText, diff: diff.text, files, truncated: diff.truncated }),
+        description: 'Reviewing changes',
+        parentDepth: 0,
+        parent: ctx,
+      });
+      raw = run.text;
+      usage = run.usage;
+      iterations = run.iterations;
+      toolUses = run.toolCalls ?? run.iterations;
+      error = run.error;
+      this.cumIn += run.usage.inputTokens;
+      this.cumOut += run.usage.outputTokens;
+      this.cumCacheRead += run.usage.cacheReadTokens ?? 0;
+      this.cumCacheWrite += run.usage.cacheWriteTokens ?? 0;
+      totals.in += run.usage.inputTokens;
+      totals.out += run.usage.outputTokens;
+      totals.cacheRead += run.usage.cacheReadTokens ?? 0;
+      totals.cacheWrite += run.usage.cacheWriteTokens ?? 0;
+      result = parseReviewResult(run.text);
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      this.deps.renderer.spinner.stop();
+    }
+    const dt = Date.now() - t0;
+    const blocking = result ? blockingFindings(result) : [];
+    const summary = !result
+      ? 'review unavailable'
+      : result.verdict === 'approve'
+        ? 'approved'
+        : `${blocking.length} high, ${result.findings.length} total`;
+    const content = result ? renderReviewResult(result) : `(review unavailable: ${error ?? 'no parsable result'})\n${raw.slice(0, 2_000)}`;
+    this.deps.emitter.emit('tool_result', {
+      name: 'review',
+      summary,
+      content,
+      isError: !result,
+      durationMs: dt,
+      metadata: {
+        verdict: result?.verdict,
+        findings: result?.findings ?? [],
+        scopeCreep: result?.scopeCreep,
+        files,
+        iterations,
+        toolUses,
+        usage,
+        error,
+      },
+    });
+    this.deps.store.appendToolLog({
+      tool: '[review]',
+      arguments: { files },
+      status: result ? 'success' : 'error',
+      durationMs: dt,
+      summary,
+      error: result ? undefined : (error ?? raw.slice(0, 500)),
+    });
+    this.deps.renderer.dim(`  → review  ${summary}  (${dt}ms)`);
+    if (result && blocking.length > 0) {
+      this.deps.renderer.warn(`  ✗ review found ${blocking.length} high-severity issue${blocking.length === 1 ? '' : 's'} — asking the agent to fix`);
+      return renderFixRequest(result);
+    }
+    return null;
   }
 
   // One line per turn. The Ink UI renders it as Claude Code's

@@ -21,6 +21,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   composer draft survives), instead of leaving stale rows behind.
 
 ### Added
+- Verification pipeline (Phase 4): typecheck and lint stages detected from the
+  project (tsc, eslint, ruff, mypy, go vet, cargo check) run before the test
+  command, scoped to the changed files where the tool allows; a failing stage
+  costs one fix round like a failing test run (`AUTOCODE_NO_CHECK_STAGES=1`
+  disables). Verification failures that touch only files unrelated to the
+  turn's changes (by file, test twin, or the import graph) are reported as
+  pre-existing instead of looping. A Review subagent reads the turn's diff
+  in a fresh context before the turn ends and reports correctness bugs,
+  regressions and scope creep (`⏺ Review(N files)` row); high-severity
+  findings buy the agent exactly one fix round (`review: "off"` in config or
+  `AUTOCODE_NO_REVIEW=1`; never in bench mode).
+- Plan mode as a workflow: a planning answer that reads like a plan is saved
+  under `.autocode/plans/` and offered with Claude Code's dialog (auto-accept
+  edits / approve edits / keep planning); approval switches the mode and
+  starts the implementation.
+- Git workflow: `/commit [hint]` stages everything, writes a conventional
+  commit message from the staged diff on the provider's cheap tier, confirms
+  and commits; `--worktree [name]` runs the session in its own git worktree
+  and branch under `.autocode/worktrees/`; `/init` adds a documentation map
+  (every markdown file under docs/ with its heading).
+- Agent Skills standard: `<name>/SKILL.md` directories with resources
+  (scripts, templates) alongside the flat `<name>.md` form, discovered in
+  `.autocode/skills`, `.agents/skills` and `.claude/skills` (project and
+  home) and in plugins; `use_skill` lists a skill's files and returns one with
+  `resource`; `/<skill-name> …` invokes a skill from the composer; the listing
+  in the system prompt is budgeted (1% of the context window, 1,536 chars per
+  description) and names what it left out. Plugins gain `mcp.json` servers
+  and hooks in either shape (Agent Plugins 1.0).
+- Hooks on Claude Code's contract: events SessionStart, SessionEnd,
+  UserPromptSubmit, PreToolUse, PermissionRequest, PostToolUse,
+  PostToolUseFailure, SubagentStart, SubagentStop, Stop, PreCompact,
+  PostCompact; config in Claude Code's shape (`{ "PreToolUse": [{ "matcher":
+  "Bash(git *)", "hooks": [...] }] }`) with the legacy flat shape still
+  accepted; project hooks from `.autocode/hooks.json` or the `hooks` key of
+  `.claude/settings.json`; JSON on stdin, `hookSpecificOutput` on stdout
+  (permissionDecision, updatedInput, additionalContext), exit 2 blocks with
+  stderr as the reason, Stop hooks re-engage the agent at most 8 times.
+  `/hooks` lists what is active.
+- MCP: Streamable HTTP servers (`url` + `headers` with `${ENV}` expansion)
+  next to stdio ones, servers from the project's `.mcp.json` and plugin
+  `mcp.json` (started only after a one-time approval per project), resources
+  listed in `/mcp`, deterministic tool ordering, a 100 KB result cap and a
+  2-minute call timeout. Past 30 tools, MCP tools load on demand through a
+  `tool_search` tool instead of riding in every request.
+- Auto memory: facts saved with `save_memory` (user, feedback, project,
+  reference) live per project under the data dir and load into the system
+  prompt within 200 lines / 25 KB; `/memory` lists them. Path-scoped rules
+  (`.autocode/rules/*.md`, `.claude/rules/*.md` with `paths:`) are injected
+  with the first tool result that touches a matching file; rules without
+  paths join the project instructions. `@path` lines in instruction files
+  import other files.
+- After compaction the skills the agent loaded and the head of its five most
+  recently changed files are restored into the conversation.
 - A tree-sitter code index (`src/index/`): every source file with a bundled
   grammar (TypeScript, TSX, JavaScript, Python, Go, Rust, Java, C#, C, C++,
   Ruby, PHP) becomes a graph of directories, files, text files and definitions

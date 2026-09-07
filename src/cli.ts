@@ -20,6 +20,7 @@ import { AuthResolver } from './auth/AuthResolver.js';
 import { ConfigStore } from './auth/ConfigStore.js';
 import { dataDir, projectRootDefault, sessionsDir } from './util/paths.js';
 import { indexEnabled, startIndex } from './index/IndexManager.js';
+import { createWorktree } from './agent/GitWorkflow.js';
 import { loadDotEnv } from './util/dotenv.js';
 import { loadCatalogForStartup, refreshCatalogInBackground } from './llm/CatalogClient.js';
 import { setProxyCatalog, findModel, getKnownModels, parseEffortSetting, type EffortSetting } from './llm/models.js';
@@ -41,6 +42,7 @@ program
 
 program
   .option('--project-root <path>', 'project root (defaults to cwd)')
+  .option('--worktree [name]', 'work in a fresh git worktree under .autocode/worktrees/<name> on branch autocode/<name> (default name: the session id)')
   // No commander-level default for provider/model so we can distinguish
   // "user explicitly passed a flag" from "fell through to default" inside
   // the action body. Precedence below is: resume > flag > env > config > xai.
@@ -54,12 +56,14 @@ program
   .option('-c, --continue', 'resume the most recent prior session', false)
   .option('--update', 'install the latest autocode from npm and exit', false)
   .option('--automax', 'emit machine-readable activity events for the Automax host', false)
+  .option('--server', 'app-server mode: JSON-RPC over stdio for a host process (see src/server/protocol.ts)', false)
   .option('--temperature <n>', 'sampling temperature for model calls (e.g. 0 for deterministic); default: provider default')
   .option('--max-cost <usd>', 'stop a turn once its accumulated model cost exceeds this many USD')
   .option('--max-iterations <n>', 'max tool-call iterations per turn before stopping (default 200)')
   .action(
     async (opts: {
       projectRoot?: string;
+      worktree?: string | boolean;
       provider?: string;
       model?: string;
       planMode?: boolean;
@@ -158,9 +162,21 @@ program
     }
 
     const sessionId = resumedMeta ? resumedMeta.sessionId : newSessionId();
-    const root = opts.projectRoot
+    let root = opts.projectRoot
       ? opts.projectRoot
       : (resumedMeta?.projectRoot ?? projectRootDefault());
+    // --worktree: isolate this session's edits in their own git worktree and
+    // branch (Phase 4.3); the main tree stays untouched until the user merges.
+    if (opts.worktree !== undefined && opts.worktree !== false && !resumedMeta) {
+      const name = typeof opts.worktree === 'string' ? opts.worktree : sessionId;
+      const wt = createWorktree(root, name);
+      if ('error' in wt) {
+        console.error(`--worktree: ${wt.error}`);
+        process.exit(2);
+      }
+      console.log(`working in ${wt.path} on branch ${wt.branch}${wt.created ? '' : ' (existing)'}`);
+      root = wt.path;
+    }
     // Provider + model precedence (highest wins):
     //   1. resumedMeta — explicit resume of a prior session
     //   2. CLI flag — user passed --provider / --model explicitly
@@ -192,6 +208,12 @@ program
     // --mode <name> takes precedence over --plan-mode if both are given.
     // Falls back to: headless → autocode, --plan-mode → planning, else default.
     const headless = typeof opts.print === 'string';
+    // App-server mode: the host owns sessions through the protocol; nothing
+    // below (wizard, terminal UI, resume flags) applies.
+    if (opts.server) {
+      const { runServer } = await import('./server/AppServer.js');
+      process.exit(await runServer());
+    }
     const explicitMode = typeof opts.mode === 'string' ? opts.mode.toLowerCase() : null;
     const validMode = (m: string | null): m is 'planning' | 'default' | 'autocode' | 'admin' | 'sights' =>
       m === 'planning' || m === 'default' || m === 'autocode' || m === 'admin' || m === 'sights';
@@ -425,10 +447,14 @@ program
       }
     }
 
+    // SessionStart / SessionEnd hooks bracket the whole session, headless or
+    // interactive (the legacy `stop` hooks map onto SessionEnd).
+    if (agent instanceof LiveAgent) await agent.hooks.fire('SessionStart', { trigger: headless ? 'auto' : 'manual' });
     const code = headless
       ? await runHeadless(agent, renderer, ctx, opts.print as string)
       : await new TerminalMode(ctx, renderer, agent, prompter, emitter).run();
     if (agent instanceof LiveAgent) {
+      await agent.hooks.fire('SessionEnd', { reason: code === 0 ? 'exit' : `exit ${code}` });
       try {
         await agent.shutdown();
       } catch {

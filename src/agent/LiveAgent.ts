@@ -7,11 +7,16 @@ import type { CheckpointStore } from '../session/CheckpointStore.js';
 
 import { AgentLoop } from './AgentLoop.js';
 import { ToolRegistry } from './ToolRegistry.js';
-import { LlmRouter } from '../llm/Router.js';
+import { LlmRouter, type ProviderName } from '../llm/Router.js';
+import { summarizerModelFor } from '../llm/models.js';
+import type { ContentBlock } from '../llm/types.js';
 import { SubagentRunner } from './SubagentRunner.js';
 import { McpClientManager } from '../mcp/McpClientManager.js';
 import { McpTool } from '../mcp/McpTool.js';
 import { ConfigStore } from '../auth/ConfigStore.js';
+import { HookHub } from './HookHub.js';
+import { collectMcpServers, describeServer } from '../mcp/McpConfig.js';
+import { ProjectState } from '../session/ProjectState.js';
 import type { EventEmitter } from '../repl/EventEmitter.js';
 import { NullEventEmitter } from '../repl/EventEmitter.js';
 
@@ -28,15 +33,20 @@ export class LiveAgent implements AgentHandler {
     opts: { checkpoints?: CheckpointStore; prompter: Prompter; emitter?: EventEmitter; mode?: import('../session/SessionContext.js').AgentMode },
   ) {
     const router = new LlmRouter();
-    const runner = new SubagentRunner(router, store);
+    this.router = router;
+    // Verification settings and hooks: config.json plus the project's own
+    // hooks.json and plugin hooks (see agent/HookHub.ts).
+    const config = new ConfigStore().load();
+    this.hooks = new HookHub(store.projectRoot, store.sessionId, { config: config.hooks ?? null, renderer: this.renderer });
+    const runner = new SubagentRunner(router, store, this.hooks);
     // Sights mode (Automax V6's locked-down website builder) gets a registry
     // restricted to in-root file ops. The registry is fixed at construction —
     // sights is CLI-only and headless, so the mode never changes in-session.
     this.registry = opts.mode === 'sights' ? ToolRegistry.forSights() : new ToolRegistry();
     this.mcp = new McpClientManager();
     this.checkpoints = opts.checkpoints;
-    // Verification settings: on unless explicitly disabled in config.json.
-    const config = new ConfigStore().load();
+    this.prompter = opts.prompter;
+    this.projectRoot = store.projectRoot;
     // All interactive confirmation goes through the Prompter — the single
     // owner of stdin (auto-deny in headless, the pinned bar in the TUI).
     this.loop = new AgentLoop({
@@ -51,30 +61,89 @@ export class LiveAgent implements AgentHandler {
       checkpoints: this.checkpoints,
       autoVerify: config.autoVerify !== false,
       verifyCommand: config.verifyCommand,
+      review: process.env.AUTOCODE_REVIEW === 'auto' ? true : process.env.AUTOCODE_REVIEW === 'off' ? false : config.review !== 'off',
       emitter: opts.emitter ?? new NullEventEmitter(),
-      hooks: config.hooks
-        ? { pre_tool: config.hooks.pre_tool, post_tool: config.hooks.post_tool }
-        : undefined,
+      hooks: this.hooks,
     });
   }
 
+  /** Every hook this session has; the CLI fires SessionStart / SessionEnd. */
+  readonly hooks: HookHub;
+  private readonly prompter: Prompter;
+  private readonly projectRoot: string;
+  private readonly router: LlmRouter;
+
   // Connect to configured MCP servers and register their tools.
+  // Connect the session's MCP servers: config.json ones as they are; plugin
+  // and project (.mcp.json) ones only after the user approved them once for
+  // this project — repo content must not spawn processes unasked. MCP tools
+  // register as optional: past the deferral threshold they load on demand
+  // through `tool_search`.
   async initializeMcp(mcpServers: Record<string, import('../auth/ConfigStore.js').McpServerConfig> | undefined): Promise<void> {
-    if (!mcpServers || Object.keys(mcpServers).length === 0) return;
-    await this.mcp.connectAll(mcpServers);
+    const entries = collectMcpServers(this.projectRoot, mcpServers);
+    if (entries.length === 0) return;
+    const state = new ProjectState(this.projectRoot);
+    const approved: Record<string, import('../auth/ConfigStore.js').McpServerConfig> = {};
+    for (const entry of entries) {
+      if (entry.source === 'config' || state.isMcpServerApproved(entry.name)) {
+        approved[entry.name] = entry.config;
+        continue;
+      }
+      let ok = false;
+      try {
+        ok = await this.prompter.confirm(`Start MCP server ${describeServer(entry)}? (asked once per project)`);
+      } catch {
+        ok = false;
+      }
+      if (ok) {
+        state.approveMcpServer(entry.name);
+        approved[entry.name] = entry.config;
+      } else {
+        this.renderer.dim(`mcp: ${entry.name} (${entry.source}) not started — approve it interactively to enable`);
+      }
+    }
+    if (Object.keys(approved).length === 0) return;
+    await this.mcp.connectAll(approved);
     for (const discovered of this.mcp.discoveredTools()) {
-      this.registry.register(new McpTool(this.mcp, discovered));
+      this.registry.registerOptional(new McpTool(this.mcp, discovered));
     }
     const status = this.mcp.status();
     const connected = status.filter((s) => s.connected);
     const failed = status.filter((s) => !s.connected);
     if (connected.length > 0) {
       const tot = connected.reduce((n, s) => n + s.toolCount, 0);
-      this.renderer.dim(`mcp: ${connected.length} server${connected.length === 1 ? '' : 's'} connected (${tot} tools)`);
+      const res = connected.reduce((n, s) => n + s.resourceCount, 0);
+      const deferred = this.registry.deferredNames().length;
+      this.renderer.dim(
+        `mcp: ${connected.length} server${connected.length === 1 ? '' : 's'} connected (${tot} tools${res > 0 ? `, ${res} resources` : ''}${deferred > 0 ? `; ${deferred} load on demand via tool_search` : ''})`,
+      );
     }
     for (const f of failed) {
       this.renderer.warn(`mcp: ${f.name} failed — ${f.error}`);
     }
+  }
+
+  mcpResources(): ReturnType<McpClientManager['discoveredResources']> {
+    return this.mcp.discoveredResources();
+  }
+
+  lastAssistantText(): string {
+    return this.loop.lastAssistantText();
+  }
+
+  /** A one-shot text completion on the provider's cheap tier (commit messages, summaries). */
+  async quickText(ctx: SessionContext, system: string, user: string): Promise<string> {
+    const resp = await this.router.complete(ctx.model.provider as ProviderName, {
+      model: summarizerModelFor(ctx.model.provider, ctx.model.model),
+      system,
+      messages: [{ role: 'user', content: user }],
+      tools: [],
+    });
+    return resp.content
+      .filter((b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text')
+      .map((b) => b.text)
+      .join('\n')
+      .trim();
   }
 
   async shutdown(): Promise<void> {

@@ -7,9 +7,12 @@ import { ToolRegistry } from './ToolRegistry.js';
 import { buildSubagentSystemPrompt } from './SubagentPromptBuilder.js';
 import { defaultMaxOutputTokens } from '../util/contextWindow.js';
 import { thinkingFor } from '../llm/models.js';
+import { blockingReason } from './HookRunner.js';
+import type { HookHub } from './HookHub.js';
 
 const MAX_EXPLORE_ITERATIONS = 16;
 const MAX_LOCALIZE_ITERATIONS = 20;
+const MAX_REVIEW_ITERATIONS = 12;
 const MAX_COMPUTER_USE_ITERATIONS = 10;
 const LOOP_DETECT_WINDOW = 10;
 const LOOP_DETECT_THRESHOLD = 3;
@@ -44,14 +47,30 @@ export class SubagentRunner {
   constructor(
     private readonly router: LlmRouter,
     private readonly store: TranscriptStore,
+    private readonly hooks?: HookHub,
   ) {}
 
   async run(input: SubagentRunInput): Promise<SubagentRunResult> {
+    await this.hooks?.fire('SubagentStart', { subagent_type: input.type, prompt: input.prompt.slice(0, 4_000) });
+    const result = await this.runInner(input);
+    const stopOutcomes = (await this.hooks?.fire('SubagentStop', { subagent_type: input.type, subagent_result: result.text.slice(0, 8_000) })) ?? [];
+    const reason = blockingReason(stopOutcomes);
+    if (reason) result.text = `${result.text}\n\n[SubagentStop hook] ${reason}`;
+    return result;
+  }
+
+  private async runInner(input: SubagentRunInput): Promise<SubagentRunResult> {
     const registry = ToolRegistry.forSubagent(input.type);
     const systemPrompt = buildSubagentSystemPrompt(input.type, input.parent);
     const messages: Message[] = [{ role: 'user', content: input.prompt }];
     const maxIterations =
-      input.type === 'ComputerUse' ? MAX_COMPUTER_USE_ITERATIONS : input.type === 'Localize' ? MAX_LOCALIZE_ITERATIONS : MAX_EXPLORE_ITERATIONS;
+      input.type === 'ComputerUse'
+        ? MAX_COMPUTER_USE_ITERATIONS
+        : input.type === 'Localize'
+          ? MAX_LOCALIZE_ITERATIONS
+          : input.type === 'Review'
+            ? MAX_REVIEW_ITERATIONS
+            : MAX_EXPLORE_ITERATIONS;
 
     const totalUsage = {
       inputTokens: 0,

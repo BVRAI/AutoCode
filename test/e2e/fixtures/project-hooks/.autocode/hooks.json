@@ -1,0 +1,36 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"process.stdout.write(JSON.stringify({hookSpecificOutput:{additionalContext:'House rule: never call npm directly in this repo; run node scripts/test.mjs.'}}))\""
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash(npm *)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"process.stderr.write('npm is blocked here by policy; run node scripts/test.mjs instead'); process.exit(2)\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"process.stdout.write('audit: shell command logged')\""
+          }
+        ]
+      }
+    ]
+  }
+}

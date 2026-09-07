@@ -1,0 +1,34 @@
+  ⎿  Read 9 lines (ctrl+o to expand)
+
+⏺ PLAN: --VERBOSE FLAG WITH TOOL TIMINGS
+  ──────────────────────────────────────
+
+  1. Parse the flag in src/cli.ts: read args.verbose === true next to mode.
+  2. Thread it into run() as a second parameter (run(mode, verbose)), keeping the default behaviour 
+     unchanged when the flag is absent.
+  3. Print timings inside run() when verbose is set: wrap each tool invocation with
+     performance.now() and log name: Nms to stderr so stdout stays clean.
+  4. Document it in README.md under Usage.
+  5. Verify with npm test and a manual node src/cli.ts --verbose.
+
+  Risks: none of note — the flag is additive and defaults off.
+
+✻ Cooked for #DUR · done #CLOCK
+    plan saved to .autocode/plans/#STAMP-plan-how-verbose-flag-prints.md
+
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Question  enter confirm · esc cancel                                                             │
+│                                                                                                  │
+│ Ready to implement this plan?                                                                    │
+│                                                                                                  │
+│ ▸ 1. Yes, and auto-accept edits                                                                  │
+│   2. Yes, manually approve edits                                                                 │
+│   3. No, keep planning                                                                           │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ >                                                                                                │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+⏸ plan mode on  ·  ? for shortcuts  ·  shift+tab to cycle
+xai/grok-code-fast-1  ·  1% context                                                            $#COST
+

@@ -4,7 +4,7 @@ import type { CheckpointStore } from '../session/CheckpointStore.js';
 // Function passed in via ToolExecutionContext so the `task` tool can delegate
 // to a subagent without importing AgentLoop/SubagentRunner directly. Kept as
 // a structural type to avoid circular module deps.
-export type SubagentType = 'Explore' | 'ComputerUse' | 'Localize';
+export type SubagentType = 'Explore' | 'ComputerUse' | 'Localize' | 'Review';
 export type SubagentFactory = (input: {
   type: SubagentType;
   prompt: string;

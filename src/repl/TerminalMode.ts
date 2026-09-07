@@ -26,8 +26,11 @@ import { getGitWorkingState } from '../agent/SessionState.js';
 import { contextWindowFor } from '../util/contextWindow.js';
 import { currentTodos } from '../tools/todoWrite.js';
 import { ConfigStore } from '../auth/ConfigStore.js';
-import { runHooksForEvent } from '../agent/HookRunner.js';
-import { getPlugins, pluginHooksForEvent } from '../agent/Plugins.js';
+import { getPlugins } from '../agent/Plugins.js';
+import { getSkills, renderSkillInvocation, skillForCommand } from '../agent/Skills.js';
+import { MemoryStore } from '../agent/Memory.js';
+import { cleanCommitMessage, commit, commitMessagePrompt, currentBranch, isGitRepo, stageAll, stagedSummary } from '../agent/GitWorkflow.js';
+import { PLAN_CHOICES, implementPlanMessage, looksLikePlan, savePlan } from '../agent/PlanFile.js';
 import { type EventEmitter, NullEventEmitter } from './EventEmitter.js';
 import { COMMAND_DEFS } from './commands.js';
 import {
@@ -58,8 +61,14 @@ export interface AgentHandler {
   reflectOnSession?(ctx: SessionContext): Promise<import('../agent/SessionReflection.js').Proposal[]>;
   trashList?(): TrashItem[];
   restore?(id: string): TrashItem | null;
-  mcpStatus?(): Array<{ name: string; connected: boolean; toolCount: number; error?: string }>;
+  mcpStatus?(): Array<{ name: string; connected: boolean; toolCount: number; resourceCount?: number; error?: string }>;
   mcpTools?(): string[];
+  mcpResources?(): Array<{ serverName: string; uri: string; name: string; description?: string }>;
+  hooks?: { events(): string[]; count(): number };
+  // The final text of the last completed turn (plan approval).
+  lastAssistantText?(): string;
+  // One-shot text on the provider's cheap tier (commit messages).
+  quickText?(ctx: SessionContext, system: string, user: string): Promise<string>;
   // Optional — Ink Bridge mode wraps the event emitter at runtime.
   setEmitter?(emitter: EventEmitter): void;
   refreshConfig?(): void;
@@ -384,8 +393,10 @@ export class TerminalMode {
 
   private async runTurn(text: string, extras?: SubmitExtras): Promise<void> {
     this.busy = true;
+    const parsed = parse(text);
     try {
-      await this.dispatch(parse(text), extras);
+      await this.dispatch(parsed, extras);
+      if (parsed.kind === 'agent' && this.ctx.mode === 'planning') await this.offerPlanApproval(parsed.text);
     } catch (e) {
       this.renderer.error(e instanceof Error ? e.message : String(e));
     }
@@ -451,7 +462,19 @@ export class TerminalMode {
       case 'empty':
         return;
       case 'agent': {
-        const { input, missing, notes } = buildAgentInput(parsed.text, this.ctx.projectRoot, {
+        // `/<skill-name> …` invokes a skill: its body rides inside the
+        // message, Claude Code style, and the model applies it to the rest.
+        let text = parsed.text;
+        if (text.startsWith('/')) {
+          const [head, ...rest] = text.slice(1).split(/\s+/);
+          const skill = skillForCommand(getSkills(this.ctx.projectRoot), head ?? '');
+          if (skill) {
+            text = renderSkillInvocation(skill, rest.join(' '));
+            this.bridgeStore?.setUserDisplay(parsed.text);
+            this.renderer.dim(`  (skill ${skill.name} loaded)`);
+          }
+        }
+        const { input, missing, notes } = buildAgentInput(text, this.ctx.projectRoot, {
           provider: this.ctx.model.provider,
         });
         for (const ref of missing) this.renderer.warn(`(could not read @${ref})`);
@@ -577,6 +600,12 @@ export class TerminalMode {
         return this.handleReflect();
       case 'plugins':
         return this.handlePlugins();
+      case 'hooks':
+        return this.handleHooks();
+      case 'memory':
+        return this.handleMemory(args);
+      case 'commit':
+        return this.handleCommit(args.join(' '));
       case 'spinner':
         return this.handleSpinner(args);
       case 'computer-use':
@@ -672,6 +701,119 @@ export class TerminalMode {
     this.renderer.dim(`computer use -> ${nextEnabled ? 'on' : 'off'}`);
   }
 
+  // Plan mode as a workflow (Phase 4.2): a planning answer that reads like
+  // a plan is saved under .autocode/plans and offered for approval with
+  // Claude Code's dialog; approval switches the mode and starts the work.
+  private async offerPlanApproval(request: string): Promise<void> {
+    const plan = this.agent.lastAssistantText?.() ?? '';
+    if (!looksLikePlan(plan)) return;
+    let planPath: string;
+    try {
+      planPath = savePlan(this.ctx.projectRoot, request, plan);
+    } catch (e) {
+      this.renderer.warn(`could not save the plan: ${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
+    this.renderer.dim(`  plan saved to ${planPath}`);
+    let picked: number[];
+    try {
+      picked = await this.prompter.choose('Ready to implement this plan?', [...PLAN_CHOICES], false);
+    } catch {
+      return; // headless / no prompter: leave the plan on disk
+    }
+    const choice = picked[0];
+    if (choice === 0 || choice === 1) {
+      this.ctx.mode = choice === 0 ? 'autocode' : 'default';
+      this.bridgeStore?.setMode?.(this.ctx.mode);
+      this.renderer.status(`  ✓ plan approved — ${choice === 0 ? 'auto-accepting edits' : 'edits will be shown for approval'}`);
+      await this.dispatch({ kind: 'agent', text: implementPlanMessage(planPath) });
+    } else {
+      this.renderer.dim('  (still planning — refine the plan or switch modes with shift+tab)');
+    }
+  }
+
+  // /commit [hint]: stage everything, write a conventional message (the
+  // model's cheap tier, from the staged diff), confirm, commit.
+  private async handleCommit(hint: string): Promise<void> {
+    const root = this.ctx.projectRoot;
+    if (!isGitRepo(root)) {
+      this.renderer.warn('Not a git repository.');
+      return;
+    }
+    const staged = stageAll(root);
+    if (!staged.ok) {
+      this.renderer.error(`git add failed: ${staged.error}`);
+      return;
+    }
+    const summary = stagedSummary(root);
+    if (summary.files.length === 0) {
+      this.renderer.dim('(nothing to commit)');
+      return;
+    }
+    let message = hint.trim();
+    if (message.length === 0 || !this.agent.quickText) {
+      if (this.agent.quickText) {
+        this.renderer.spinner.start('writing commit message');
+        try {
+          const p = commitMessagePrompt(summary, hint.trim() || undefined);
+          message = cleanCommitMessage(await this.agent.quickText(this.ctx, p.system, p.user));
+        } catch (e) {
+          this.renderer.warn(`could not generate a message: ${e instanceof Error ? e.message : String(e)}`);
+        } finally {
+          this.renderer.spinner.stop();
+        }
+      }
+      if (message.length === 0) message = `chore: update ${summary.files.length} file${summary.files.length === 1 ? '' : 's'}`;
+    } else if (this.agent.quickText && hint.trim().split(/\s+/).length <= 6 && !/^[a-z]+(\(.+\))?!?:/.test(hint.trim())) {
+      // A few words are a hint for the message writer, not the message.
+      this.renderer.spinner.start('writing commit message');
+      try {
+        const p = commitMessagePrompt(summary, hint.trim());
+        message = cleanCommitMessage(await this.agent.quickText(this.ctx, p.system, p.user)) || message;
+      } catch {
+        /* keep the hint as the message */
+      } finally {
+        this.renderer.spinner.stop();
+      }
+    }
+    this.renderer.info(`Staged ${summary.files.length} file${summary.files.length === 1 ? '' : 's'}:`);
+    this.renderer.dim(summary.stat);
+    this.renderer.info(message);
+    const ok = await this.prompter.confirm('Commit with this message?');
+    if (!ok) {
+      this.renderer.dim('(not committed — changes stay staged)');
+      return;
+    }
+    const r = commit(root, message, 'Co-Authored-By: autocode <noreply@bvrai.com>');
+    if (r.ok) this.renderer.status(`  ✓ committed ${r.hash}${currentBranch(root) ? ` on ${currentBranch(root)}` : ''}`);
+    else this.renderer.error(`git commit failed: ${r.error}`);
+  }
+
+  private handleHooks(): void {
+    const hub = this.agent.hooks;
+    if (!hub || hub.count() === 0) {
+      this.renderer.dim('(no hooks — add `hooks` to ~/.autocode/config.json, a .autocode/hooks.json in the project, or a plugin hooks.json)');
+      return;
+    }
+    for (const event of hub.events()) this.renderer.info(`${event}`);
+    this.renderer.dim(`  ${hub.count()} hook command(s) across ${hub.events().length} event(s); see agent/HookRunner.ts for the contract`);
+  }
+
+  private handleMemory(args: string[]): void {
+    const store = new MemoryStore(this.ctx.projectRoot);
+    if (args[0] === 'forget' && args[1]) {
+      this.renderer.info(store.delete(args[1]) ? `Forgot "${args[1]}".` : `No memory named "${args[1]}".`);
+      return;
+    }
+    const entries = store.list();
+    if (entries.length === 0) {
+      this.renderer.dim(`(nothing remembered yet for this project — the agent saves facts with save_memory; files live in ${store.dir})`);
+      return;
+    }
+    for (const m of entries) this.renderer.info(`${m.kind.padEnd(9)} ${m.name} — ${m.description}`);
+    this.renderer.dim(`  ${entries.length} memor${entries.length === 1 ? 'y' : 'ies'} in ${store.dir}; /memory forget <name> removes one`);
+  }
+
   private handlePlugins(): void {
     const plugins = getPlugins(this.ctx.projectRoot);
     if (plugins.length === 0) {
@@ -701,35 +843,9 @@ export class TerminalMode {
   // is for "get me out fast."
   private async handleExit(): Promise<void> {
     await this.maybeReflectAtExit();
-    await this.fireStopHooks();
+    // SessionEnd hooks (the legacy `stop` hooks) fire from the CLI once the
+    // session returns, for headless and interactive runs alike.
     this.exit(0);
-  }
-
-  // Run user-defined `stop` hooks at /exit time. Advisory only — failures
-  // are logged but the process exits regardless.
-  private async fireStopHooks(): Promise<void> {
-    let cfg: { hooks?: { stop?: Array<{ match?: string; command: string; timeoutMs?: number }> } } = {};
-    try {
-      cfg = new ConfigStore().load();
-    } catch {
-      /* default */
-    }
-    const stopHooks = [
-      ...(cfg.hooks?.stop ?? []),
-      ...pluginHooksForEvent(getPlugins(this.ctx.projectRoot), 'stop'),
-    ];
-    if (stopHooks.length === 0) return;
-    const outcomes = await runHooksForEvent(stopHooks, {
-      event: 'stop',
-      projectRoot: this.ctx.projectRoot,
-      sessionId: this.ctx.sessionId,
-    });
-    for (const o of outcomes) {
-      if (o.timedOut) this.renderer.warn(`hook[stop] ${o.command} → timed out`);
-      else if (o.exitCode !== 0) this.renderer.warn(`hook[stop] ${o.command} → exit ${o.exitCode ?? '?'}`);
-      if (o.stdout.trim().length > 0) this.renderer.dim(`hook[stop]: ${o.stdout.trim()}`);
-      if (o.stderr.trim().length > 0 && o.exitCode !== 0) this.renderer.dim(`hook[stop]: ${o.stderr.trim()}`);
-    }
   }
 
   private async maybeReflectAtExit(): Promise<void> {
@@ -848,13 +964,18 @@ export class TerminalMode {
       return;
     }
     for (const s of status) {
-      const tag = s.connected ? `${s.toolCount} tools` : `failed: ${s.error}`;
+      const tag = s.connected ? `${s.toolCount} tools${s.resourceCount ? `, ${s.resourceCount} resources` : ''}` : `failed: ${s.error}`;
       this.renderer.info(`${s.connected ? '✓' : '✗'} ${s.name} — ${tag}`);
     }
     const tools = this.agent.mcpTools?.() ?? [];
     if (tools.length > 0) {
       this.renderer.dim(`  tools: ${tools.join(', ')}`);
     }
+    const resources = this.agent.mcpResources?.() ?? [];
+    for (const r of resources.slice(0, 40)) {
+      this.renderer.dim(`  resource: ${r.serverName} ${r.uri}${r.description ? ` — ${r.description}` : ''}`);
+    }
+    if (resources.length > 40) this.renderer.dim(`  … ${resources.length - 40} more resources`);
   }
 
   private printHelp(): void {

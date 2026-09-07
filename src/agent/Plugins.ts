@@ -8,9 +8,10 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { parseFrontmatter } from '../util/frontmatter.js';
 import type { Skill } from './Skills.js';
-import type { HookSpec } from '../auth/ConfigStore.js';
+import type { HookSpec, McpServerConfig } from '../auth/ConfigStore.js';
+import { readSkillDir } from './skillFiles.js';
+import { normalizeHooks, type HookEventName, type HookGroup, type HooksConfig } from './HookRunner.js';
 
 export interface PluginHooks {
   pre_tool?: HookSpec[];
@@ -27,7 +28,12 @@ export interface Plugin {
   /** "project" or "user" — for precedence + display. */
   source: 'project' | 'user';
   skills: Skill[];
+  /** Legacy flat shape (pre_tool / post_tool / stop), kept for `/plugins`. */
   hooks: PluginHooks;
+  /** Every hook in the file, either shape, normalized per event (Phase 4.5). */
+  hookGroups: Map<HookEventName, HookGroup[]>;
+  /** MCP servers from the plugin's mcp.json (Agent Plugins 1.0). */
+  mcpServers: Record<string, McpServerConfig>;
 }
 
 const cache = new Map<string, Plugin[]>();
@@ -102,44 +108,53 @@ function readPluginManifest(dir: string, source: 'project' | 'user'): Plugin | n
     source,
     skills: readPluginSkills(dir),
     hooks: readPluginHooks(dir),
+    hookGroups: readPluginHookGroups(dir),
+    mcpServers: readPluginMcpServers(dir),
   };
 }
 
+// A plugin's `skills/`: flat `<name>.md` files or `<name>/SKILL.md`
+// directories (Agent Plugins 1.0). Plugin skills carry the 'user' source;
+// precedence is resolved at the Skills.ts merge layer.
 function readPluginSkills(dir: string): Skill[] {
-  const skillsDir = join(dir, 'skills');
-  if (!safeIsDir(skillsDir)) return [];
-  let names: string[];
+  return readSkillDir(join(dir, 'skills'), 'user');
+}
+
+// A plugin's `mcp.json` (`{ "mcpServers": { name: config } }` or a bare map):
+// servers the plugin brings along, started with the session's own.
+function readPluginMcpServers(dir: string): Record<string, McpServerConfig> {
+  const path = join(dir, 'mcp.json');
+  if (!existsSync(path)) return {};
   try {
-    names = readdirSync(skillsDir);
-  } catch {
-    return [];
-  }
-  const out: Skill[] = [];
-  for (const name of names) {
-    if (!name.endsWith('.md')) continue;
-    const path = join(skillsDir, name);
-    let raw: string;
-    try {
-      raw = readFileSync(path, 'utf8');
-    } catch {
-      continue;
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== 'object') return {};
+    const map = parsed['mcpServers'] && typeof parsed['mcpServers'] === 'object' ? (parsed['mcpServers'] as Record<string, unknown>) : parsed;
+    const out: Record<string, McpServerConfig> = {};
+    for (const [name, cfg] of Object.entries(map)) {
+      if (!cfg || typeof cfg !== 'object') continue;
+      const c = cfg as Record<string, unknown>;
+      if (typeof c['command'] !== 'string' && typeof c['url'] !== 'string') continue;
+      out[name] = c as unknown as McpServerConfig;
     }
-    const fm = parseFrontmatter(raw);
-    if (!fm.hasFrontmatter) continue;
-    const skillName = fm.meta.name;
-    const description = fm.meta.description;
-    if (!skillName || !description) continue;
-    out.push({
-      name: skillName,
-      description,
-      ...(fm.meta.match ? { match: fm.meta.match } : {}),
-      body: fm.body,
-      // Plugin skills inherit their plugin's source for precedence.
-      // (Resolved at the Skills.ts merge layer.)
-      source: 'user',
-    });
+    return out;
+  } catch {
+    return {};
   }
-  return out;
+}
+
+/** Every hook in hooks.json — the legacy flat shape, Claude Code's event
+ *  shape, or `{ "hooks": { … } }` — normalized per event. */
+function readPluginHookGroups(dir: string): Map<HookEventName, HookGroup[]> {
+  const path = join(dir, 'hooks.json');
+  if (!existsSync(path)) return new Map();
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== 'object') return new Map();
+    const inner = parsed['hooks'] && typeof parsed['hooks'] === 'object' && !Array.isArray(parsed['hooks']) ? (parsed['hooks'] as HooksConfig) : (parsed as HooksConfig);
+    return normalizeHooks(inner);
+  } catch {
+    return new Map();
+  }
 }
 
 function readPluginHooks(dir: string): PluginHooks {

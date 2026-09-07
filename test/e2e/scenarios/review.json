@@ -1,0 +1,17 @@
+{
+  "cols": 100,
+  "rows": 34,
+  "theme": "dark",
+  "mode": "autocode",
+  "fake": "./review.fake.json",
+  "project": "../fixtures/project",
+  "env": { "AUTOCODE_REVIEW": "auto" },
+  "steps": [
+    { "waitFor": "/help for commands", "timeoutMs": 30000 },
+    { "type": "fix parseArgs so a bare --flag counts as true" },
+    { "key": "enter" },
+    { "waitFor": "TURN_END", "timeoutMs": 60000 },
+    { "waitIdle": 800 },
+    { "snapshot": "after-turn" }
+  ]
+}

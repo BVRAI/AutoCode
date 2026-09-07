@@ -7,6 +7,9 @@ export interface ProjectStateData {
   projectRoot: string;
   recentFiles: string[];
   knownCommands: string[];
+  // MCP servers from the project's .mcp.json (or plugins) the user approved
+  // to start, keyed by name — repo content never spawns processes unasked.
+  approvedMcpServers?: string[];
   lastUpdated: string;
 }
 
@@ -55,6 +58,18 @@ export class ProjectState {
 
   get recentFiles(): readonly string[] {
     return this.data.recentFiles;
+  }
+
+  isMcpServerApproved(name: string): boolean {
+    return (this.data.approvedMcpServers ?? []).includes(name);
+  }
+
+  approveMcpServer(name: string): void {
+    const list = this.data.approvedMcpServers ?? [];
+    if (!list.includes(name)) {
+      this.data.approvedMcpServers = [...list, name];
+      this.persist();
+    }
   }
 
   get knownCommands(): readonly string[] {

@@ -1,5 +1,5 @@
 import { basename } from 'node:path';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ConsoleRenderer } from './ConsoleRenderer.js';
 import { detectProjectContext, type ProjectContext } from '../agent/ProjectContext.js';
@@ -15,13 +15,80 @@ export async function runInit(projectRoot: string, renderer: ConsoleRenderer): P
   }
   const ctx = detectProjectContext(projectRoot);
   const projectName = inferProjectName(projectRoot);
-  const content = renderTemplate(projectName, ctx);
+  const content = renderTemplate(projectName, ctx, docsMap(projectRoot));
   writeFileSync(target, content, 'utf8');
   renderer.info(`✓ Created ${FILE_NAME} at ${target}`);
   renderer.dim(`Edit it to encode your project's conventions, then /exit and relaunch to load.`);
 }
 
-export function renderTemplate(projectName: string, ctx: ProjectContext): string {
+export interface DocEntry {
+  /** Project-relative path with forward slashes. */
+  path: string;
+  /** First markdown heading, or the file name. */
+  title: string;
+}
+
+const DOC_DIRS = ['docs', 'doc', 'documentation'];
+const MAX_DOCS = 60;
+
+/**
+ * The project's documentation as a table of contents: every markdown file
+ * under docs/ (or doc/, documentation/) with its first heading. OpenAI's
+ * harness-engineering pattern — AGENTS.md as a map into the docs rather
+ * than a copy of them — so the instruction file stays short and current.
+ */
+export function docsMap(projectRoot: string): DocEntry[] {
+  const out: DocEntry[] = [];
+  for (const dir of DOC_DIRS) {
+    const abs = join(projectRoot, dir);
+    if (!existsSync(abs)) continue;
+    walk(abs, abs, dir, out, 0);
+    if (out.length > 0) break;
+  }
+  return out.slice(0, MAX_DOCS);
+}
+
+function walk(root: string, dir: string, rel: string, out: DocEntry[], depth: number): void {
+  if (depth > 3 || out.length >= MAX_DOCS) return;
+  let names: string[];
+  try {
+    names = readdirSync(dir).sort();
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (out.length >= MAX_DOCS) return;
+    if (name.startsWith('.') || name === 'node_modules') continue;
+    const full = join(dir, name);
+    let isDir = false;
+    try {
+      isDir = statSync(full).isDirectory();
+    } catch {
+      continue;
+    }
+    if (isDir) {
+      walk(root, full, `${rel}/${name}`, out, depth + 1);
+      continue;
+    }
+    if (!/\.(md|mdx)$/i.test(name)) continue;
+    let title = name.replace(/\.(md|mdx)$/i, '');
+    try {
+      const head = readFileSync(full, 'utf8').slice(0, 4_000);
+      const m = /^#\s+(.+)$/m.exec(head);
+      if (m) title = m[1]!.trim();
+    } catch {
+      /* unreadable: keep the file name */
+    }
+    out.push({ path: `${rel}/${name}`, title });
+  }
+}
+
+export function renderDocsMap(docs: DocEntry[]): string {
+  if (docs.length === 0) return '';
+  return `\n## Documentation map\n\nRead the relevant document before working in its area; this file only points at them.\n\n${docs.map((d) => `- \`${d.path}\` — ${d.title}`).join('\n')}\n`;
+}
+
+export function renderTemplate(projectName: string, ctx: ProjectContext, docs: DocEntry[] = []): string {
   const date = new Date().toISOString().slice(0, 10);
   const types = ctx.types.length > 0 ? ctx.types.join(', ') : '(none detected)';
   const verify = inferVerifyCommand(ctx.types) ?? '(add your project\'s test or build command here)';
@@ -42,7 +109,7 @@ export function renderTemplate(projectName: string, ctx: ProjectContext): string
 
 (Brief description of the high-level shape of the codebase: which folders
 do what, where the entrypoints are, what the major modules are.)
-
+${renderDocsMap(docs)}
 ## Working principles
 
 - After non-trivial code changes, run: \`${verify}\`

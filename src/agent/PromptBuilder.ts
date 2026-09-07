@@ -3,11 +3,14 @@ import type { SessionContext } from '../session/SessionContext.js';
 import { detectProjectContext, formatContextLine } from './ProjectContext.js';
 import { loadProjectInstructions } from './ProjectInstructions.js';
 import { getRepoMap, repoFileCount, LARGE_REPO_FILE_THRESHOLD } from './RepoMap.js';
-import { getSkills, renderSkillsSection } from './Skills.js';
+import { getSkills, renderSkillsSection, LISTING_BUDGET_FRACTION } from './Skills.js';
+import { contextWindowFor } from '../util/contextWindow.js';
 import { getGitWorkingState, renderSessionStateSection } from './SessionState.js';
 import { benchMode, computerUseEnabled } from './toolAvailability.js';
 import { buildQuerySlice } from './QuerySlice.js';
 import { indexEnabled, peekIndex } from '../index/IndexManager.js';
+import { MemoryStore } from './Memory.js';
+import { alwaysOnRules, getRules } from './Rules.js';
 
 export interface SystemPromptParts {
   /** Stable across a session — safe to send as a cached prefix. */
@@ -180,10 +183,43 @@ The user has enabled computer use. When command-line tests are not enough for a 
     );
   }
 
+  // Always-on project rules (.autocode/rules, .claude/rules without `paths`);
+  // path-scoped ones arrive with the first tool result that touches a file
+  // they cover (see AgentLoop).
+  const rules = alwaysOnRules(getRules(ctx.projectRoot));
+  if (rules.length > 0) {
+    sections.push(
+      `\n# Project rules\n\n${rules.map((r) => `## ${r.name}\n${r.body}`).join('\n\n')}`,
+    );
+  }
+
+  // Auto memory: what earlier sessions on this project recorded (who the
+  // user is, feedback, decisions, references). Read once per session, so it
+  // sits in the cached prefix; the agent adds to it with save_memory.
+  const memory = new MemoryStore(ctx.projectRoot).renderForPrompt();
+  if (memory) {
+    sections.push(
+      `\n# Memory
+
+Notes you saved in earlier sessions on this project. They reflect what was true when written — verify anything that names a file, flag or command before relying on it. Save new facts with \`save_memory\` (one fact each: user preferences, feedback you were given, project decisions, references); never save what the repo already records.
+
+${memory}`,
+    );
+  } else {
+    sections.push(
+      `\n# Memory
+
+Nothing saved yet for this project. When you learn something worth keeping across sessions — how the user likes to work, a correction they gave you, a decision or constraint not visible in the code, a useful link — save it with \`save_memory\` (one fact each). Never save what the repo already records.`,
+    );
+  }
+
   const skills = getSkills(ctx.projectRoot).filter(
     (s) => project.git !== null || !(s.source === 'builtin' && s.name === 'git'),
   );
-  const skillsSection = renderSkillsSection(skills);
+  // Listing budget: ~1% of the model's context window (4 chars per token),
+  // Claude Code's rule, so a big skill library cannot crowd out the work.
+  const budgetChars = Math.max(2_000, Math.floor(contextWindowFor(ctx.model.provider, ctx.model.model) * LISTING_BUDGET_FRACTION * 4));
+  const skillsSection = renderSkillsSection(skills, { budgetChars });
   if (skillsSection) sections.push(skillsSection);
 
   // Volatile suffix — the live working-state snapshot (branch, modified files,

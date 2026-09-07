@@ -38,6 +38,8 @@ export interface Scenario {
   mode?: TtyOptions['mode'];
   fake?: string;
   project: string;
+  /** Extra environment for the harness (e.g. AUTOCODE_REVIEW=auto). */
+  env?: Record<string, string>;
   steps: ScenarioStep[];
 }
 
@@ -76,6 +78,7 @@ export async function runScenario(
     mode: overrides.mode ?? scenario.mode ?? 'autocode',
     fakeScript: scenario.fake ? resolve(dir, scenario.fake) : undefined,
     backend: overrides.backend,
+    env: scenario.env,
   });
   const snapshots: Snapshot[] = [];
   try {
@@ -123,6 +126,7 @@ export function normalizeScreen(lines: string[]): string[] {
       .replace(/↓ [\d.]+k? tokens/g, '↓ #TOK tokens')
       .replace(/\$\d+\.\d+/g, '$#COST')
       .replace(/\(\d+ms\)/g, '(#MS)')
+      .replace(/\b\d{8}-\d{4}(?=-)/g, '#STAMP')
       .replace(/[✢✳✶✻✽]/g, '✻'),
   );
 }

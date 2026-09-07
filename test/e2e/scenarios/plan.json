@@ -1,0 +1,20 @@
+{
+  "cols": 100,
+  "rows": 34,
+  "theme": "dark",
+  "mode": "planning",
+  "fake": "./plan.fake.json",
+  "project": "../fixtures/project",
+  "steps": [
+    { "waitFor": "/help for commands", "timeoutMs": 30000 },
+    { "type": "plan how to add a --verbose flag that prints tool timings" },
+    { "key": "enter" },
+    { "waitFor": "Ready to implement this plan?", "timeoutMs": 60000 },
+    { "waitIdle": 500 },
+    { "snapshot": "plan-dialog" },
+    { "key": "enter" },
+    { "waitFor": "/Second turn done/", "timeoutMs": 60000 },
+    { "waitIdle": 800 },
+    { "snapshot": "after-implement" }
+  ]
+}

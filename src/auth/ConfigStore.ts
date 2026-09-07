@@ -3,10 +3,18 @@ import { join } from 'node:path';
 import { configDir } from '../util/paths.js';
 import type { EffortSetting } from '../llm/models.js';
 
+import type { HooksConfig } from '../agent/HookRunner.js';
+
+// One MCP server. `command` (+ args/env) spawns a stdio server; `url` (+
+// headers, `${ENV_VAR}` expanded) connects to a Streamable HTTP server —
+// Claude Code's `.mcp.json` shapes, so configs paste across tools.
 export interface McpServerConfig {
-  command: string;
+  type?: 'stdio' | 'http' | 'sse';
+  command?: string;
   args?: string[];
   env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
 }
 
 export interface AutocodeConfig {
@@ -37,6 +45,9 @@ export interface AutocodeConfig {
   // disables the post-edit verification loop when set to false.
   verifyCommand?: string;
   autoVerify?: boolean;
+  // Independent review of each turn's diff by a Review subagent before the
+  // turn ends ('auto', the default) or 'off'. Never runs in bench mode.
+  review?: 'auto' | 'off';
   // Auto-update is **opt-out** — when a newer version is detected at startup
   // (standalone install only; never for the V6-bundled copy or in headless
   // mode or on a prerelease), autocode auto-installs and tells the user to
@@ -54,11 +65,10 @@ export interface AutocodeConfig {
   // to the model); other non-zero codes (and post_tool / stop entirely) are
   // advisory. Optional `match` is a `|`-separated list of exact tool names,
   // or `*` for all (default).
-  hooks?: {
-    pre_tool?: HookSpec[];
-    post_tool?: HookSpec[];
-    stop?: HookSpec[];
-  };
+  // Either the legacy flat shape (pre_tool / post_tool / stop) or Claude
+  // Code's `{ "PreToolUse": [{ "matcher": "Bash(git *)", "hooks": [...] }] }`
+  // (see agent/HookRunner.ts for the events and the stdin/stdout contract).
+  hooks?: HooksConfig;
   // Spinner picker for the Ink Bridge TUI. `default` is what shows for any
   // in-flight LLM/tool call; `longOps` auto-engages for ops running >4s.
   // Valid ids: braille (default), pulse, orbit, arc, dots, heartbeat, bars,

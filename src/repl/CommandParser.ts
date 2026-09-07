@@ -23,6 +23,9 @@ export type LocalCommandName =
   | 'update'
   | 'reflect'
   | 'plugins'
+  | 'hooks'
+  | 'memory'
+  | 'commit'
   | 'spinner'
   | 'computer-use'
   | 'ui'
@@ -58,6 +61,9 @@ const KNOWN: ReadonlySet<LocalCommandName> = new Set([
   'compact',
   'cost',
   'diff',
+  'hooks',
+  'memory',
+  'commit',
   'keys',
   'auth',
   'login',

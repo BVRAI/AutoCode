@@ -162,6 +162,9 @@ export class TtySession {
         {
           firstRunCompletedAt: '2026-01-01T00:00:00.000Z',
           autoVerify: false,
+          // The review subagent would consume scripted turns; scenarios that
+          // want it set AUTOCODE_REVIEW=auto in their env.
+          review: 'off',
           autoUpdate: false,
           reflectAfterSession: false,
           webTools: { enabled: false },

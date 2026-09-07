@@ -1,0 +1,20 @@
+{
+  "chunk": 8,
+  "delayMs": 4,
+  "turns": [
+    {
+      "when": "run the tests",
+      "tools": [{ "name": "run_shell", "input": { "command": "npm test --silent" } }],
+      "usage": { "inputTokens": 1100, "outputTokens": 30 }
+    },
+    {
+      "when": "blocked",
+      "tools": [{ "name": "run_shell", "input": { "command": "node scripts/test.mjs" } }],
+      "usage": { "inputTokens": 1400, "outputTokens": 30 }
+    },
+    {
+      "text": "The tests pass (ran `node scripts/test.mjs` — the repo's hook refuses direct `npm` calls).",
+      "usage": { "inputTokens": 1700, "outputTokens": 40 }
+    }
+  ]
+}

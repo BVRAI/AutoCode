@@ -26,6 +26,12 @@ import { RetrieveEntityTool } from '../tools/retrieveEntity.js';
 import { ComputerUseTaskTool } from '../tools/computerUseTask.js';
 import { ComputerUseHostTool } from '../tools/computerUseHost.js';
 import { benchMode, computerUseEnabled, guiToolsEnabled, webToolsEnabled } from './toolAvailability.js';
+import { ToolSearchTool } from '../tools/toolSearch.js';
+import { SaveMemoryTool } from '../tools/saveMemory.js';
+
+// Anthropic's guidance: accuracy degrades past 30–50 tools; keep the core
+// eager and search the rest.
+export const DEFER_THRESHOLD = 30;
 
 export class ToolRegistry {
   private readonly tools = new Map<string, Tool>();
@@ -59,6 +65,7 @@ export class ToolRegistry {
     this.register(new FindSymbolTool());
     this.register(new FileDepsTool());
     this.registerIndexTools();
+    this.register(new SaveMemoryTool());
     this.syncOptionalTools();
   }
 
@@ -117,6 +124,17 @@ export class ToolRegistry {
         r.register(new FileDepsTool());
         r.registerIndexTools();
         break;
+      case 'Review':
+        // Read-only, graph-aware: the reviewer verifies claims in the code
+        // and checks callers of what changed.
+        r.register(new ListDirectoryTool());
+        r.register(new ReadFileTool());
+        r.register(new GlobTool());
+        r.register(new GrepTool());
+        r.register(new FindSymbolTool());
+        r.register(new FileDepsTool());
+        r.registerIndexTools();
+        break;
       case 'ComputerUse':
         r.register(new ListDirectoryTool());
         r.register(new ReadFileTool());
@@ -136,6 +154,75 @@ export class ToolRegistry {
 
   unregister(name: string): void {
     this.tools.delete(name);
+    this.deferred.delete(name);
+  }
+
+  // ── Deferred tools (Phase 4.6) ────────────────────────────────────────
+  // Past DEFER_THRESHOLD tools, MCP tools stop riding in every request: they
+  // are searchable through `tool_search` and join the schema list once
+  // loaded. Core tools are never deferred.
+
+  private readonly deferred = new Set<string>();
+  private toolSearch: ToolSearchTool | null = null;
+
+  /** Register an MCP (or other optional) tool; deferred once the list is big. */
+  registerOptional(tool: Tool): void {
+    this.register(tool);
+    this.deferred.add(tool.definition.name);
+    this.applyDeferralPolicy();
+  }
+
+  private applyDeferralPolicy(): void {
+    // Below the threshold every optional tool is eager; past it, all of them
+    // wait behind tool_search (a stable rule, so the prompt prefix does not
+    // depend on registration order).
+    if (this.tools.size > DEFER_THRESHOLD && !this.toolSearch) {
+      this.toolSearch = new ToolSearchTool(this);
+      this.tools.set(this.toolSearch.definition.name, this.toolSearch);
+    }
+  }
+
+  private readonly loaded = new Set<string>();
+
+  private deferralActive(): boolean {
+    return this.tools.size > DEFER_THRESHOLD;
+  }
+
+  /** True when the tool is deferred and not yet loaded into the schema list. */
+  isDeferred(name: string): boolean {
+    return this.deferralActive() && this.deferred.has(name) && !this.loaded.has(name);
+  }
+
+  deferredNames(): string[] {
+    if (!this.deferralActive()) return [];
+    return [...this.deferred].filter((n) => !this.loaded.has(n)).sort();
+  }
+
+  loadDeferred(name: string): void {
+    if (this.deferred.has(name)) this.loaded.add(name);
+  }
+
+  /** Keyword search over deferred tools' names and descriptions. */
+  searchDeferred(query: string, limit: number): Array<{ name: string; description: string; inputSchema: unknown; score: number }> {
+    const terms = query
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((t) => t.length >= 2);
+    const hits: Array<{ name: string; description: string; inputSchema: unknown; score: number }> = [];
+    for (const name of this.deferredNames()) {
+      const tool = this.tools.get(name);
+      if (!tool) continue;
+      const hay = `${name} ${tool.definition.description}`.toLowerCase();
+      const nameLower = name.toLowerCase();
+      let score = 0;
+      for (const t of terms) {
+        if (nameLower.includes(t)) score += 3;
+        else if (hay.includes(t)) score += 1;
+      }
+      if (query.trim().toLowerCase() === nameLower) score += 10;
+      if (score > 0) hits.push({ name, description: tool.definition.description, inputSchema: tool.definition.inputSchema, score });
+    }
+    return hits.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name)).slice(0, limit);
   }
 
   syncOptionalTools(): void {
@@ -151,11 +238,13 @@ export class ToolRegistry {
   }
 
   schemas(): ToolSchema[] {
-    return [...this.tools.values()].map((t) => ({
-      name: t.definition.name,
-      description: t.definition.description,
-      inputSchema: t.definition.inputSchema,
-    }));
+    return [...this.tools.values()]
+      .filter((t) => !this.isDeferred(t.definition.name))
+      .map((t) => ({
+        name: t.definition.name,
+        description: t.definition.description,
+        inputSchema: t.definition.inputSchema,
+      }));
   }
 
   async execute(

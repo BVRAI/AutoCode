@@ -56,6 +56,14 @@ export class TranscriptStore {
   private readonly statePath: string;
   private readonly conversationPath: string;
 
+  get projectRoot(): string {
+    return this.ctx.projectRoot;
+  }
+
+  get sessionId(): string {
+    return this.ctx.sessionId;
+  }
+
   constructor(private readonly ctx: SessionContext) {
     mkdirSync(ctx.sessionDir, { recursive: true });
     this.transcriptPath = join(ctx.sessionDir, 'transcript.jsonl');

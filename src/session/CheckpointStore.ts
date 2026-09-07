@@ -104,6 +104,18 @@ export class CheckpointStore {
     return id;
   }
 
+  // The current turn's changes, one entry per path holding the EARLIEST
+  // snapshot (the pre-turn state), for the reviewer's diff. Undone entries
+  // are skipped; deletes point at the trash copy.
+  changesForCurrentTurn(): Array<{ path: string; op: CheckpointOp; backup: string | null }> {
+    const byPath = new Map<string, CheckpointEntry>();
+    for (const e of this.entries) {
+      if (e.undone || e.turn !== this.turn || e.kind !== 'file') continue;
+      if (!byPath.has(e.originalPath)) byPath.set(e.originalPath, e);
+    }
+    return [...byPath.values()].map((e) => ({ path: e.originalPath, op: e.op, backup: e.backup }));
+  }
+
   // Revert just the most recent live step — the natural rewind point after an
   // interrupt, so earlier good steps from the same turn stay on disk.
   undoLastStep(): { turn: number; step: number; restored: number } | null {
