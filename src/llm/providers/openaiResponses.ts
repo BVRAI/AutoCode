@@ -209,7 +209,9 @@ export function parseResponsesOutput(json: ResponsesResult): CompletionResponse 
     stopReason,
     content,
     usage: {
-      inputTokens: json.usage?.input_tokens ?? 0,
+      // OpenAI's input_tokens INCLUDES the cached portion; the harness's contract
+      // (Anthropic's) is that inputTokens excludes it and cacheReadTokens carries it.
+      inputTokens: Math.max(0, (json.usage?.input_tokens ?? 0) - (json.usage?.input_tokens_details?.cached_tokens ?? 0)),
       outputTokens: json.usage?.output_tokens ?? 0,
       cacheReadTokens: json.usage?.input_tokens_details?.cached_tokens,
     },

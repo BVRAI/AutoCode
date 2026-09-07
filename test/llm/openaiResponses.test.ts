@@ -100,7 +100,8 @@ describe('parseResponsesOutput', () => {
       { type: 'text', text: 'Let me look.' },
       { type: 'tool_use', id: 'call_9', name: 'read_file', input: { path: 'b.ts' } },
     ]);
-    expect(r.usage).toEqual({ inputTokens: 120, outputTokens: 30, cacheReadTokens: 100 });
+    // input_tokens (120) includes the 100 cached tokens; the harness reports the fresh 20 apart.
+    expect(r.usage).toEqual({ inputTokens: 20, outputTokens: 30, cacheReadTokens: 100 });
   });
 
   it('reports max_tokens when the response was cut off', () => {

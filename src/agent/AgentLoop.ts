@@ -934,7 +934,9 @@ export class AgentLoop {
       this.cumOut += response.usage.outputTokens;
       this.cumCacheRead += response.usage.cacheReadTokens ?? 0;
       this.cumCacheWrite += response.usage.cacheWriteTokens ?? 0;
-      this.lastInputTokens = response.usage.inputTokens;
+      // Context size = everything the request carried: fresh input plus the
+      // cached prefix (inputTokens excludes cache reads on every provider).
+      this.lastInputTokens = response.usage.inputTokens + (response.usage.cacheReadTokens ?? 0) + (response.usage.cacheWriteTokens ?? 0);
 
       this.conversation.push({ role: 'assistant', content: response.content });
 

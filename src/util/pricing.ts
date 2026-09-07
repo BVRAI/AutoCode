@@ -30,23 +30,27 @@ export const RATES: Record<string, Record<string, ModelRate>> = {
     'claude-haiku-4': { inputPerM: 1, outputPerM: 5 },
   },
   xai: {
-    'grok-code-fast-1': { inputPerM: 0.2, outputPerM: 1.5 },
+    'grok-code-fast-1': { inputPerM: 0.2, outputPerM: 1.5, cacheReadPerM: 0.02 },
     'grok-4-fast': { inputPerM: 0.5, outputPerM: 2.0 },
     'grok-4': { inputPerM: 3.0, outputPerM: 15.0 },
   },
   openai: {
-    'gpt-5.1': { inputPerM: 5, outputPerM: 20 },
-    'gpt-5': { inputPerM: 5, outputPerM: 20 },
-    'gpt-4.1': { inputPerM: 2.5, outputPerM: 10 },
-    'o3': { inputPerM: 15, outputPerM: 60 },
-    'o4-mini': { inputPerM: 1.1, outputPerM: 4.4 },
+    // platform.openai.com/docs/pricing (GPT-5 family: $1.25 / $10, cached input
+    // $0.125; o3 and gpt-4.1 after the 2025 price cuts). The old $5 / $20 rows
+    // overstated a gpt-5.1 turn ~4× and tripped cost caps that real spend never reached.
+    'gpt-5.1': { inputPerM: 1.25, outputPerM: 10, cacheReadPerM: 0.125 },
+    'gpt-5': { inputPerM: 1.25, outputPerM: 10, cacheReadPerM: 0.125 },
+    'gpt-5-mini': { inputPerM: 0.25, outputPerM: 2, cacheReadPerM: 0.025 },
+    'gpt-4.1': { inputPerM: 2, outputPerM: 8, cacheReadPerM: 0.5 },
+    'o3': { inputPerM: 2, outputPerM: 8, cacheReadPerM: 0.5 },
+    'o4-mini': { inputPerM: 1.1, outputPerM: 4.4, cacheReadPerM: 0.275 },
   },
   openrouter: {
     // Routes to whatever upstream; pricing varies. Use a conservative midrange
     // default if no match. Specific routes resolve via prefix match if user
     // sets a model like "anthropic/claude-opus-4-7".
     'anthropic/claude-opus-4-7': { inputPerM: 15, outputPerM: 75 },
-    'openai/gpt-5.1': { inputPerM: 5, outputPerM: 20 },
+    'openai/gpt-5.1': { inputPerM: 1.25, outputPerM: 10, cacheReadPerM: 0.125 },
     'meta-llama/llama-3.3-70b': { inputPerM: 0.4, outputPerM: 0.6 },
   },
 };

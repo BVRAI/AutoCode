@@ -132,9 +132,10 @@ This project is large, so localize before you act — don't grep the whole tree 
 2. Narrow with the code index: \`search_entity\` turns the user's words into ranked path:line candidates; \`traverse_graph\` shows who calls or imports a candidate (its blast radius) and what it depends on; \`retrieve_entity\` gives a file's outline or a symbol's exact span. Keep \`grep\` for literal strings and error messages, scoped to the candidate directories — not the whole repo.
 3. \`read_file\` only the relevant slices (offset = first line, limit = number of lines) once you know what to open.
 4. Work file → symbol → line: confirm the exact location before editing.
-5. When the request names something loosely ("the export button", "where tasks get materialized"), delegate to a \`task\` subagent of type "Localize" with the user's words verbatim; it returns ranked spans with confidence. If its top candidates are close, or it reports an ambiguity, ask the user with \`ask_user\` — one question with the candidates as options — instead of guessing.
-6. For a bug fix, write a small reproduction script or failing test BEFORE editing — on a large codebase it doubles as proof you localized correctly.
-7. For a change spanning several files, delegate context-gathering to an "Explore" \`task\` so your own window stays focused.`,
+5. **Pick the edit site by where the behaviour lives, not by what is most imported.** A request phrased as what a screen or feature should do ("the list should show…", "pressing X on the Y page should…", "remember what I typed") lands in the component, page or handler that renders or handles it — the place whose code you would change to see the difference. The shared model, store, util or dictionary it imports is the edit site only when the same rule must change for every consumer, or the request names that rule. When a fix means a new string, the code that uses the string comes first and the dictionary key second. Name the rendering component first; list shared modules after it, only if they genuinely change.
+6. When the request names something loosely ("the export button", "where tasks get materialized"), delegate to a \`task\` subagent of type "Localize" with the user's words verbatim; it returns ranked spans with confidence. If its top candidates are close, or it reports an ambiguity, ask the user with \`ask_user\` — one question with the candidates as options — instead of guessing.
+7. For a bug fix, write a small reproduction script or failing test BEFORE editing — on a large codebase it doubles as proof you localized correctly.
+8. For a change spanning several files, delegate context-gathering to an "Explore" \`task\` so your own window stays focused.`,
     );
   }
 

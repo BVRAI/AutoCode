@@ -280,7 +280,9 @@ export function parseResponse(json: OpenAiChatResponse): CompletionResponse {
     stopReason: normalizeStopReason(choice.finish_reason),
     content,
     usage: {
-      inputTokens: json.usage.prompt_tokens,
+      // prompt_tokens includes the cached portion; the harness reports fresh input
+      // and cached reads separately (see estimateCost).
+      inputTokens: Math.max(0, json.usage.prompt_tokens - (json.usage.prompt_tokens_details?.cached_tokens ?? 0)),
       outputTokens: json.usage.completion_tokens,
       cacheReadTokens: json.usage.prompt_tokens_details?.cached_tokens,
     },
@@ -407,11 +409,10 @@ export async function* streamOpenAiCompat(
     }
     const u = parsed.usage as { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } } | undefined;
     if (u) {
-      if (u.prompt_tokens !== undefined) usage.inputTokens = u.prompt_tokens;
+      const cached = u.prompt_tokens_details?.cached_tokens;
+      if (u.prompt_tokens !== undefined) usage.inputTokens = Math.max(0, u.prompt_tokens - (cached ?? 0));
       if (u.completion_tokens !== undefined) usage.outputTokens = u.completion_tokens;
-      if (u.prompt_tokens_details?.cached_tokens !== undefined) {
-        usage.cacheReadTokens = u.prompt_tokens_details.cached_tokens;
-      }
+      if (cached !== undefined) usage.cacheReadTokens = cached;
     }
   }
 
