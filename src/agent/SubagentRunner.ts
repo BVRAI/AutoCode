@@ -83,13 +83,20 @@ export class SubagentRunner {
     const recentSigs: string[] = [];
 
     for (let iter = 0; iter < maxIterations; iter++) {
+      // The last iteration is answer-only: the tools go away and the model
+      // is told to deliver its verdict/list from what it has. Without this a
+      // budget model keeps exploring until the cap and a Review or Localize
+      // run ends with no parsable result (smoke c: "review unavailable"
+      // after 178 s of reads).
+      const finalIteration = iter === maxIterations - 1;
+      if (finalIteration) messages.push({ role: 'user', content: [{ type: 'text', text: finalIterationNotice(input.type) }] });
       const response = await this.router.complete(
         input.parent.model.provider as ProviderName,
         {
           model: input.parent.model.model,
           system: systemPrompt,
           messages,
-          tools: registry.schemas(),
+          tools: finalIteration ? [] : registry.schemas(),
           maxTokens: defaultMaxOutputTokens(input.parent.model.model, input.parent.model.provider),
           temperature: input.parent.sampling?.temperature ?? 0,
           thinking: thinkingFor(input.parent.model.provider, input.parent.model.model, input.parent.effort),
@@ -187,6 +194,18 @@ export class SubagentRunner {
       toolCalls,
       error: 'iteration cap reached',
     };
+  }
+}
+
+export function finalIterationNotice(type: SubagentType): string {
+  const base = '[harness] This is your last step: tools are no longer available. ';
+  switch (type) {
+    case 'Review':
+      return base + 'Write the review verdict now as the JSON object described in your instructions, from what you have read. JSON only.';
+    case 'Localize':
+      return base + 'Write your ranked candidates now as the JSON object described in your instructions, from what you have found. JSON only.';
+    default:
+      return base + 'Write your final answer now from what you have found.';
   }
 }
 
