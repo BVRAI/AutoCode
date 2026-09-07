@@ -41,6 +41,8 @@ export interface DiscoveredModel {
   supportsThinking?: boolean;
   /** The provider serves this id as an alias of `aliasOf`. */
   aliasOf?: string;
+  /** Release time (unix seconds) when the list carries one (OpenRouter); newest sorts first. */
+  createdAt?: number;
 }
 
 /** Chat-capable models only; the lists also carry embeddings, speech, image, video and batch ids. */
@@ -162,6 +164,7 @@ export function parseProviderModels(provider: DiscoverableProvider, body: unknow
           contextWindow: num(e['context_length']),
           vision: inputs.length > 0 ? inputs.includes('image') : undefined,
           supportsThinking: params.length > 0 ? params.includes('reasoning') : undefined,
+          createdAt: num(e['created']),
         });
       }
       break;
@@ -376,8 +379,8 @@ export function toModelInfos(
   return { infos, rates, unpriced };
 }
 
-/** Newest-looking first: higher version numbers, then shorter ids, then alphabetical. */
-export function sortModelIds<T extends { id: string }>(models: T[]): T[] {
+/** Newest first: release time when the list carries one, else higher version numbers, then shorter ids, then alphabetical. */
+export function sortModelIds<T extends { id: string; createdAt?: number }>(models: T[]): T[] {
   const version = (id: string): number => {
     const tail = id.replace(/^[^\d]*(?=\d)/, '');
     const m = /^(\d+)(?:[.-](\d+))?/.exec(tail);
@@ -385,7 +388,11 @@ export function sortModelIds<T extends { id: string }>(models: T[]): T[] {
     return Number.parseFloat(`${m[1]}.${m[2] ?? '0'}`);
   };
   return [...models].sort(
-    (a, b) => version(b.id) - version(a.id) || a.id.length - b.id.length || a.id.localeCompare(b.id),
+    (a, b) =>
+      (b.createdAt ?? 0) - (a.createdAt ?? 0) ||
+      version(b.id) - version(a.id) ||
+      a.id.length - b.id.length ||
+      a.id.localeCompare(b.id),
   );
 }
 
@@ -462,8 +469,11 @@ async function runDiscovery(opts: DiscoveryOptions): Promise<DiscoveryReport> {
   const lists = new Map<DiscoverableProvider, DiscoveredModel[]>();
   await Promise.all(
     DISCOVERABLE.map(async (provider) => {
-      const key = opts.keyFor(provider);
-      if (!key) {
+      // OpenRouter's list is public, so it is always loaded: the picker offers
+      // the whole marketplace (a key is still needed to use a model) and the
+      // list prices other providers' models the bundled table lacks.
+      const key = opts.keyFor(provider) ?? (provider === 'openrouter' ? '' : null);
+      if (key === null) {
         results.push({ provider, source: 'no-key', count: 0 });
         return;
       }
@@ -473,18 +483,9 @@ async function runDiscovery(opts: DiscoveryOptions): Promise<DiscoveryReport> {
     }),
   );
 
-  // OpenRouter as the price oracle, fetched (publicly) only when a listed
-  // model has no provider price and no bundled family price.
-  let oracle: PriceOracle = () => null;
-  const needsOracle = [...lists].some(
-    ([provider, models]) =>
-      provider !== 'openrouter' &&
-      models.some((m) => (m.inputPerM === undefined || m.outputPerM === undefined) && bundledRateFor(provider, m.id, true) === null),
-  );
-  if (needsOracle) {
-    const or = lists.get('openrouter') ?? (await loadProviderList('openrouter', '', listOpts)).models;
-    oracle = oracleFrom(or);
-  }
+  // OpenRouter as the price oracle for models with neither a provider price
+  // nor a bundled family price.
+  const oracle: PriceOracle = oracleFrom(lists.get('openrouter') ?? []);
 
   const unpriced: string[] = [];
   for (const provider of DISCOVERABLE) {

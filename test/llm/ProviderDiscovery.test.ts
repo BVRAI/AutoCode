@@ -117,6 +117,15 @@ describe('sorting, ids and labels', () => {
     expect(sorted.map((m) => m.id)).toEqual(['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-4.1', 'o3']);
   });
 
+  it('sorts by release time first when the list carries one', () => {
+    const sorted = sortModelIds([
+      { id: 'meta-llama/llama-3.3-70b', createdAt: 1_700_000_000 },
+      { id: 'openai/gpt-6-astra', createdAt: 1_780_000_000 },
+      { id: 'anthropic/claude-opus-4.7', createdAt: 1_790_000_000 },
+    ]);
+    expect(sorted.map((m) => m.id)).toEqual(['anthropic/claude-opus-4.7', 'openai/gpt-6-astra', 'meta-llama/llama-3.3-70b']);
+  });
+
   it('maps provider ids onto OpenRouter ids', () => {
     expect(openRouterId('anthropic', 'claude-opus-4-7-20251001')).toBe('anthropic/claude-opus-4.7');
     expect(openRouterId('anthropic', 'claude-fable-5-1')).toBe('anthropic/claude-fable-5.1');
@@ -208,12 +217,18 @@ describe('discoverModels', () => {
       'openai:fresh:5',
       'xai:fresh:3',
       'google:no-key:0',
-      'openrouter:no-key:0',
+      'openrouter:fresh:3',
     ]);
     expect(report.unpriced).toEqual([]);
     expect(discoveryState()).toBe('done');
-    expect(discoveredProviders().sort()).toEqual(['openai', 'xai']);
-    expect(modelCatalogDetail()).toBe('live from openai, xai · bundled for the rest');
+    expect(discoveredProviders().sort()).toEqual(['openai', 'openrouter', 'xai']);
+    expect(modelCatalogDetail()).toBe('live from openai, xai, openrouter · bundled for the rest');
+    // OpenRouter's public list is the marketplace rows, no key needed.
+    expect(getKnownModels().filter((m) => m.provider === 'openrouter').map((m) => m.model)).toEqual([
+      'openai/gpt-9-nova',
+      'anthropic/claude-opus-4.7',
+      'openai/gpt-4',
+    ]);
 
     // The oracle call is public: no authorization header.
     const oracleCall = log.find((c) => c.url.startsWith('https://openrouter.ai/'));
