@@ -10,6 +10,9 @@ export interface ProjectStateData {
   // MCP servers from the project's .mcp.json (or plugins) the user approved
   // to start, keyed by name — repo content never spawns processes unasked.
   approvedMcpServers?: string[];
+  // The user trusted this folder's hooks / MCP servers / permission rules /
+  // verify directives (asked once, see agent/Trust.ts).
+  trusted?: boolean;
   lastUpdated: string;
 }
 
@@ -58,6 +61,17 @@ export class ProjectState {
 
   get recentFiles(): readonly string[] {
     return this.data.recentFiles;
+  }
+
+  // Trust gate (Phase 5.4): repo-supplied automation runs only once the user
+  // trusted this folder.
+  isTrusted(): boolean {
+    return this.data.trusted === true;
+  }
+
+  setTrusted(value: boolean): void {
+    this.data.trusted = value;
+    this.persist();
   }
 
   isMcpServerApproved(name: string): boolean {

@@ -165,6 +165,8 @@ export class TtySession {
           // The review subagent would consume scripted turns; scenarios that
           // want it set AUTOCODE_REVIEW=auto in their env.
           review: 'off',
+          // Same reason: the auto-mode judge would consume scripted turns.
+          autoMode: { reviewer: false },
           autoUpdate: false,
           reflectAfterSession: false,
           webTools: { enabled: false },

@@ -1,10 +1,19 @@
-name: CI
+# Evals as CI (Phase 5.5): every push runs the unit suite and the scripted
+# end-to-end scenarios on the emulated terminal (no pseudo-console needed);
+# the Aider-30 smoke and the v7 localization set run on demand — they cost
+# money and need provider keys, so they are workflow_dispatch only.
+name: ci
 
 on:
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
-    branches: [main]
+  workflow_dispatch:
+    inputs:
+      aider:
+        description: 'Run the Aider polyglot 30-task slate (needs XAI_API_KEY)'
+        type: boolean
+        default: false
 
 jobs:
   test:
@@ -13,14 +22,42 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        node: [20, 22]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node }}
+          node-version: 22
           cache: npm
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
-      - run: npm test
+      - name: Unit tests
+        run: npx vitest run
+      - name: End-to-end scenarios (emulated terminal)
+        env:
+          TTY_MODE: emulated
+        run: npx vitest run -c vitest.e2e.config.ts
+      - name: End-to-end scenarios (ConPTY)
+        if: runner.os == 'Windows'
+        env:
+          TTY_MODE: pty
+        run: npx vitest run -c vitest.e2e.config.ts
+
+  aider-30:
+    if: github.event_name == 'workflow_dispatch' && inputs.aider
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci && npm run build
+      - name: Aider polyglot slate
+        env:
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          AUTOCODE_BENCH_MODE: '1'
+        run: |
+          echo "The bench runner lives in the sibling autocode-bench repository;"
+          echo "check it out next to this one and run: npm run run-aider -- --slate aider-30"

@@ -32,6 +32,8 @@ import type { EventEmitter } from '../repl/EventEmitter.js';
 import { runSessionReflection, type Proposal, type SessionSnapshot } from './SessionReflection.js';
 import { additionalContext, blockingReason, permissionDecision, updatedInput } from './HookRunner.js';
 import type { HookHub } from './HookHub.js';
+import { decide as decidePermission, type PermissionRules } from '../safety/PermissionRules.js';
+import { isTrusted } from './Trust.js';
 
 // Runaway backstop, not a working limit. Hard step caps truncate exactly the
 // careful behavior we want on repo-level tasks (top harnesses run hundreds of
@@ -117,6 +119,13 @@ export interface AgentDeps {
   // Machine-readable activity stream for the Automax V6 host. NullEventEmitter
   // when --automax is off; StdoutEventEmitter when it is on.
   emitter: EventEmitter;
+  // Permission rules (config + trusted project rules): deny / ask / allow
+  // matchers evaluated before the mode gate (Phase 5.4).
+  permissions?: PermissionRules;
+  // Auto mode's reviewer tier: judges `confirm`-class shell commands in
+  // autocode/admin mode (a cheap model; see agent/AutoApprover.ts). Absent =
+  // the user is asked, as in default mode.
+  judge?: (input: { command: string; reason: string; task: string }) => Promise<{ decision: 'allow' | 'ask'; reason: string }>;
   // Every hook the session has (user config, project hooks.json, plugins),
   // fired here for UserPromptSubmit, PreToolUse, PermissionRequest,
   // PostToolUse, PostToolUseFailure, Stop, PreCompact and PostCompact.
@@ -438,12 +447,23 @@ export class AgentLoop {
     // several subagents can be live at once, and a per-call start/stop pair
     // would kill the spinner when the FIRST one finishes.
     let activeSubagents = 0;
+    const judge = this.deps.judge;
     const toolExecCtx: ToolExecutionContext = {
       session: ctx,
       confirm: this.deps.confirm,
       choose: this.deps.choose,
       checkpoint: this.deps.checkpoints,
       depth: 0,
+      // The reviewer tier only exists where the gate is already 'allow' —
+      // default mode keeps asking the user for every risky command.
+      judge:
+        judge && (ctx.mode === 'autocode' || ctx.mode === 'admin')
+          ? async (input) => {
+              const j = await judge({ ...input, task: userText });
+              if (j.decision === 'allow') this.deps.renderer.dim(`auto mode: allowed "${input.command.slice(0, 80)}" — ${j.reason}`);
+              return j;
+            }
+          : undefined,
       subagentFactory: this.deps.subagentFactory
         ? async (input) => {
             activeSubagents += 1;
@@ -525,6 +545,10 @@ export class AgentLoop {
         // Override (user config) and inferred (harness-built) commands are
         // trusted; directives pass through the same allow/confirm/block
         // policy as run_shell, with trust-on-first-use per command.
+        if (plan.source === 'directive' && !isTrusted(ctx.projectRoot)) {
+          this.deps.renderer.warn(`  ✗ verification skipped — the repo's verify command runs only once this folder is trusted ($ ${plan.command})`);
+          break;
+        }
         if (plan.source === 'directive') {
           const verdict = classifyCommand(plan.command, ctx.projectRoot);
           if (verdict.kind === 'block') {
@@ -991,8 +1015,21 @@ export class AgentLoop {
         this.deps.emitter.emit('tool_call', { name: tu.name, args: tu.input });
         emitFileEditProposed(this.deps.emitter, tu.name, tu.input);
 
+        // Permission rules first (Phase 5.4): deny refuses outright, allow
+        // skips the approval a mode would ask for, ask forces one.
+        const perm = decidePermission(this.deps.permissions ?? {}, tu.name, tu.input);
+        if (perm.decision === 'deny') {
+          const content = `Denied by permission rule "${perm.rule}". Choose a different approach.`;
+          toolResults.push({ type: 'tool_result', toolUseId: tu.id, content, isError: true });
+          this.deps.emitter.emit('tool_result', { name: tu.name, summary: 'denied by permission rule', content, isError: true });
+          this.deps.renderer.warn(`  ✗ ${tu.name} denied by permission rule "${perm.rule}"`);
+          consecutiveFailures.set(tu.name, (consecutiveFailures.get(tu.name) ?? 0) + 1);
+          continue;
+        }
         // Mode gate: planning blocks mutating tools; default asks first.
-        const gate = gateFor(ctx.mode, tu.name);
+        let gate = gateFor(ctx.mode, tu.name);
+        if (perm.decision === 'allow' && gate === 'approve') gate = 'allow';
+        if (perm.decision === 'ask' && gate === 'allow') gate = 'approve';
         if (gate === 'block') {
           toolResults.push({
             type: 'tool_result',

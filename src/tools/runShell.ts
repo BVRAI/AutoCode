@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { resolveInsideRoot, toRelative } from '../util/pathSafety.js';
 import { classifyCommand, type SafetyVerdict } from '../safety/SafetyPolicy.js';
+import { annotateSandboxFailures, sandboxEnabled, wrapForSandbox } from '../safety/Sandbox.js';
 import {
   optionalBoolean,
   optionalNumber,
@@ -89,7 +90,18 @@ export class RunShellTool implements Tool {
         metadata: { verdict },
       };
     }
-    if (verdict.kind === 'confirm') {
+    let judged: string | null = null;
+    if (verdict.kind === 'confirm' && ctx.judge) {
+      // Auto mode's reviewer tier: a cheap model may clear the command so
+      // the user is only interrupted for what it would not vouch for.
+      try {
+        const j = await ctx.judge({ command, reason: verdict.reason });
+        if (j.decision === 'allow') judged = j.reason || 'cleared by the auto-mode reviewer';
+      } catch {
+        judged = null;
+      }
+    }
+    if (verdict.kind === 'confirm' && judged === null) {
       if (!ctx.confirm) {
         return {
           summary: `confirm required: ${verdict.reason}`,
@@ -115,11 +127,29 @@ export class RunShellTool implements Tool {
       ? resolveInsideRoot(ctx.session.projectRoot, wd)
       : ctx.session.projectRoot;
 
+    // Opt-in OS sandbox (config `sandbox.enabled`): the command string is
+    // rewritten to run inside the runtime's fence; a missing runtime is
+    // reported once and the command runs as it would have.
+    let toRun = command;
+    let sandboxed = false;
+    let sandboxNote: string | undefined;
+    if (sandboxEnabled(ctx.session.sandbox)) {
+      const w = await wrapForSandbox(command, { config: ctx.session.sandbox!, projectRoot: ctx.session.projectRoot });
+      toRun = w.command;
+      sandboxed = w.sandboxed;
+      sandboxNote = w.note;
+    }
+    const notes = [judged ? `[auto mode] risky command allowed without asking: ${judged}` : '', sandboxNote ? `[${sandboxNote}]` : '']
+      .filter((n) => n.length > 0)
+      .join('\n');
+    const prefix = notes.length > 0 ? `${notes}\n` : '';
+
     if (background) {
-      const bg = await runBackground(command, cwd);
+      const bg = await runBackground(toRun, cwd);
       return {
         summary: `started in background (pid ${bg.pid ?? 'n/a'}) in ${toRelative(ctx.session.projectRoot, cwd) || '.'}`,
         content:
+          prefix +
           (bg.exited
             ? `Process already exited (code ${bg.code ?? 'n/a'}).\n`
             : `Process is running (pid ${bg.pid ?? 'n/a'}); it will be stopped when the session ends.\n`) +
@@ -127,18 +157,20 @@ export class RunShellTool implements Tool {
             ? `--- startup output ---\n${bg.output}${bg.clipped ? '\n… [startup output truncated]' : ''}`
             : '(no startup output)'),
         isError: bg.exited && bg.code !== 0,
-        metadata: { background: true, pid: bg.pid, exited: bg.exited, exitCode: bg.code },
+        metadata: { background: true, pid: bg.pid, exited: bg.exited, exitCode: bg.code, sandboxed },
       };
     }
 
-    const result = await runCommand(command, cwd, timeoutSec * 1000);
+    const result = await runCommand(toRun, cwd, timeoutSec * 1000);
+    if (sandboxed) result.stderr.tail = annotateSandboxFailures(command, result.stderr.tail);
     const trimmed = trimOutput(result.stdout, result.stderr);
     const summary =
       `exit ${result.code ?? 'n/a'} in ${toRelative(ctx.session.projectRoot, cwd) || '.'}` +
-      (result.timedOut ? ' (timed out)' : '');
+      (result.timedOut ? ' (timed out)' : '') +
+      (sandboxed ? ' (sandboxed)' : '');
     return {
       summary,
-      content: trimmed.content,
+      content: prefix + trimmed.content,
       isError: result.code !== 0 || result.timedOut,
       metadata: {
         exitCode: result.code,
@@ -150,6 +182,8 @@ export class RunShellTool implements Tool {
         stdoutTruncated: trimmed.stdoutTruncated,
         stderrTruncated: trimmed.stderrTruncated,
         verdict,
+        sandboxed,
+        judged: judged !== null,
       },
     };
   }

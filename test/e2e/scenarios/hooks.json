@@ -6,6 +6,9 @@
   "fake": "./hooks.fake.json",
   "project": "../fixtures/project-hooks",
   "steps": [
+    { "waitFor": "Trust", "timeoutMs": 30000 },
+    { "type": "y" },
+    { "key": "enter" },
     { "waitFor": "/help for commands", "timeoutMs": 30000 },
     { "type": "run the tests and tell me if they pass" },
     { "key": "enter" },

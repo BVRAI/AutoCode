@@ -1,162 +1,181 @@
 # autocode
 
-A terminal-resident agentic coding CLI. Open `autocode` in any terminal, type a task, and it inspects, edits, and runs commands inside the current project — with project-root scoping and a safety policy on every shell command.
+The coding engine inside [Automax](https://bvrai.com), and a terminal coding agent on its own.
+Open `autocode` in any terminal, type a task, and it inspects, edits and runs commands inside the
+current project; run `autocode --server` and a host application drives the same engine over a
+JSON-RPC protocol.
 
-> **Status**: pre-release (v0.1 in progress). Not yet on npm.
+> **Status (2026-09):** the public npm product is shelved. This repository is Automax's engine —
+> it is not published to npm and the release workflow is off. Everything still works from a
+> source checkout.
 
-## Why another coding CLI?
+## What it is
 
-There are already excellent agentic coding CLIs — Claude Code, Codex CLI, Gemini CLI. `autocode` is not trying to compete. It exists for two reasons:
+- An agent loop on a stable, cache-friendly prompt with a transcript that follows Claude Code's
+  grammar (`⏺ Read(src/app.ts)` / `⎿  Read 120 lines (ctrl+o to expand)`, collapsed Bash output,
+  numbered diffs, `Explore(…)` subagent rows, a transient status line, an end-of-turn line).
+- Five providers behind one router: Anthropic, OpenAI (Responses API), Google Gemini, xAI and
+  OpenRouter, with thinking/effort armed per model and streaming everywhere.
+- Large-codebase navigation: a tree-sitter code index (12 grammars) behind `search_entity`,
+  `traverse_graph` and `retrieve_entity`, a PageRank repo map sized to the context window, a
+  per-request "likely relevant" slice, and a `Localize` subagent for "which code do you mean".
+- A production workflow: typecheck/lint/test stages after edits, failure triage over the import
+  graph, an independent Review subagent, plan-then-approve, `/commit`, worktrees, Agent Skills,
+  Claude-Code-shaped hooks, MCP (stdio and Streamable HTTP), auto memory and path-scoped rules.
+- Safety in layers: a shell-command classifier (allow / confirm / block), fenced system zones,
+  allow/ask/deny permission rules, a trust gate for repo-supplied automation, a reviewer model
+  in auto mode, and an optional OS sandbox.
 
-1. **Bundled with Automax** — Automax is an agentic super-application that needs a sandboxed coding agent. Raw terminal access for a workspace-automation agent is unsafe. `autocode` is the safer default.
-2. **Learning project** — built in the open so other developers can see how a small coding CLI is put together.
-
-## Install (once published)
+## Install from source
 
 ```sh
-npm i -g @automax/autocode
-autocode      # or: acv1
-```
-
-Both `autocode` and `acv1` are installed. They run the same binary; `acv1` (short for "AutoCode v1") is the short-and-pinned form so future major versions can ship alongside as `acv2`, `acv3`, etc.
-
-## Install from source (dev)
-
-```sh
-git clone https://github.com/BVRAI/AutoCode.git
+git clone https://github.com/BVRAI/AutoCode.git autocode
 cd autocode
 npm install
 npm run build
 npm link        # adds `autocode` and `acv1` to your PATH
-cd ~            # or any other project
-acv1            # launches the REPL against the current directory
+cd ~/some/project
+autocode
 ```
 
-To uninstall later: `npm unlink -g @automax/autocode`.
+Node 22 or newer. `npm unlink -g @automax/autocode` removes the links.
 
 ## Auth
 
-`autocode` runs in one of two modes (auto-detected):
+Two modes, auto-detected:
 
-- **Standalone (BYOK)** — set one of `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `OPENAI_API_KEY`, or `OPENROUTER_API_KEY` in your environment (or in a `.env` file in the cwd), or write it to `~/.autocode/config.json`.
-- **Automax-managed** — if `AUTOMAX_PROXY_TOKEN` is set (Automax sets this when it launches `autocode` for you), traffic routes through `https://automax-proxy.fly.dev` and your Firebase identity authenticates the call. No keys needed. The proxy URL can be overridden with `AUTOMAX_PROXY_URL` (intended for self-hosted forks; the default URL is Automax-specific and unavailable to non-Automax subscribers).
+- **Standalone (BYOK)** — set `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`,
+  `XAI_API_KEY` or `OPENROUTER_API_KEY` in the environment or a `.env` in the working directory,
+  or store keys in the OS keyring with `/keys`.
+- **Automax-managed** — when `AUTOMAX_PROXY_TOKEN` is set (Automax sets it when it launches the
+  engine), traffic goes through the BVRAI proxy and no keys are needed. `AUTOMAX_PROXY_URL`
+  overrides the proxy for self-hosted forks.
 
-A `.env` file in the directory you launch `autocode` from is loaded on startup. Existing env vars always win, so you can override a `.env` value by exporting it explicitly.
+## Providers and defaults
 
-## Providers + defaults
-
-| `--provider` | Default model | Env var (BYOK) |
+| `--provider` | Default model | Key |
 | --- | --- | --- |
-| `anthropic` (default) | `claude-opus-4-7` | `ANTHROPIC_API_KEY` |
-| `xai` | `grok-code-fast-1` | `XAI_API_KEY` |
+| `anthropic` | `claude-opus-4-7` | `ANTHROPIC_API_KEY` |
 | `openai` | `gpt-5.1` | `OPENAI_API_KEY` |
+| `google` | `gemini-2.5-pro` | `GOOGLE_API_KEY` |
+| `xai` | `grok-code-fast-1` | `XAI_API_KEY` |
 | `openrouter` | `anthropic/claude-opus-4-7` | `OPENROUTER_API_KEY` |
-| `google` | _(deferred — different API shape)_ | _(n/a)_ |
 
-Override the model with `--model <name>` or `/model <provider> <name>` inside the REPL.
+`--model <name>` or `/model <provider> <name>` switches; `--effort low|medium|high|max|off` or
+`/effort` sets how hard the model thinks (per model, remembered in config).
 
-## MCP servers
+## Running
 
-autocode supports the [Model Context Protocol](https://modelcontextprotocol.io). Configure servers in `~/.autocode/config.json`:
-
-```json
-{
-  "apiKeys": { "xai": "xai-..." },
-  "mcpServers": {
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/project"]
-    },
-    "git": {
-      "command": "uvx",
-      "args": ["mcp-server-git", "--repository", "/path/to/repo"]
-    }
-  }
-}
+```sh
+autocode                                  # interactive, current directory
+autocode --project-root ../other --mode autocode
+autocode -p "add a --verbose flag"        # headless: one task, exit
+autocode --worktree feature-x             # work in .autocode/worktrees/feature-x
+autocode --server                         # JSON-RPC 2.0 over stdio for a host application
 ```
 
-On launch, autocode connects to each server, discovers its tools, and exposes them to the LLM as `mcp__<server>__<tool>`. A 5-second timeout per server keeps a misconfigured one from blocking startup; failed servers print a warning and are skipped. Use `/mcp` inside the REPL to see what's connected.
+### Modes
 
-The config shape matches Claude Code's — you can copy/paste server entries between tools.
+| Mode | Behavior |
+| --- | --- |
+| `planning` | Read-only. The agent investigates and writes a plan; a plan is saved under `.autocode/plans/` and offered for approval. |
+| `default` | The agent works; each edit and shell command is shown for approval ("Yes, and don't ask again for …" scopes). |
+| `autocode` | Auto-apply. Risky shell commands are judged by a cheap reviewer model first; only what it will not vouch for reaches you. |
+| `admin` | Auto-apply framed for non-code work (file shuffling, scripts, spreadsheets); the verify loop is skipped. |
 
-## Local commands
+`Shift+Tab` cycles planning → default → autocode. `admin` is opt-in (`/mode admin`, `--mode admin`).
+`sights` is a locked-down website-builder mode used by Automax (CLI only).
 
-Inside the `autocode>` prompt:
+### The app-server protocol
 
-```
-/help              Show available commands
-/status            Show session id, project root, model
-/proxy             Verify the live BVRAI proxy connection
-/cwd               Show project root
-/cwd <path>        Change project root
-/model             Show current model
-/model <provider> <name>   Switch provider/model
-/stop              Cancel current task
-/exit              Close autocode
-```
+`autocode --server` reads JSON-RPC requests line by line on stdin and writes responses and
+notifications on stdout. Methods: `initialize`, `session.new`, `session.resume`, `session.info`,
+`session.setMode`, `session.command` (clear, compact, undo, effort, model, refresh, memory,
+status), `turn.submit`, `turn.cancel`, `respond`, `shutdown`. Notifications: `server.ready`,
+`session.ready`, `turn.started|completed|failed|cancelled`, `item.started|updated|completed`
+(agent_message, reasoning, tool_call, file_change, user_message, note),
+`request.approval|confirm|choose|ask` (answer with `respond`), `status`, `usage`, `log`. The types
+live in `src/server/protocol.ts`; Automax's C# client is `AutoCode.Engine/Backends/TsHarnessBackend.cs`.
 
-Plain text is sent to the agent.
+## Commands
 
-## Workflow modes
-
-Autocode runs in one of four modes. The first three are for code work; the fourth (`admin`) is for general computer admin (file ops, scripts, batch operations).
-
-| Mode | Behavior | How to enter |
-|---|---|---|
-| `planning` | Read-only. Agent investigates and writes a plan; no edits or shell commands. | `/mode planning` or `--plan-mode` |
-| `default` | Agent works; each file edit and shell command is shown for approval. | default on launch; `/mode default` |
-| `autocode` | Auto-apply. Agent edits files and runs shell commands without prompting. | `/mode autocode` |
-| `admin` | Auto-apply, framed for **non-code tasks** (file shuffling, script running, Excel/CSV updates). Verify-loop is skipped (no `npm test` after renaming a CSV). | `/mode admin` or `--mode admin` |
-
-`Shift+Tab` cycles `planning → default → autocode → planning`. **Admin mode is opt-in** — it's not in the cycle, so it doesn't crowd the discoverable UI for new users. Reach it via `/mode admin` in-session, or `--mode admin` on the CLI (which is how Automax V6 routes admin tasks).
-
-### Customizing admin mode for your profession
-
-Admin mode is intentionally a clean template — the same `run_shell` + file-op tools every other mode has, just framed for results-not-process work. To make it domain-aware (law firm records, accounting workflows, your particular MLS export format, etc.), use the existing **skills** and **plugins** infrastructure — no code change to autocode needed:
-
-- **Skills** live in `~/.autocode/skills/<name>.md` (user-wide) or `<project>/.autocode/skills/<name>.md` (per-project). Each skill is a markdown file with frontmatter; the agent loads its body on demand via the `use_skill` tool when the task references the skill's domain.
-- **Plugins** live in `~/.autocode/plugins/<name>/` and bundle skills + event hooks together. Drop a directory in, it's picked up.
-
-Example: a law firm with a daily records-audit workflow could drop `~/.autocode/skills/records-audit.md` describing its DB schema + naming conventions, plus a `pre_tool` hook that gates anything touching `client_records/`. Combine with `autocode --mode admin --project-root ~/LawFirm -p "run today's records audit"` and you have a domain-specialized admin agent without forking autocode.
+`/help` `/status` `/cost` `/diff` `/model` `/effort` `/mode` `/undo` `/trash` `/restore` `/clear`
+`/compact` `/commit [hint]` `/init` `/hooks` `/memory` `/mcp` `/plugins` `/keys` `/auth` `/login`
+`/proxy` `/cwd` `/ui` `/spinner` `/computer-use` `/refresh` `/update` `/reflect` `/stop` `/exit`,
+plus `/<skill-name> …` for any installed skill. `@path` attaches a file, folder, image or PDF;
+`!` runs a shell command; `Ctrl+O` expands the transcript, `Ctrl+T` shows the todo tray.
 
 ## Tools
 
-The agent has access to five tools, all scoped to the project root:
+File and search: `read_file` (line-based), `edit_file`, `write_file`, `create_directory`,
+`delete_path`, `list_directory`, `glob`, `grep`. Code navigation: `find_symbol`, `file_deps`,
+`search_entity`, `traverse_graph`, `retrieve_entity`. Work: `run_shell`, `task` (Explore,
+Localize, Review and ComputerUse subagents), `todo_write`, `ask_user`, `use_skill`, `save_memory`,
+`tool_search` (loads optional tools on demand past 30 registered tools). Web: `web_fetch`,
+`web_search`, `open_in_browser`. Computer use: `capture_screenshot`, `computer_use_task` and the
+host bridge, when enabled. MCP servers add `mcp__<server>__<tool>`.
 
-| Tool | Purpose |
+## Safety
+
+- **Classifier:** every shell command is `allow`, `confirm` or `block`; destructive patterns
+  (`rm -rf /`, `format`, `diskpart`, …) and destructive commands aimed outside the project or at
+  protected zones are blocked outright.
+- **Permission rules** (`permissions` in config; `.autocode/permissions.json` or
+  `.claude/settings.json` in a trusted project): `allow` / `ask` / `deny` lists of
+  `Tool(prefix *)` matchers, evaluated before the mode gate; deny wins.
+- **Trust gate:** hooks, MCP servers, permission rules and `verify:` directives shipped inside a
+  repository run only after a one-time yes for that folder (`AUTOCODE_TRUST_ALL=1` for automation).
+- **Auto-mode reviewer:** in `autocode`/`admin` mode a `confirm`-class command is judged by the
+  provider's cheap tier (command, flag and your request — never tool output) before you are asked.
+- **Sandbox (optional):** `sandbox: { "enabled": true, "allowedDomains": ["github.com"],
+  "allowWrite": ["."], "denyRead": ["~/.ssh"] }` wraps shell commands in Anthropic's
+  `@anthropic-ai/sandbox-runtime` (install it separately); network is denied by default.
+- **Checkpoints:** every edit is snapshotted; `/undo` rewinds a step or a turn, deletes go to a
+  trash you can `/restore`.
+
+## Project configuration
+
+| Where | What |
 | --- | --- |
-| `list_directory` | List files and directories |
-| `read_file` | Read a text file (with offset/length) |
-| `edit_file` | Exact-match `old_text` → `new_text` replacement |
-| `write_file` | Create a new file or rewrite an existing one |
-| `run_shell` | Run a shell command under the safety policy |
+| `AUTOCODE.md`, `AGENTS.md`, `master.md` | Instructions loaded into the prompt; `@path` imports supported. `/init` writes a starter with a documentation map. |
+| `.autocode/rules/*.md`, `.claude/rules/*.md` | Rules; with `paths:` frontmatter they load only when matching files are touched. |
+| `.autocode/skills/<name>/SKILL.md`, `.agents/skills`, `.claude/skills` | Agent Skills (project and home); resources alongside. |
+| `.autocode/hooks.json`, `.claude/settings.json` `hooks` | Hooks on Claude Code's contract (13 events, JSON on stdin, exit 2 blocks). |
+| `.mcp.json`, config `mcpServers` | MCP servers (stdio `command` or Streamable HTTP `url`); project and plugin servers are approved once per project. |
+| `.autocode/permissions.json` | Permission rules (see Safety). |
+| `.autocode/plans/`, `.autocode/worktrees/` | Plan files and worktrees the harness creates. |
+| `~/.autocode/plugins/<name>/` | Plugins: `plugin.json`, `skills/`, `mcp.json`, hooks. |
 
-Shell commands are classified as **allow**, **confirm**, or **block**. Destructive patterns (`rm -rf /`, `format`, `diskpart`, etc.) are hard-blocked. Risky-but-sometimes-valid patterns (`git push --force`, `git reset --hard`) require explicit user confirmation.
+User config lives in `~/.autocode/config.json` (`AUTOCODE_CONFIG_DIR` overrides): providers,
+`effort`, `permissions`, `sandbox`, `autoMode`, `review`, `verifyCommand`, `autoVerify`, `hooks`,
+`mcpServers`, `webTools`, `ui`, `spinner`, `autoUpdate`.
 
-## Data storage
+## Data
 
-Session transcripts and tool logs are written under:
-
-- `%LocalAppData%\autocode\sessions\{sessionId}\` on Windows
-- `~/.local/share/autocode/sessions/{sessionId}/` on Linux/macOS
-
-Override with `AUTOCODE_DATA_DIR`.
-
-`autocode` does **not** write metadata into your project directory by default.
+Sessions, checkpoints, the code index cache and auto memory live under the data directory —
+`%LocalAppData%\autocode` on Windows, `~/.local/share/autocode` elsewhere (`AUTOCODE_DATA_DIR`
+overrides). Nothing is written into the project except what you ask for (`.autocode/plans`,
+`.autocode/worktrees`, `/init`).
 
 ## Development
 
 ```sh
 npm install
 npm run build
-node dist/cli.js
+npm test                 # unit tests (vitest)
+npm run test:e2e         # console scenarios through a real ConPTY (or an emulated terminal)
+npm run tty -- --scenario basic --cols 100 --rows 30   # print the screens of one scenario
+node scripts/bundle.mjs --out ../bundle                # self-contained harness for Automax
 ```
 
-Tests:
+`AUTOCODE_FAKE_LLM=<script.json>` replaces every provider with a scripted model so a whole session
+runs without an API call; the e2e scenarios in `test/e2e/scenarios/` use it. Useful switches:
+`AUTOCODE_TRACE_LOG=<file>` (timing trace), `AUTOCODE_NO_INDEX=1`, `AUTOCODE_NO_REVIEW=1`,
+`AUTOCODE_NO_CHECK_STAGES=1`, `AUTOCODE_REVIEW=auto|off`, `AUTOCODE_AUTO_JUDGE=on|off`,
+`AUTOCODE_NO_SANDBOX=1`, `AUTOCODE_TTY_EMULATE=100x30`.
 
-```sh
-npm test
-```
+Automax passes `AUTOMAX_THEME`, `AUTOMAX_LOCALE`, `AUTOMAX_EFFORT`, `AUTOMAX_PROVIDER`,
+`AUTOMAX_MODEL`, `AUTOMAX_EVENT_FILE` and the proxy token when it launches the engine.
 
 ## License
 

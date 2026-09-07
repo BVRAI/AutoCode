@@ -4,6 +4,8 @@ import { configDir } from '../util/paths.js';
 import type { EffortSetting } from '../llm/models.js';
 
 import type { HooksConfig } from '../agent/HookRunner.js';
+import type { PermissionRules } from '../safety/PermissionRules.js';
+import type { SandboxConfig } from '../safety/Sandbox.js';
 
 // One MCP server. `command` (+ args/env) spawns a stdio server; `url` (+
 // headers, `${ENV_VAR}` expanded) connects to a Streamable HTTP server —
@@ -48,6 +50,14 @@ export interface AutocodeConfig {
   // Independent review of each turn's diff by a Review subagent before the
   // turn ends ('auto', the default) or 'off'. Never runs in bench mode.
   review?: 'auto' | 'off';
+  // Permission rules, Claude Code's shape: allow / ask / deny lists of
+  // `Tool(prefix *)` matchers evaluated before the mode gate (deny wins).
+  permissions?: PermissionRules;
+  // Opt-in OS sandbox for shell commands (see safety/Sandbox.ts).
+  sandbox?: SandboxConfig;
+  // Auto mode's reviewer tier: a cheap model judges risky commands before
+  // the user is asked (default on; `reviewer: false` asks the user directly).
+  autoMode?: { reviewer?: boolean };
   // Auto-update is **opt-out** — when a newer version is detected at startup
   // (standalone install only; never for the V6-bundled copy or in headless
   // mode or on a prerelease), autocode auto-installs and tells the user to

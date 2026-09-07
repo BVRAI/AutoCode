@@ -1,4 +1,5 @@
 import type { EffortSetting } from '../llm/models.js';
+import type { SandboxConfig } from '../safety/Sandbox.js';
 
 export interface ModelConfig {
   provider: string;
@@ -44,6 +45,9 @@ export interface SessionContext {
   // AUTOMAX_EFFORT, or the per-model default in config). Absent = 'auto',
   // the provider's recommended default for the model. See llm/models.ts.
   effort?: EffortSetting;
+  // Opt-in OS sandbox for `run_shell` (config `sandbox`; see safety/Sandbox.ts).
+  // Absent or `enabled: false` = commands run as today.
+  sandbox?: SandboxConfig;
 }
 
 // Shift+Tab cycle order: default → autocode → planning → default.

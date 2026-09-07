@@ -17,8 +17,20 @@ import { ConfigStore } from '../auth/ConfigStore.js';
 import { HookHub } from './HookHub.js';
 import { collectMcpServers, describeServer } from '../mcp/McpConfig.js';
 import { ProjectState } from '../session/ProjectState.js';
+import { isTrusted } from './Trust.js';
+import { mergeRules, normalizeRules, readProjectRules, type PermissionRules } from '../safety/PermissionRules.js';
 import type { EventEmitter } from '../repl/EventEmitter.js';
 import { NullEventEmitter } from '../repl/EventEmitter.js';
+import { judgePrompt, parseJudgement, type Judgement } from './AutoApprover.js';
+import { benchMode } from './toolAvailability.js';
+import type { AutocodeConfig } from '../auth/ConfigStore.js';
+
+export function autoJudgeEnabled(config: AutocodeConfig, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (benchMode()) return false;
+  if (env.AUTOCODE_AUTO_JUDGE === 'on') return true;
+  if (env.AUTOCODE_AUTO_JUDGE === 'off') return false;
+  return config.autoMode?.reviewer !== false;
+}
 
 export class LiveAgent implements AgentHandler {
   readonly loop: AgentLoop;
@@ -37,7 +49,11 @@ export class LiveAgent implements AgentHandler {
     // Verification settings and hooks: config.json plus the project's own
     // hooks.json and plugin hooks (see agent/HookHub.ts).
     const config = new ConfigStore().load();
-    this.hooks = new HookHub(store.projectRoot, store.sessionId, { config: config.hooks ?? null, renderer: this.renderer });
+    // Repo-supplied hooks, permission rules and MCP servers wait for the
+    // trust gate (agent/Trust.ts); user config always applies.
+    const trusted = isTrusted(store.projectRoot);
+    this.hooks = new HookHub(store.projectRoot, store.sessionId, { config: config.hooks ?? null, renderer: this.renderer, includeProject: trusted, includePlugins: trusted });
+    this.permissions = mergeRules(normalizeRules(config.permissions), trusted ? readProjectRules(store.projectRoot) : null);
     const runner = new SubagentRunner(router, store, this.hooks);
     // Sights mode (Automax V6's locked-down website builder) gets a registry
     // restricted to in-root file ops. The registry is fixed at construction —
@@ -64,8 +80,29 @@ export class LiveAgent implements AgentHandler {
       review: process.env.AUTOCODE_REVIEW === 'auto' ? true : process.env.AUTOCODE_REVIEW === 'off' ? false : config.review !== 'off',
       emitter: opts.emitter ?? new NullEventEmitter(),
       hooks: this.hooks,
+      permissions: this.permissions,
+      // Auto mode's reviewer tier (config `autoMode.reviewer`, default on;
+      // AUTOCODE_AUTO_JUDGE=on|off overrides; never in bench mode, where a
+      // scripted or budgeted run must not spend calls on judgements).
+      judge: autoJudgeEnabled(config) ? (input) => this.judgeCommand(input) : undefined,
     });
   }
+
+  // The session context of the turn in flight — the judge needs the model.
+  private activeCtx: SessionContext | null = null;
+
+  private async judgeCommand(input: { command: string; reason: string; task: string }): Promise<Judgement> {
+    const ctx = this.activeCtx;
+    if (!ctx) return { decision: 'ask', reason: 'no active session' };
+    const { system, user } = judgePrompt({ ...input, projectRoot: ctx.projectRoot });
+    try {
+      return parseJudgement(await this.quickText(ctx, system, user));
+    } catch (e) {
+      return { decision: 'ask', reason: `judge failed: ${e instanceof Error ? e.message : String(e)}` };
+    }
+  }
+
+  private readonly permissions: PermissionRules;
 
   /** Every hook this session has; the CLI fires SessionStart / SessionEnd. */
   readonly hooks: HookHub;
@@ -80,7 +117,8 @@ export class LiveAgent implements AgentHandler {
   // register as optional: past the deferral threshold they load on demand
   // through `tool_search`.
   async initializeMcp(mcpServers: Record<string, import('../auth/ConfigStore.js').McpServerConfig> | undefined): Promise<void> {
-    const entries = collectMcpServers(this.projectRoot, mcpServers);
+    const trusted = isTrusted(this.projectRoot);
+    const entries = collectMcpServers(this.projectRoot, mcpServers).filter((e) => e.source === 'config' || trusted);
     if (entries.length === 0) return;
     const state = new ProjectState(this.projectRoot);
     const approved: Record<string, import('../auth/ConfigStore.js').McpServerConfig> = {};
@@ -160,6 +198,7 @@ export class LiveAgent implements AgentHandler {
     input: string | import('../llm/types.js').ContentBlock[],
     ctx: SessionContext,
   ): Promise<void> {
+    this.activeCtx = ctx;
     try {
       await this.loop.submit(input, ctx);
     } catch (e) {

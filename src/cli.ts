@@ -21,9 +21,10 @@ import { ConfigStore } from './auth/ConfigStore.js';
 import { dataDir, projectRootDefault, sessionsDir } from './util/paths.js';
 import { indexEnabled, startIndex } from './index/IndexManager.js';
 import { createWorktree } from './agent/GitWorkflow.js';
+import { isTrusted, markTrusted, trustPrompt, trustSensitiveContent } from './agent/Trust.js';
 import { loadDotEnv } from './util/dotenv.js';
 import { loadCatalogForStartup, refreshCatalogInBackground } from './llm/CatalogClient.js';
-import { setProxyCatalog, findModel, getKnownModels, parseEffortSetting, type EffortSetting } from './llm/models.js';
+import { setProxyCatalog, parseEffortSetting, defaultModelFor, type EffortSetting } from './llm/models.js';
 import type { AutocodeConfig } from './auth/ConfigStore.js';
 import { setProxyRates } from './util/pricing.js';
 import { shouldRunFirstRunWizard, BYOK_PROVIDERS, BVRAI_SIGNUP_URL } from './auth/firstRun.js';
@@ -74,6 +75,7 @@ program
       continue?: boolean;
       update?: boolean;
       automax?: boolean;
+      server?: boolean;
       temperature?: string;
       maxCost?: string;
       maxIterations?: string;
@@ -260,6 +262,7 @@ program
       // PromptBuilder.userLanguageLine). Standalone runs leave it unset.
       locale: process.env.AUTOMAX_LOCALE?.trim() || undefined,
       effort: resolveEffortSetting(opts.effort, startupCfg, provider, model),
+      sandbox: startupCfg.sandbox,
     };
 
     // Build the code index in the background so the navigation tools and the
@@ -384,6 +387,19 @@ program
         }
       }
     }
+    // Trust gate (Phase 5.4): hooks, MCP servers, permission rules and verify
+    // directives shipped inside the repo run only after a one-time yes.
+    if (!headless && !isTrusted(root)) {
+      const found = trustSensitiveContent(root);
+      if (found.length > 0) {
+        try {
+          if (await prompter.confirm(trustPrompt(root, found))) markTrusted(root);
+          else renderer.dim('(repo automation stays off for this folder — the question returns next session)');
+        } catch {
+          /* no interactive prompter */
+        }
+      }
+    }
     const store = new TranscriptStore(ctx);
     const checkpoints = new CheckpointStore(ctx.sessionDir);
     checkpoints.sweep();
@@ -490,44 +506,6 @@ function resolveEffortSetting(
     parseEffortSetting(cfg.defaultEffort) ??
     undefined
   );
-}
-
-function defaultModelFor(provider: string): string {
-  // Prefer the catalog when available so V6 users get a default that
-  // actually exists at the proxy (the hardcoded list below drifts when the
-  // proxy adds new models or retires old ones). When picking from the
-  // catalog, honor the hardcoded preference first if it's present; else
-  // fall back to the first listed model for that provider.
-  const hardcoded = hardcodedDefaultModelFor(provider);
-  if (findModel(provider, hardcoded)) return hardcoded;
-  const catalogModel = firstCatalogModelFor(provider);
-  if (catalogModel) return catalogModel;
-  return hardcoded;
-}
-
-function hardcodedDefaultModelFor(provider: string): string {
-  switch (provider) {
-    case 'anthropic':
-      return 'claude-opus-4-7';
-    case 'xai':
-      return 'grok-code-fast-1';
-    case 'openai':
-      return 'gpt-5.1';
-    case 'google':
-      return 'gemini-2.5-pro';
-    case 'openrouter':
-      return 'anthropic/claude-opus-4-7';
-    default:
-      return 'claude-opus-4-7';
-  }
-}
-
-// First catalog entry for the given provider, or null.
-function firstCatalogModelFor(provider: string): string | null {
-  for (const m of getKnownModels()) {
-    if (m.provider === provider) return m.model;
-  }
-  return null;
 }
 
 function envKeyFor(provider: string): string {

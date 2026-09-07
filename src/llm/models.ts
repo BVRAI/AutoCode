@@ -191,6 +191,36 @@ export function summarizerModelFor(provider: string, sessionModel: string): stri
   return CHEAP_SUMMARIZER[provider] ?? sessionModel;
 }
 
+// The model a fresh session gets for a provider. Prefer the catalog when it
+// is loaded so proxy users get a model that exists there: the hardcoded
+// preference when the catalog lists it, else the catalog's first entry for
+// the provider, else the hardcoded name.
+export function defaultModelFor(provider: string): string {
+  const hardcoded = hardcodedDefaultModelFor(provider);
+  if (findModel(provider, hardcoded)) return hardcoded;
+  for (const m of getKnownModels()) {
+    if (m.provider === provider) return m.model;
+  }
+  return hardcoded;
+}
+
+function hardcodedDefaultModelFor(provider: string): string {
+  switch (provider) {
+    case 'anthropic':
+      return 'claude-opus-4-7';
+    case 'xai':
+      return 'grok-code-fast-1';
+    case 'openai':
+      return 'gpt-5.1';
+    case 'google':
+      return 'gemini-2.5-pro';
+    case 'openrouter':
+      return 'anthropic/claude-opus-4-7';
+    default:
+      return 'claude-opus-4-7';
+  }
+}
+
 // Default extended-thinking budget when the catalog doesn't recommend one.
 // Anthropic's floor is 1024; 8K is enough for multi-step code reasoning
 // without dominating the output budget.

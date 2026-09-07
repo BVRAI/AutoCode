@@ -38,6 +38,11 @@ export interface ToolExecutionContext {
   // Ask the user a multiple-choice question — resolves with the selected
   // option indices. Absent when there is no interactive user (headless).
   choose?: (question: string, options: string[], multiSelect: boolean) => Promise<number[]>;
+  // Auto mode's reviewer tier (Phase 5.4): judges a shell command the safety
+  // classifier flagged as `confirm` before the user is asked. 'allow' runs
+  // it without a prompt; 'ask' falls through to `confirm`. Set by AgentLoop
+  // in autocode/admin mode only; absent elsewhere.
+  judge?: (input: { command: string; reason: string }) => Promise<{ decision: 'allow' | 'ask'; reason: string }>;
 }
 
 export type JsonSchema = {

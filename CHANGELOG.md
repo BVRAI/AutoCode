@@ -21,6 +21,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   composer draft survives), instead of leaving stale rows behind.
 
 ### Added
+- App-server protocol (Phase 5): `autocode --server` speaks JSON-RPC 2.0 over
+  stdio — methods `initialize`, `session.new`, `session.resume`,
+  `session.info`, `session.setMode`, `session.command`, `turn.submit`,
+  `turn.cancel`, `respond`, `shutdown`; notifications `server.ready`,
+  `session.ready`, `turn.started|completed|failed|cancelled`,
+  `item.started|updated|completed` (agent_message, reasoning, tool_call,
+  file_change, user_message, note), `request.approval|confirm|choose|ask`
+  (answered with `respond`), `status`, `usage`, `log`. The same LiveAgent the
+  terminal uses sits behind it, so Automax's `TsHarnessBackend` (v6) and the
+  console cannot drift. `turn.completed` is sent only after the turn's
+  verification and review tail has settled.
+- Permission rules in Claude Code's shape: `permissions.allow / ask / deny`
+  lists of `Tool(prefix *)` matchers in config and, for trusted projects, in
+  `.autocode/permissions.json` or `.claude/settings.json`; deny wins, allow
+  skips the default-mode approval, ask forces it.
+- Trust gate: a folder's hooks, MCP servers, permission rules and `verify:`
+  directives run only after a one-time yes, remembered per project
+  (`AUTOCODE_TRUST_ALL=1` for automation).
+- Auto-mode reviewer tier: in autocode/admin mode a `confirm`-class shell
+  command is judged by the provider's cheap tier (command, flag and request —
+  never tool output) and runs without a prompt when cleared; otherwise the
+  user is asked as before (`autoMode.reviewer: false` in config or
+  `AUTOCODE_AUTO_JUDGE=off`; never in bench mode).
+- Optional OS sandbox for `run_shell` through Anthropic's open-source
+  `@anthropic-ai/sandbox-runtime` (Seatbelt / bubblewrap / Windows sandbox
+  user): `sandbox: { "enabled": true, "allowedDomains": [...],
+  "allowWrite": ["."], "denyRead": ["~/.ssh"] }` in config; the package is
+  installed separately, and a missing runtime is reported once
+  (`AUTOCODE_NO_SANDBOX=1` disables).
+- Bundling and CI: `node scripts/bundle.mjs --out <dir>` produces a
+  self-contained harness (node runtime, dist, production modules, launchers)
+  that Automax's Release build drops under `Resources/autocode/`; GitHub
+  Actions run typecheck, build, unit and e2e (emulated terminal on Linux,
+  Windows and macOS; ConPTY on Windows) with an on-demand Aider-30 job.
 - Verification pipeline (Phase 4): typecheck and lint stages detected from the
   project (tsc, eslint, ruff, mypy, go vet, cargo check) run before the test
   command, scoped to the changed files where the tool allows; a failing stage
