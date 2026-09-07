@@ -240,11 +240,17 @@ export class TerminalMode {
       },
       onInterrupt: () => this.handleInterrupt(),
       onExit: () => this.exitInk(),
-      onModelChange: (provider, model) => {
+      onModelChange: (provider, model, opts) => {
         this.ctx.model = { provider, model };
         store.setModel(provider, model);
-        this.renderer.dim(`model → ${provider} / ${model}`);
+        if (opts?.asDefault) {
+          this.rememberModel(provider, model);
+          this.renderer.dim(`model → ${provider} / ${model} · saved as the launch default`);
+        } else {
+          this.renderer.dim(`model → ${provider} / ${model} (this session)`);
+        }
       },
+      readDefaultModel: () => this.storedDefaultModel(),
       onSaveKey: async (provider, apiKey) => {
         const { saveByokKey } = await import('../auth/keyStatus.js');
         await saveByokKey(provider, apiKey);
@@ -1090,26 +1096,57 @@ export class TerminalMode {
       this.printModelList();
       return;
     }
-    if (args.length < 2) {
-      this.renderer.error('usage: /model <provider> <model>');
+    // `/model default` saves the current model as the launch default;
+    // `/model default <provider> <model>` saves that one (and switches to it).
+    if (args[0]!.toLowerCase() === 'default') {
+      if (args.length === 1) {
+        this.rememberModel(this.ctx.model.provider, this.ctx.model.model);
+        this.renderer.info(`launch default → ${this.ctx.model.provider} / ${this.ctx.model.model}`);
+        return;
+      }
+      if (args.length < 3) {
+        this.renderer.error('usage: /model default [<provider> <model>]');
+        return;
+      }
+      this.ctx.model = { provider: args[1]!, model: args.slice(2).join(' ') };
+      this.bridgeStore?.setModel(this.ctx.model.provider, this.ctx.model.model);
+      this.rememberModel(this.ctx.model.provider, this.ctx.model.model);
+      this.renderer.info(`model → ${this.ctx.model.provider} / ${this.ctx.model.model} · saved as the launch default`);
       return;
     }
+    if (args.length < 2) {
+      this.renderer.error('usage: /model <provider> <model> · /model default [<provider> <model>] · /model refresh');
+      return;
+    }
+    // A plain switch is for this session; the launch default only moves when
+    // asked (tab in the picker, /model default), so trying a model never
+    // silently changes what the next session opens on.
     this.ctx.model = { provider: args[0]!, model: args.slice(1).join(' ') };
     this.bridgeStore?.setModel(this.ctx.model.provider, this.ctx.model.model);
-    // Persist the choice as the new launch default. Next plain `acv1`
-    // opens with this provider/model instead of falling back to xai.
-    // Silent — matches gh/gcloud's "last-used is the default" UX.
+    this.renderer.info(`model → ${this.ctx.model.provider} / ${this.ctx.model.model} (this session · /model default to keep it)`);
+  }
+
+  /** Save a provider/model as what the next launch opens on. */
+  private rememberModel(provider: string, model: string): void {
     try {
       const store = new ConfigStore();
       const cfg = store.load();
-      cfg.defaultProvider = this.ctx.model.provider;
-      cfg.defaultModel = this.ctx.model.model;
+      cfg.defaultProvider = provider;
+      cfg.defaultModel = model;
       store.save(cfg);
     } catch {
       /* persistence failure is non-fatal — the switch still applies for
          this session, just won't be remembered next launch */
     }
-    this.renderer.info(`model → ${this.ctx.model.provider} / ${this.ctx.model.model}`);
+  }
+
+  private storedDefaultModel(): { provider: string; model: string } | null {
+    try {
+      const cfg = new ConfigStore().load();
+      return cfg.defaultProvider && cfg.defaultModel ? { provider: cfg.defaultProvider, model: cfg.defaultModel } : null;
+    } catch {
+      return null;
+    }
   }
 
   // Sessions without an Automax catalog list what the providers publish
@@ -1150,7 +1187,9 @@ export class TerminalMode {
       }
     }
     const sourceTag = `${modelCatalogDetail()} · ${models.length} models`;
+    const stored = this.storedDefaultModel();
     this.renderer.info(`Current: ${currentProvider} / ${currentModel}`);
+    this.renderer.info(`Launch default: ${stored ? `${stored.provider} / ${stored.model}` : '(none saved — /model default)'}`);
     this.renderer.info('');
     this.renderer.info(`Available models (${sourceTag}):`);
     let lastProvider = '';

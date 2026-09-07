@@ -69,7 +69,8 @@ is billed at the provider's dearest known rate so cost caps still apply.
 | `xai` | `grok-build-0.1` | `XAI_API_KEY` |
 | `openrouter` | `anthropic/claude-opus-4-7` | `OPENROUTER_API_KEY` |
 
-`--model <name>` or `/model <provider> <name>` switches; `--effort low|medium|high|max|off` or
+`--model <name>` or `/model <provider> <name>` switches for the session; Tab in the `/model`
+picker or `/model default [<provider> <name>]` saves the launch default; `--effort low|medium|high|max|off` or
 `/effort` sets how hard the model thinks (per model, remembered in config).
 
 ## Running

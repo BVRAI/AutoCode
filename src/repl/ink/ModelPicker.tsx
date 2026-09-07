@@ -40,7 +40,11 @@ export interface ModelPickerProps {
   // Highlight the row matching the currently-active model.
   currentProvider: string;
   currentModel: string;
-  onPick: (m: ModelInfo) => void;
+  // The saved launch default, tagged "★ default" in the list.
+  defaultProvider?: string;
+  defaultModel?: string;
+  // Enter picks for this session; Tab picks and saves it as the launch default.
+  onPick: (m: ModelInfo, opts: { asDefault: boolean }) => void;
   onBack: () => void;    // Esc — pops back to ProviderPicker.
   onCancel: () => void;  // Reserved; not currently bound. Kept on the
                          // interface so a future "double-Esc to close"
@@ -51,6 +55,8 @@ export function ModelPicker({
   provider,
   currentProvider,
   currentModel,
+  defaultProvider,
+  defaultModel,
   onPick,
   onBack,
 }: ModelPickerProps): React.JSX.Element {
@@ -93,7 +99,12 @@ export function ModelPicker({
     }
     if (key.return) {
       const m = visibleModels[selectedIdx];
-      if (m) onPick(m);
+      if (m) onPick(m, { asDefault: false });
+      return;
+    }
+    if (key.tab) {
+      const m = visibleModels[selectedIdx];
+      if (m) onPick(m, { asDefault: true });
       return;
     }
     if (key.upArrow) {
@@ -146,7 +157,7 @@ export function ModelPicker({
           <Text color={t.teal} bold>{provider.toUpperCase()} models</Text>
         </Box>
         <Text color={t.inkFaint} wrap="truncate-end">
-          {`  ${countText} · type to filter · ↑↓ pick · pgup/pgdn page · enter confirm · esc back`}
+          {`  ${countText} · type to filter · ↑↓ pick · enter use now · tab set as default · esc back`}
         </Text>
       </Box>
       <Text color={t.inkFaint} wrap="truncate-end">
@@ -166,6 +177,7 @@ export function ModelPicker({
             const selected = i === selectedIdx;
             const isCurrent =
               m.provider === currentProvider && currentModel.startsWith(m.model);
+            const isDefault = m.provider === defaultProvider && m.model === defaultModel;
             const marker = selected ? '▸' : ' ';
             const labelColor = selected ? t.teal : isCurrent ? t.add : t.ink;
             const price = m.priceUnknown ? 'price unknown' : `$${fmt(m.inputPerM)}/M in · $${fmt(m.outputPerM)}/M out`;
@@ -178,11 +190,13 @@ export function ModelPicker({
                     {m.label}
                   </Text>
                   {isCurrent && <Text color={t.add}>  ← current</Text>}
+                  {isDefault && !isCurrent && <Text color={t.warn}>  ★ default</Text>}
                 </Box>
                 <Box flexShrink={0}>
                   <Text color={t.inkDim}>{price}</Text>
                 </Box>
                 {badges.length > 0 && <Text color={t.inkDim} wrap="truncate-end">  · {badges.join(' · ')}</Text>}
+                {isDefault && isCurrent && <Text color={t.warn}>  · ★ default</Text>}
                 {m.notes && <Text color={t.inkFaint} wrap="truncate-end">  · {m.notes}</Text>}
               </Box>
             );

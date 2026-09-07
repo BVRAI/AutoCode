@@ -68,8 +68,11 @@ export interface InkAppProps {
   onCycleMode: () => void;
   onInterrupt: () => void;
   onExit: () => void;
-  // Fired when the user picks a new model from the picker overlay.
-  onModelChange: (provider: string, model: string) => void;
+  // Fired when the user picks a new model from the picker overlay. `asDefault`
+  // (tab in the picker) also saves it as what the next launch opens on.
+  onModelChange: (provider: string, model: string, opts?: { asDefault?: boolean }) => void;
+  // The saved launch default, so the picker can mark it.
+  readDefaultModel?: () => { provider: string; model: string } | null;
   // BYOK key-manager overlay actions (the /keys flow).
   onSaveKey: (provider: string, apiKey: string) => Promise<void>;
   onRemoveKey: (provider: string) => Promise<void>;
@@ -274,17 +277,18 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
     }
 
     if (key.ctrl && ch === 'c') {
-      // Typed text? Just clear it; never exit when there's input on the line.
-      if (input.length > 0) {
-        setInput('');
-        setCursor(0);
-        setExitArmed(false);
-        return;
-      }
-      // Empty input — first Ctrl+C arms exit, second confirms.
+      // Claude Code's rule: a second Ctrl+C within three seconds exits. The
+      // first press also does the useful thing for the moment — stops a
+      // running turn, clears typed text — so a quick double press always
+      // closes the session instead of depending on what the line held.
       if (exitArmed) {
         props.onExit();
         return;
+      }
+      if (state.busy) props.onInterrupt();
+      if (input.length > 0) {
+        setInput('');
+        setCursor(0);
       }
       setExitArmed(true);
       // Disarm after 3s if no second press.
@@ -512,13 +516,16 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
       />
     );
   } else if (state.overlay?.kind === 'model-models') {
+    const savedDefault = props.readDefaultModel?.() ?? null;
     overlay = (
       <ModelPicker
         provider={state.overlay.provider}
         currentProvider={liveProvider}
         currentModel={liveModel}
-        onPick={(m) => {
-          props.onModelChange(m.provider, m.model);
+        defaultProvider={savedDefault?.provider}
+        defaultModel={savedDefault?.model}
+        onPick={(m, opts) => {
+          props.onModelChange(m.provider, m.model, opts);
           props.store.setOverlay(null);
         }}
         onBack={() => props.store.setOverlay({ kind: 'model-provider' })}
