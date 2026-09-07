@@ -57,7 +57,7 @@ export function isChatModelId(provider: DiscoverableProvider, id: string): boole
     case 'xai':
       return id.startsWith('grok');
     case 'google':
-      return id.startsWith('gemini');
+      return id.startsWith('gemini') || id.startsWith('gemma');
     case 'openrouter':
       return true;
   }

@@ -101,6 +101,20 @@ const EXTRA_METADATA: Record<string, ModelMeta> = {
   'o3':       { label: 'o3',       notes: 'reasoning · slow & expensive', thinking: true },
   'o4-mini':  { label: 'o4-mini',  notes: 'reasoning · cheaper', thinking: true },
 
+  // google — Gemini 3 takes thinking_level, 2.5 takes a budget (see thinkingFor);
+  // the flash-lite tiers do not expose a thinking control.
+  'gemini-3.1-pro-preview': { label: 'Gemini 3.1 Pro Preview', notes: 'frontier · 1M context (current default)', thinking: true },
+  'gemini-3.8-flash':       { label: 'Gemini 3.8 Flash',       notes: 'newest flash · fast', thinking: true },
+  'gemini-3.7-flash':       { label: 'Gemini 3.7 Flash',       thinking: true },
+  'gemini-3.6-flash':       { label: 'Gemini 3.6 Flash',       thinking: true },
+  'gemini-3.5-flash':       { label: 'Gemini 3.5 Flash',       thinking: true },
+  'gemini-3.5-flash-lite':  { label: 'Gemini 3.5 Flash Lite',  notes: 'cheap', thinking: true },
+  'gemini-3.1-flash-lite':  { label: 'Gemini 3.1 Flash Lite',  notes: 'cheapest' },
+  'gemini-3-flash-preview': { label: 'Gemini 3 Flash Preview', thinking: true },
+  'gemini-2.5-pro':         { label: 'Gemini 2.5 Pro',         notes: 'prior', thinking: true },
+  'gemini-2.5-flash':       { label: 'Gemini 2.5 Flash',       notes: 'prior', thinking: true },
+  'gemini-2.5-flash-lite':  { label: 'Gemini 2.5 Flash-Lite',  notes: 'prior · cheap' },
+
   // openrouter — the unified `reasoning: { effort }` param reaches these upstreams.
   'anthropic/claude-opus-4-7':  { label: 'OpenRouter → Claude Opus 4.7',     notes: 'frontier via OR', thinking: true },
   'openai/gpt-5.1':              { label: 'OpenRouter → GPT-5.1',             notes: 'frontier via OR', thinking: true },
@@ -280,6 +294,7 @@ const CHEAP_SUMMARIZER: Record<string, string> = {
   anthropic: 'claude-haiku-4-5',
   openai: 'gpt-4.1',
   xai: 'grok-build-0.1',
+  google: 'gemini-3.1-flash-lite',
 };
 
 export function summarizerModelFor(provider: string, sessionModel: string): string {
@@ -308,7 +323,7 @@ function hardcodedDefaultModelFor(provider: string): string {
     case 'openai':
       return 'gpt-5.1';
     case 'google':
-      return 'gemini-2.5-pro';
+      return 'gemini-3.1-pro-preview';
     case 'openrouter':
       return 'anthropic/claude-opus-4-7';
     default:

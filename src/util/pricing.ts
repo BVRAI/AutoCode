@@ -73,6 +73,22 @@ export const RATES: Record<string, Record<string, ModelRate>> = {
     'o3': { inputPerM: 2, outputPerM: 8, cacheReadPerM: 0.5 },
     'o4-mini': { inputPerM: 1.1, outputPerM: 4.4, cacheReadPerM: 0.275 },
   },
+  google: {
+    // Gemini API list prices as the Automax catalog carried them on 2026-09-07
+    // (cached input at 10% of input). The 3.x line has one pro tier
+    // (3.1 Pro Preview) and a flash tier that moves fastest.
+    'gemini-3.1-pro-preview': { inputPerM: 2, outputPerM: 12, cacheReadPerM: 0.2 },
+    'gemini-3.8-flash': { inputPerM: 0.75, outputPerM: 3.75, cacheReadPerM: 0.075 },
+    'gemini-3.7-flash': { inputPerM: 0.75, outputPerM: 3.75, cacheReadPerM: 0.075 },
+    'gemini-3.6-flash': { inputPerM: 1.5, outputPerM: 7.5, cacheReadPerM: 0.15 },
+    'gemini-3.5-flash': { inputPerM: 1.5, outputPerM: 9, cacheReadPerM: 0.15 },
+    'gemini-3.5-flash-lite': { inputPerM: 0.3, outputPerM: 2.5, cacheReadPerM: 0.03 },
+    'gemini-3.1-flash-lite': { inputPerM: 0.25, outputPerM: 1.5, cacheReadPerM: 0.025 },
+    'gemini-3-flash-preview': { inputPerM: 0.5, outputPerM: 3, cacheReadPerM: 0.05 },
+    'gemini-2.5-pro': { inputPerM: 1.25, outputPerM: 10, cacheReadPerM: 0.125 },
+    'gemini-2.5-flash': { inputPerM: 0.3, outputPerM: 2.5, cacheReadPerM: 0.03 },
+    'gemini-2.5-flash-lite': { inputPerM: 0.1, outputPerM: 0.4, cacheReadPerM: 0.01 },
+  },
   openrouter: {
     // Routes to whatever upstream; pricing varies. Use a conservative midrange
     // default if no match. Specific routes resolve via prefix match if user

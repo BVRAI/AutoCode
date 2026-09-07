@@ -18,7 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   windowed in the picker (PgUp/PgDn). The bundled rows caught up too: Claude Fable 5.1/5,
   Opus 5, Sonnet 5, Opus 4.8; GPT-6 Astra, GPT-5.6 Sol/Terra/Luna, GPT-5.5, GPT-5.4 (mini,
   nano), GPT-5.2; Grok 4.6/4.5/4.3/4.20 and Grok Build 0.1 — `grok-code-fast-1` is now an
-  alias of `grok-build-0.1` and bills at $1/$2 per million.
+  alias of `grok-build-0.1` and bills at $1/$2 per million. Google is bundled too (it was
+  missing from the picker altogether): Gemini 3.1 Pro Preview (the new default), the 3.x
+  Flash tiers and the 2.5 family; the live Google list also includes the Gemma models.
 - The inline console now follows Claude Code's transcript grammar: `⏺ Label(arg)`
   tool rows with collapsed `⎿` results ("Read 120 lines (ctrl+o to expand)",
   grouped "Read 3 files", Bash output folded after three lines, "Updated path

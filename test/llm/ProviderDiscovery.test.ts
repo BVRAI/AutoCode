@@ -223,7 +223,7 @@ describe('discoverModels', () => {
 
     const known = getKnownModels();
     const providersInOrder = [...new Set(known.map((m) => m.provider))];
-    expect(providersInOrder).toEqual(['anthropic', 'xai', 'openai', 'openrouter']);
+    expect(providersInOrder).toEqual(['anthropic', 'xai', 'openai', 'google', 'openrouter']);
     expect(known.filter((m) => m.provider === 'xai').map((m) => m.model)).toEqual(['grok-4.6', 'grok-4.20', 'grok-build-0.1']);
     expect(known.find((m) => m.provider === 'anthropic')!.label).toBe('Claude Fable 5.1');
     expect(known.filter((m) => m.provider === 'openai')[0]!.model).toBe('gpt-9-nova');

@@ -65,7 +65,7 @@ is billed at the provider's dearest known rate so cost caps still apply.
 | --- | --- | --- |
 | `anthropic` | `claude-opus-4-7` | `ANTHROPIC_API_KEY` |
 | `openai` | `gpt-5.1` | `OPENAI_API_KEY` |
-| `google` | `gemini-2.5-pro` | `GOOGLE_API_KEY` |
+| `google` | `gemini-3.1-pro-preview` | `GOOGLE_API_KEY` |
 | `xai` | `grok-build-0.1` | `XAI_API_KEY` |
 | `openrouter` | `anthropic/claude-opus-4-7` | `OPENROUTER_API_KEY` |
 
