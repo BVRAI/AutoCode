@@ -21,10 +21,26 @@ export function killTree(child: ChildProcess): void {
   // unrelated process (another harness, a test runner) inherited the number.
   if (child.exitCode !== null || child.signalCode !== null) return;
   if (process.platform === 'win32') {
-    execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, timeout: 5_000 }, () => {
-      // taskkill may already have finished the job or the process may be gone; either way, belt and braces.
+    // Not `taskkill /T`: it treats every process whose ParentProcessId equals
+    // the target as a child, and an orphan keeps the pid of a parent that died,
+    // so a recycled pid makes it kill strangers (a benchmark harness lost
+    // tasks to exactly that). Walk the tree ourselves and only accept a child
+    // created after its parent.
+    const script = [
+      `$root = ${pid}`,
+      '$all = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, CreationDate',
+      '$byId = @{}; foreach ($p in $all) { $byId[[int]$p.ProcessId] = $p }',
+      'function Kill-Tree([int]$id) {',
+      '  $me = $byId[$id]; if ($null -eq $me) { return }',
+      '  foreach ($k in $all) { if ([int]$k.ParentProcessId -eq $id -and [int]$k.ProcessId -ne $id -and $k.CreationDate -ge $me.CreationDate) { Kill-Tree ([int]$k.ProcessId) } }',
+      '  try { Stop-Process -Id $id -Force -ErrorAction Stop } catch {}',
+      '}',
+      'Kill-Tree $root',
+    ].join('; ');
+    execFile('powershell', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script], { windowsHide: true, timeout: 15_000 }, () => {
+      // Whatever the walk managed, the direct child must not survive.
       try {
-        child.kill('SIGKILL');
+        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
       } catch {
         /* already dead */
       }
