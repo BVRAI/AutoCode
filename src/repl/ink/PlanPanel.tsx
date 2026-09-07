@@ -1,7 +1,7 @@
-// PlanPanel — the sticky plan / checklist, docked in the inline live region.
-// Driven by the todo_write list mirrored into state.plan. Defaults to a single
-// collapsed line (low + stable height); ^P expands it. Glyphs fall back to
-// ASCII on plain terminals. Per the Claude Design spec (tui/plan.jsx).
+// PlanPanel — the todo tray above the composer (Claude Code's Ctrl+T
+// checklist). Driven by the todo_write list mirrored into state.plan. Shows a
+// one-line summary by default; Ctrl+T expands up to five tasks. Glyphs fall
+// back to ASCII on plain terminals.
 
 import React from 'react';
 import { Box, Text } from 'ink';
@@ -9,77 +9,61 @@ import type { PlanItem } from './store.js';
 import { useTheme, type Theme } from './theme.js';
 import { glyphs } from './glyphs.js';
 
-function statusGlyph(t: Theme, status: PlanItem['status']): { g: string; c: string } {
+const MAX_ROWS = 5;
+
+function mark(t: Theme, status: PlanItem['status']): { g: string; c: string } {
   const gl = glyphs();
   switch (status) {
     case 'completed':
-      return { g: gl.planDone, c: t.add };
+      return { g: gl.checked, c: t.inkDim };
     case 'in_progress':
-      return { g: gl.planActive, c: t.accent };
+      return { g: gl.unchecked, c: t.accent };
     case 'interrupted':
-      return { g: gl.planInterrupted, c: t.warn };
+      return { g: gl.warn, c: t.warn };
     default:
-      return { g: gl.planPending, c: t.inkFaint };
+      return { g: gl.unchecked, c: t.inkDim };
   }
-}
-
-function bar(t: Theme, pct: number, cells: number): React.JSX.Element {
-  const g = glyphs();
-  const filled = Math.round(cells * Math.max(0, Math.min(1, pct)));
-  return (
-    <Text>
-      <Text color={t.add}>{g.barFull.repeat(filled)}</Text>
-      <Text color={t.ruleStrong}>{g.barEmpty.repeat(cells - filled)}</Text>
-      <Text color={t.inkDim}> {Math.round(pct * 100)}%</Text>
-    </Text>
-  );
 }
 
 export function PlanPanel({ items, collapsed }: { items: PlanItem[]; collapsed: boolean }): React.JSX.Element | null {
   const t = useTheme();
-  const g = glyphs();
   if (items.length === 0) return null;
   const done = items.filter((i) => i.status === 'completed').length;
   const total = items.length;
-  const pct = total ? done / total : 0;
-  const current = items.find((i) => i.status === 'in_progress');
+  const current = items.find((i) => i.status === 'in_progress') ?? items.find((i) => i.status === 'pending');
 
   if (collapsed) {
     return (
       <Box marginTop={1}>
-        <Text color={t.accent}>{g.planActive}</Text>
-        <Text color={t.inkDim}> Plan </Text>
-        <Text color={t.ink}>{done}/{total}</Text>
-        <Text color={t.inkFaint}>{'  ·  '}</Text>
-        <Text color={t.ink}>{current ? current.text : 'all steps complete'}</Text>
-        <Box flexGrow={1} />
-        <Text color={t.inkFaint}>^P</Text>
+        <Text color={t.inkDim}>Todos {done}/{total}</Text>
+        {current && <Text color={t.inkDim}>{'  ·  '}{current.text}</Text>}
+        <Text color={t.inkDim}>{'  (ctrl+t to expand)'}</Text>
       </Box>
     );
   }
 
+  // Show the active item and its neighbours, at most five rows.
+  const activeIdx = Math.max(0, items.findIndex((i) => i.status === 'in_progress'));
+  const start = Math.max(0, Math.min(activeIdx - 1, total - MAX_ROWS));
+  const shown = items.slice(start, start + MAX_ROWS);
   return (
-    <Box flexDirection="column" marginTop={1} borderStyle="single" borderColor={t.ruleStrong} paddingX={1}>
-      <Box>
-        <Text color={t.accent} bold>PLAN</Text>
-        <Text color={t.inkDim}>  {done}/{total} done</Text>
-        <Box flexGrow={1} />
-        {bar(t, pct, 5)}
-        <Text color={t.inkFaint}>  ·  ^P</Text>
-      </Box>
-      {items.map((it, i) => {
-        const { g: gl, c } = statusGlyph(t, it.status);
+    <Box flexDirection="column" marginTop={1}>
+      <Text color={t.inkDim}>Todos {done}/{total}{'  (ctrl+t to collapse)'}</Text>
+      {shown.map((it, i) => {
+        const m = mark(t, it.status);
         const active = it.status === 'in_progress';
-        const textColor = it.status === 'completed' ? t.inkDim : active ? t.ink : it.status === 'interrupted' ? t.warn : t.inkDim;
         return (
-          <Box key={i}>
-            <Text color={c}>{gl} </Text>
-            <Text color={textColor} bold={active} strikethrough={it.status === 'completed'}>
+          <Box key={start + i}>
+            <Text color={m.c}>  {m.g} </Text>
+            <Text color={active ? t.ink : t.inkDim} bold={active} strikethrough={it.status === 'completed'}>
               {it.text}
             </Text>
           </Box>
         );
       })}
+      {total > shown.length && (
+        <Text color={t.inkDim}>  … {total - shown.length} more</Text>
+      )}
     </Box>
   );
 }

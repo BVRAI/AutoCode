@@ -41,7 +41,7 @@ You help the user inspect, modify, and run code in a single project. You operate
 - Session id: ${ctx.sessionId}
 - Model: ${ctx.model.provider}/${ctx.model.model}
 - Likely verification command: ${verifyHints}
-- Mode: ${modeGuidance(ctx.mode)}
+- Mode: ${modeGuidance(ctx.mode)}${userLanguageLine(ctx.locale)}
 
 # Working principles
 1. **Stay inside the project root.** All file paths you pass to tools should be relative to the project root. Never read or modify files outside it. The path-safety layer enforces this — but plan as if it didn't. When you write paths inside a \`run_shell\` command string, keep them relative too — a leading \`/\` or \`\\\` on Windows resolves to the root of the current drive, not the project.
@@ -190,6 +190,46 @@ The user has enabled computer use. When command-line tests are not enough for a 
 export function buildSystemPrompt(ctx: SessionContext): string {
   const { system, systemVolatile } = buildSystemPromptParts(ctx);
   return systemVolatile ? `${system}\n${systemVolatile}` : system;
+}
+
+// Automax passes its UI locale (AUTOMAX_LOCALE → ctx.locale, e.g. "fr",
+// "zh-Hans"); the agent replies in that language while the CLI chrome stays
+// English — the same split Claude Code and Codex use. Code, identifiers, paths
+// and commands are never translated. English (or no locale) adds nothing, so
+// the polyglot-benchmark prompt stays byte-identical. Stable for the whole
+// session, so it belongs in the cacheable prefix.
+const LOCALE_NAMES: Record<string, string> = {
+  de: 'German',
+  es: 'Spanish',
+  fil: 'Filipino',
+  fr: 'French',
+  hi: 'Hindi',
+  id: 'Indonesian',
+  it: 'Italian',
+  ja: 'Japanese',
+  ko: 'Korean',
+  pa: 'Punjabi',
+  pl: 'Polish',
+  'pt-BR': 'Brazilian Portuguese',
+  pt: 'Portuguese',
+  ru: 'Russian',
+  tr: 'Turkish',
+  uk: 'Ukrainian',
+  vi: 'Vietnamese',
+  yue: 'Cantonese',
+  'zh-Hans': 'Simplified Chinese',
+  'zh-Hant': 'Traditional Chinese',
+  zh: 'Chinese',
+};
+
+export function userLanguageLine(locale: string | undefined): string {
+  const code = locale?.trim();
+  if (!code || /^en(-|$)/i.test(code)) return '';
+  const name = LOCALE_NAMES[code] ?? LOCALE_NAMES[code.split('-')[0]!] ?? code;
+  return (
+    `\n- User's language: ${name} (${code}) — write everything you say to the user in this language. ` +
+    'Keep code, identifiers, file paths, commands and tool arguments exactly as they are.'
+  );
 }
 
 function modeGuidance(mode: SessionContext['mode']): string {

@@ -25,8 +25,18 @@ export interface InkAppHandle {
   setExitCallback(cb: () => void): void;
 }
 
+// The composer's text survives a remount (inline mode rebuilds the whole
+// transcript from source on resize): the host owns this object and the app
+// mirrors its input state into it.
+export interface ComposerDraft {
+  input: string;
+  cursor: number;
+  history: string[];
+}
+
 export interface InkAppProps {
   store: BridgeStore;
+  draft?: ComposerDraft;
   sessionId: string;
   projectRoot: string;
   modelProvider: string;
@@ -70,10 +80,17 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
 
   const app = useApp();
 
-  const [input, setInput] = useState<string>('');
-  const [cursor, setCursor] = useState<number>(0);
-  const [history, setHistory] = useState<string[]>([]);
+  const [input, setInput] = useState<string>(props.draft?.input ?? '');
+  const [cursor, setCursor] = useState<number>(props.draft?.cursor ?? 0);
+  const [history, setHistory] = useState<string[]>(props.draft?.history ?? []);
   const [histPos, setHistPos] = useState<number>(-1);
+  useEffect(() => {
+    const d = props.draft;
+    if (!d) return;
+    d.input = input;
+    d.cursor = cursor;
+    d.history = history;
+  }, [props.draft, input, cursor, history]);
   const [scrollOffset, setScrollOffset] = useState<number>(0);
   const previousItemCount = useRef<number>(state.items.length);
   // Slash menu state — opens when input starts with `/` and the user
@@ -85,8 +102,8 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
   // interrupt-the-agent keystroke.
   const [exitArmed, setExitArmed] = useState<boolean>(false);
 
-  const submit = useCallback(() => {
-    const text = input;
+  const submit = useCallback((override?: string) => {
+    const text = override ?? input;
     if (text.trim().length === 0) return;
     setHistory((h) => [...h, text]);
     setHistPos(-1);
@@ -184,9 +201,15 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
       setTimeout(() => setExitArmed(false), 3000);
       return;
     }
-    // ^P toggles the sticky plan panel between expanded and collapsed.
-    if (key.ctrl && (ch === 'p' || ch === 'P')) {
+    // Ctrl+T toggles the todo tray (Claude Code's binding); ^P kept as an alias.
+    if (key.ctrl && (ch === 't' || ch === 'T' || ch === 'p' || ch === 'P')) {
       props.store.togglePlanCollapsed();
+      return;
+    }
+    // Ctrl+O: results commit expanded instead of collapsed (Claude Code's
+    // verbose toggle). Applies to rows committed from now on.
+    if (key.ctrl && (ch === 'o' || ch === 'O')) {
+      props.store.toggleVerbose();
       return;
     }
     if (key.tab && key.shift) {
@@ -293,6 +316,19 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
       return;
     }
     if (ch && ch.length > 0 && !key.meta && !key.ctrl) {
+      // Ink keeps `\r` inside a multi-character chunk, so a fast typist, a
+      // paste or ConPTY coalescing can deliver "text\r" as one event: insert
+      // the text, then treat the newline as Enter.
+      const nl = ch.search(/[\r\n]/);
+      if (nl >= 0) {
+        const next = input.slice(0, cursor) + ch.slice(0, nl) + input.slice(cursor);
+        if (next.trim().length > 0) submit(next);
+        else {
+          setInput(next);
+          setCursor(cursor + nl);
+        }
+        return;
+      }
       setInput((s) => s.slice(0, cursor) + ch + s.slice(cursor));
       setCursor((c) => c + ch.length);
     }
@@ -449,9 +485,11 @@ export async function mountInkApp(props: InkAppProps): Promise<{ unmount: () => 
   // Alt-screen is ONLY for cockpit mode (it owns the full window). Ink 7 owns
   // the screen-buffer lifecycle, including cleanup on unmount/process exit.
   const altScreen = props.uiMode === 'cockpit';
+  const { emulatedStdin } = await import('../../util/ttyEmulation.js');
   const inst = render(<InkApp {...props} />, {
     stdout: process.stdout,
-    stdin: process.stdin,
+    // Emulated-TTY tests read a filtered stdin (resize OSC applied there).
+    stdin: emulatedStdin(),
     exitOnCtrlC: false,
     patchConsole: false,
     maxFps: altScreen ? 20 : 30,

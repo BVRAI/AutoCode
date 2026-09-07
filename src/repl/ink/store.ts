@@ -1,27 +1,41 @@
 // Transcript store — the source of truth for what the Ink Bridge UI renders.
 //
 // Two producers push into it:
-//   1. The agent's event emitter (tool_call, file_edit_proposed, started,
-//      completed, failed). We swap a `BridgeEventEmitter` into AgentLoop in
-//      Ink mode that fans out to subscribers here.
-//   2. The ConsoleRenderer (assistant text, info lines, diffs). In Ink mode
-//      ConsoleRenderer's sink is set to a thin adapter that calls into this
-//      store instead of writing to stdout.
+//   1. The agent's event emitter (started, tool_call, tool_result,
+//      file_edit_proposed, completed, failed) via createBridgeEventEmitter.
+//   2. The ConsoleRenderer sink (assistant text, thinking, notices, diffs,
+//      the end-of-turn line) via createRendererSink.
 //
-// React subscribes via the `useStore` hook (see ./hooks.ts). All updates are
-// immutable replacements so React diffing stays cheap.
+// The model is Claude Code's transcript: a user turn, tool rows with a
+// collapsed result row, a collapsed thinking stub, the streamed answer and an
+// end-of-turn duration line are COMMITTED (write-once); the status line, the
+// live thinking/answer text and the running tool row are TRANSIENT. React
+// subscribes via useBridgeState; all updates are immutable replacements.
+
+import type { ApproveDetail, ApproveVerdict } from '../Prompter.js';
+import {
+  describeCall,
+  describeResult,
+  diffRows,
+  summarizeThinking,
+  type DiffRow,
+  type RawResult,
+  type TodoRow,
+  type ToolGroup,
+} from './grammar.js';
 
 export type MsgKind =
-  | 'user'        // user prompt echoed into the transcript
-  | 'assistant'   // agent narrative text
-  | 'info'        // dim status / system line
+  | 'user'        // user prompt (rendered as a tinted band)
+  | 'assistant'   // the agent's answer, markdown
+  | 'info'        // dim system line
   | 'warn'
   | 'error'
-  | 'rule'        // horizontal rule between user prompt and reply
-  | 'tool'        // tool call card (see ToolEntry below)
-  | 'thinking'    // active spinner line (one at a time; replaced)
-  | 'diff'        // standalone diff (rare — usually nested in a tool)
-  | 'compact';    // compaction notice
+  | 'rule'        // legacy separator; not rendered
+  | 'tool'        // tool call row + result row (see ToolEntry)
+  | 'thinking'    // collapsed thinking stub ("Thought for 5s")
+  | 'diff'        // standalone diff (rare — edits attach theirs to the tool row)
+  | 'compact'     // compaction notice
+  | 'turn_end';   // "✻ Sautéed for 23s · done 6:05 PM"
 
 export interface ToolDiff {
   kind: 'add' | 'del' | 'context' | 'hunk';
@@ -30,22 +44,48 @@ export interface ToolDiff {
 
 export interface ToolEntry {
   id: string;
-  name: string;            // tool name, e.g. 'read_file', 'edit_file'
-  target?: string;         // file/path argument when applicable
-  detail?: string;         // short meta, e.g. "lines 1–48", "+5 −1"
+  name: string;            // canonical tool name, e.g. 'read_file'
+  label: string;           // display label, e.g. 'Read'
+  arg: string;             // primary argument, e.g. the path
+  group: ToolGroup;        // consecutive same-group rows may collapse
+  target?: string;         // legacy alias of arg (cockpit renderer)
+  detail?: string;         // legacy short meta (cockpit renderer)
   status: 'running' | 'ok' | 'err';
   startedAt: number;
   endedAt?: number;
-  body?: string;           // free-form text body (e.g. read output excerpt)
-  diff?: ToolDiff[];       // optional inline diff for edit/write
+  durationMs?: number;
+  summary?: string;        // the ⎿ line
+  lines?: number;          // logical line count of the result
+  bodyLines?: string[];    // lines under the summary (Bash output, errors)
+  hiddenLines?: number;    // "… +N lines (ctrl+o to expand)"
+  todos?: TodoRow[];       // todo_write: the checklist
+  diffRows?: DiffRow[];    // edits: numbered diff
+  diffHidden?: number;
+  stats?: { added: number; removed: number };
+  body?: string;           // legacy free-form body (cockpit renderer)
+  diff?: ToolDiff[];       // legacy inline diff (cockpit renderer)
+}
+
+export interface TurnEndInfo {
+  durationMs: number;
+  endedAt: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  costUsd: number;
+  todos?: { done: number; total: number; interrupted: number };
 }
 
 export interface TranscriptItem {
   id: string;
   kind: MsgKind;
-  text?: string;           // for user/assistant/info/warn/error/thinking
-  tool?: ToolEntry;        // for kind === 'tool'
+  text?: string;            // user/assistant/info/warn/error/compact text
+  tool?: ToolEntry;         // kind === 'tool'
   diff?: { label: string; before: string; after: string };
+  durationMs?: number;      // thinking stub / turn_end
+  turnEnd?: TurnEndInfo;    // kind === 'turn_end'
+  thinkingLines?: string[]; // thinking stub: the ≤10-line summary
   turn: number;
   ts: number;
 }
@@ -81,15 +121,34 @@ export type PromptRequest =
   | {
       type: 'approve';
       label: string;
-      resolve: (verdict: { decision: 'accept' | 'decline' | 'revise'; guidance?: string }) => void;
+      detail?: ApproveDetail;
+      resolve: (verdict: ApproveVerdict) => void;
     };
+
+export interface Activity {
+  verb: string;            // "Thinking", "Reading", "Running"…
+  since: number;
+}
 
 export interface BridgeState {
   turn: number;
   busy: boolean;
   mode: 'planning' | 'default' | 'autocode' | 'admin' | 'sights';
-  thinking: string | null;       // current spinner label, or null
+  // Legacy spinner label — kept for the cockpit renderer; the inline renderer
+  // reads `activity` instead.
+  thinking: string | null;
   thinkingStartedAt: number | null;
+  activity: Activity | null;
+  // Transient thinking text while the model reasons (collapsed to a stub on end).
+  thinkingLive: { text: string; since: number } | null;
+  // Transient answer text while it streams (committed as an item on end).
+  streaming: string | null;
+  // Rough count of output characters received this turn — the status line's
+  // token estimate until real usage arrives.
+  liveOutputChars: number;
+  turnStartedAt: number | null;
+  // Ctrl+O: results commit expanded instead of collapsed.
+  verbose: boolean;
   editsThisTurn: RailEditSummary[];
   mcpStatus: McpStatusEntry[];
   usage: {
@@ -99,36 +158,23 @@ export interface BridgeState {
     cacheWriteTokens: number;
     costUsd: number;
     // Live context occupancy (≈ last request's input tokens) and the selected
-    // model's real window, for the rail's CONTEXT meter — distinct from the
+    // model's real window, for the context meter — distinct from the
     // cumulative in/out totals above.
     currentContextTokens: number;
     contextWindow: number;
   };
   queueDepth: number;
   items: TranscriptItem[];
-  // Ephemeral overlay UI: discriminated union for whichever picker is
-  // currently open, or null. The Bridge renders the right overlay
-  // between the transcript region and the footer.
-  //
-  // The model picker is two-stage: 'model-provider' shows the list of
-  // providers; selecting one transitions to 'model-models' which shows
-  // only that provider's models. Esc from the model stage goes back to
-  // the provider stage; Esc from the provider stage closes.
   overlay:
     | { kind: 'model-provider' }
     | { kind: 'model-models'; provider: string }
     | { kind: 'byok' }
     | { kind: 'prompt'; request: PromptRequest }
     | null;
-  // Active model — surfaced for the rail's MODEL row and for the model
-  // picker to show "current" highlight. Updated by the bench / user.
   model: { provider: string; name: string };
-  // Project git summary for the rail's PROJECT row. `branch === null` means
-  // the folder is not a git repo (rail shows "no git"). Refreshed on the
-  // rail's poll timer, so it tracks branch switches mid-session.
   project: { root: string; branch: string | null; dirty: number };
-  // Sticky plan panel (inline mode) — mirrors the todo_write list so a
-  // multi-phase task always shows its overall progress above the prompt.
+  // Todo tray — mirrors the todo_write list so a multi-step task always shows
+  // its progress above the composer. Ctrl+T expands/collapses.
   plan: { items: PlanItem[]; collapsed: boolean };
 }
 
@@ -145,6 +191,12 @@ const INITIAL: BridgeState = {
   mode: 'default',
   thinking: null,
   thinkingStartedAt: null,
+  activity: null,
+  thinkingLive: null,
+  streaming: null,
+  liveOutputChars: 0,
+  turnStartedAt: null,
+  verbose: false,
   editsThisTurn: [],
   mcpStatus: [],
   usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0, currentContextTokens: 0, contextWindow: 0 },
@@ -162,6 +214,10 @@ const nid = (): string => `i${++_id}`;
 export class BridgeStore {
   private state: BridgeState = INITIAL;
   private readonly listeners = new Set<Listener>();
+  // Tool args by id — needed when the result arrives to phrase the ⎿ line.
+  private readonly toolArgs = new Map<string, Record<string, unknown>>();
+  // The most recently finished edit/write, so a diff that follows attaches to it.
+  private lastFinishedToolId: string | null = null;
 
   get(): BridgeState {
     return this.state;
@@ -177,39 +233,49 @@ export class BridgeStore {
     for (const l of this.listeners) l(next);
   }
 
-  // ── transcript ops ────────────────────────────────────────────────────
-
-  appendText(kind: Exclude<MsgKind, 'tool' | 'diff'>, text: string): void {
+  private append(
+    item: Omit<TranscriptItem, 'id' | 'turn' | 'ts'> & { id?: string },
+    extra: Partial<BridgeState> = {},
+  ): void {
+    const { id, ...rest } = item;
     this.emit({
       ...this.state,
-      items: [...this.state.items, { id: nid(), kind, text, turn: this.state.turn, ts: Date.now() }],
+      ...extra,
+      items: [...this.state.items, { id: id ?? nid(), turn: this.state.turn, ts: Date.now(), ...rest }],
     });
+  }
+
+  // ── transcript ops ────────────────────────────────────────────────────
+
+  appendText(kind: Exclude<MsgKind, 'tool' | 'diff' | 'turn_end' | 'thinking'>, text: string): void {
+    this.append({ kind, text });
   }
 
   appendRule(): void {
-    this.emit({
-      ...this.state,
-      items: [...this.state.items, { id: nid(), kind: 'rule', turn: this.state.turn, ts: Date.now() }],
-    });
+    this.append({ kind: 'rule' });
   }
 
   appendDiff(label: string, before: string, after: string): void {
-    this.emit({
-      ...this.state,
-      items: [
-        ...this.state.items,
-        { id: nid(), kind: 'diff', diff: { label, before, after }, turn: this.state.turn, ts: Date.now() },
-      ],
-    });
+    this.append({ kind: 'diff', diff: { label, before, after } });
   }
 
-  startTool(name: string, target?: string): string {
+  /** A tool call has started: the row commits when it finishes. */
+  startTool(name: string, args: Record<string, unknown>): string {
     const id = nid();
-    const tool: ToolEntry = { id, name, target, status: 'running', startedAt: Date.now() };
-    this.emit({
-      ...this.state,
-      items: [...this.state.items, { id, kind: 'tool', tool, turn: this.state.turn, ts: Date.now() }],
-    });
+    const d = describeCall(name, args);
+    const tool: ToolEntry = {
+      id,
+      name,
+      label: d.label,
+      arg: d.arg,
+      group: d.group,
+      target: d.arg || undefined,
+      status: 'running',
+      startedAt: Date.now(),
+    };
+    this.toolArgs.set(id, args);
+    // The row's item id IS the tool id, so finishTool/closeTool can find it.
+    this.append({ id, kind: 'tool', tool });
     return id;
   }
 
@@ -221,24 +287,119 @@ export class BridgeStore {
     this.emit({ ...this.state, items });
   }
 
-  finishTool(id: string, status: 'ok' | 'err', patch: Partial<ToolEntry> = {}): void {
-    this.updateTool(id, { ...patch, status, endedAt: Date.now() });
+  /** The result arrived: phrase the ⎿ line and commit the row. */
+  finishTool(id: string, result: RawResult, durationMs?: number): void {
+    const item = this.state.items.find((it) => it.id === id);
+    if (!item?.tool) return;
+    const args = this.toolArgs.get(id) ?? {};
+    this.toolArgs.delete(id);
+    const r = describeResult(item.tool.name, args, result, { verbose: this.state.verbose });
+    const patch: Partial<ToolEntry> = {
+      status: result.isError ? 'err' : 'ok',
+      endedAt: Date.now(),
+      durationMs,
+      summary: r.summary,
+      lines: r.lines,
+      bodyLines: r.bodyLines,
+      hiddenLines: r.hiddenLines,
+      todos: r.todos,
+      detail: r.summary || undefined,
+      body: r.bodyLines ? r.bodyLines.join('\n') : undefined,
+    };
+    this.updateTool(id, patch);
+    this.lastFinishedToolId = item.tool.name === 'edit_file' || item.tool.name === 'write_file' ? id : null;
+  }
+
+  /** Close a row the loop abandoned (a later event implies it ended). */
+  closeTool(id: string, status: 'ok' | 'err'): void {
+    const item = this.state.items.find((it) => it.id === id);
+    if (!item?.tool || item.tool.status !== 'running') return;
+    this.toolArgs.delete(id);
+    this.updateTool(id, { status, endedAt: Date.now() });
+  }
+
+  /** A before/after pair for the edit that just finished: numbered diff + stats. */
+  attachDiff(label: string, before: string, after: string): void {
+    const id = this.lastFinishedToolId;
+    this.lastFinishedToolId = null;
+    const item = id ? this.state.items.find((it) => it.id === id) : undefined;
+    if (!item?.tool) {
+      this.appendDiff(label, before, after);
+      return;
+    }
+    const { rows, stats, hidden } = diffRows(before, after, this.state.verbose ? 200 : 24);
+    const path = item.tool.arg || label;
+    const summary =
+      item.tool.name === 'edit_file'
+        ? `Updated ${path} with ${stats.added} addition${stats.added === 1 ? '' : 's'} and ${stats.removed} removal${stats.removed === 1 ? '' : 's'}`
+        : item.tool.summary ?? `Wrote ${path}`;
+    this.updateTool(item.id, { diffRows: rows, diffHidden: hidden, stats, summary, detail: summary });
+  }
+
+  // ── streaming / thinking / turn ───────────────────────────────────────
+
+  streamChunk(text: string): void {
+    this.emit({
+      ...this.state,
+      streaming: (this.state.streaming ?? '') + text,
+      liveOutputChars: this.state.liveOutputChars + text.length,
+    });
+  }
+
+  /** The answer finished streaming: commit it as an item. */
+  commitAssistant(text: string): void {
+    if (text.trim().length === 0) {
+      if (this.state.streaming !== null) this.emit({ ...this.state, streaming: null });
+      return;
+    }
+    this.append({ kind: 'assistant', text }, { streaming: null });
+  }
+
+  thinkingChunk(text: string): void {
+    const cur = this.state.thinkingLive;
+    this.emit({
+      ...this.state,
+      thinkingLive: { text: (cur?.text ?? '') + text, since: cur?.since ?? Date.now() },
+      liveOutputChars: this.state.liveOutputChars + text.length,
+    });
+  }
+
+  /** Thinking ended: commit the collapsed stub, clear the live text. */
+  thinkingEnd(durationMs: number): void {
+    const text = this.state.thinkingLive?.text ?? '';
+    const lines = summarizeThinking(text);
+    this.append({ kind: 'thinking', durationMs, thinkingLines: lines }, { thinkingLive: null });
+  }
+
+  turnEnd(info: TurnEndInfo): void {
+    this.append(
+      { kind: 'turn_end', durationMs: info.durationMs, turnEnd: info },
+      { activity: null, thinkingLive: null, streaming: null, busy: false, turnStartedAt: null },
+    );
+  }
+
+  setActivity(verb: string | null): void {
+    const cur = this.state.activity;
+    if (verb === null) {
+      if (cur === null) return;
+      this.emit({ ...this.state, activity: null });
+      return;
+    }
+    if (cur && cur.verb === verb) return;
+    this.emit({ ...this.state, activity: { verb, since: Date.now() } });
+  }
+
+  toggleVerbose(): void {
+    this.emit({ ...this.state, verbose: !this.state.verbose });
   }
 
   // ── status ops ────────────────────────────────────────────────────────
-
-  // All setters are equality-guarded: if the new value equals the current
-  // value, we skip the emit entirely. Without this, the polling refresh
-  // (usage / busy / queue / mode every 500ms) fires re-renders of the
-  // whole Ink tree 8+ times per second and the output flickers visibly.
+  // All setters are equality-guarded: the polling refresh (usage / busy /
+  // queue / mode every 1.5 s) would otherwise re-render the whole tree.
 
   setThinking(label: string | null): void {
     if (this.state.thinking === label) return;
-    this.emit({
-      ...this.state,
-      thinking: label,
-      thinkingStartedAt: label ? Date.now() : null,
-    });
+    this.emit({ ...this.state, thinking: label, thinkingStartedAt: label ? Date.now() : null });
   }
 
   setBusy(busy: boolean): void {
@@ -289,8 +450,6 @@ export class BridgeStore {
     this.emit({ ...this.state, project: { ...this.state.project, root } });
   }
 
-  // Mirror the todo_write list into the sticky plan panel. Equality-guarded on
-  // a shallow (text, status) compare so repeated identical writes don't churn.
   setPlan(items: PlanItem[]): void {
     const cur = this.state.plan.items;
     if (cur.length === items.length && cur.every((c, i) => c.text === items[i]!.text && c.status === items[i]!.status)) {
@@ -304,17 +463,11 @@ export class BridgeStore {
   }
 
   setOverlay(overlay: BridgeState['overlay']): void {
-    // Reference equality covers null→null and the rare "same object passed
-    // twice" case. We don't short-circuit on kind equality anymore because
-    // the model-models overlay carries a `provider` field, and switching
-    // from {kind:'model-models',provider:'anthropic'} to the same kind with
-    // a different provider needs to re-emit so the picker re-renders.
     if (this.state.overlay === overlay) return;
     this.emit({ ...this.state, overlay });
   }
 
   setMcpStatus(s: McpStatusEntry[]): void {
-    // Shallow compare — MCP status changes are rare (server connect/disconnect).
     if (s.length === this.state.mcpStatus.length) {
       let same = true;
       for (let i = 0; i < s.length; i++) {
@@ -330,24 +483,35 @@ export class BridgeStore {
     this.emit({ ...this.state, mcpStatus: s });
   }
 
-  // Start a new turn — bumps the counter, clears this-turn edits list.
+  // Start a new turn — bumps the counter, clears this-turn state.
   beginTurn(): void {
-    this.emit({ ...this.state, turn: this.state.turn + 1, editsThisTurn: [] });
+    this.emit({
+      ...this.state,
+      turn: this.state.turn + 1,
+      editsThisTurn: [],
+      turnStartedAt: Date.now(),
+      liveOutputChars: 0,
+      thinkingLive: null,
+      streaming: null,
+    });
   }
 
   recordEdit(e: RailEditSummary): void {
-    // Coalesce on file path so multiple edits to the same file show as one.
     const without = this.state.editsThisTurn.filter((x) => x.file !== e.file);
     this.emit({ ...this.state, editsThisTurn: [...without, e] });
   }
 
   // Reset everything — used by /clear.
   reset(): void {
+    this.toolArgs.clear();
+    this.lastFinishedToolId = null;
     this.emit({
       ...INITIAL,
       mode: this.state.mode,
       mcpStatus: this.state.mcpStatus,
       project: this.state.project,
+      model: this.state.model,
+      verbose: this.state.verbose,
     });
   }
 }

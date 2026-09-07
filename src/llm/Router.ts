@@ -4,6 +4,7 @@ import { XaiProvider } from './providers/XaiProvider.js';
 import { OpenAIProvider } from './providers/OpenAIProvider.js';
 import { OpenRouterProvider } from './providers/OpenRouterProvider.js';
 import { GeminiProvider } from './providers/GeminiProvider.js';
+import { FakeProvider } from './providers/FakeProvider.js';
 import { AuthResolver } from '../auth/AuthResolver.js';
 
 export type ProviderName = 'anthropic' | 'openai' | 'google' | 'xai' | 'openrouter';
@@ -73,6 +74,10 @@ export class LlmRouter {
 }
 
 function construct(name: ProviderName, auth: ReturnType<AuthResolver['resolve']>): LlmProvider {
+  // End-to-end tests: AUTOCODE_FAKE_LLM=<script.json> replaces every provider
+  // with the scripted one, so a whole session runs with no network or keys.
+  const fake = FakeProvider.fromEnv();
+  if (fake) return fake;
   switch (name) {
     case 'anthropic':
       return new AnthropicProvider(auth);

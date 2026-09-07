@@ -181,6 +181,7 @@ function estimateItemRows(item: TranscriptItem, width: number): number {
     case 'error':
     case 'thinking':
     case 'compact':
+    case 'turn_end':
       return estimateWrappedRows(item.text ?? '', width);
   }
 }
@@ -247,7 +248,15 @@ function Row({ item, width }: { item: TranscriptItem; width: number }): React.JS
       // are kept around as a record but rendered dim.
       return (
         <Box>
-          <Text color={BR.inkDim}>{item.text ?? ''}</Text>
+          <Text color={BR.inkDim}>
+            {item.text ?? (item.durationMs !== undefined ? `✻ Thought for ${formatDuration(item.durationMs)}` : '')}
+          </Text>
+        </Box>
+      );
+    case 'turn_end':
+      return (
+        <Box>
+          <Text color={BR.inkDim}>✻ Worked for {formatDuration(item.durationMs ?? 0)}</Text>
         </Box>
       );
     case 'compact':

@@ -21,10 +21,52 @@ export interface RendererSink {
   rule(): void;
   diff(label: string, before: string, after: string): void;
   user(text: string): void;
+  // Structured channels the Ink transcript renders (optional: the plain
+  // stdout path has no use for them). Text streams as it arrives; thinking is
+  // collapsed to a stub with its duration; the turn ends with one line.
+  assistantChunk?(text: string): void;
+  thinkingChunk?(text: string): void;
+  thinkingEnd?(durationMs: number): void;
+  turnEnd?(info: TurnEndInfo): void;
+  // The loop's spinner label ('thinking', a tool name, 'verifying — …');
+  // null when it stops. Drives the transient status line.
+  activity?(label: string | null): void;
+}
+
+export interface TurnEndInfo {
+  durationMs: number;
+  endedAt: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  costUsd: number;
+  todos?: { done: number; total: number; interrupted: number };
+}
+
+// The spinner every call site already drives, plus a hook so the Ink sink can
+// mirror it as a status verb. Same start/update/stop/mute surface as Spinner.
+class SpinnerFacade {
+  constructor(private readonly raw: Spinner, private readonly owner: ConsoleRenderer) {}
+  start(label: string): void {
+    this.raw.start(label);
+    this.owner.notifyActivity(label);
+  }
+  update(label: string): void {
+    this.raw.update(label);
+    this.owner.notifyActivity(label);
+  }
+  stop(): void {
+    this.raw.stop();
+    this.owner.notifyActivity(null);
+  }
+  mute(muted: boolean): void {
+    this.raw.mute(muted);
+  }
 }
 
 export class ConsoleRenderer {
-  readonly spinner = new Spinner();
+  readonly spinner: SpinnerFacade = new SpinnerFacade(new Spinner(), this);
   private streaming = false;
   private streamBuffer = '';
   // Optional one-line banner shown in the header — set by the update checker
@@ -142,12 +184,43 @@ export class ConsoleRenderer {
     this.streamBuffer = '';
   }
 
-  // The reply is buffered, not written live — so the styled block can be
-  // rendered once at the end with no cursor-up (which would erase the
-  // pinned footer). The spinner runs meanwhile.
+  // On the plain path the reply is buffered and rendered once at the end (no
+  // cursor-up, which would erase the pinned footer). The Ink sink also gets
+  // every chunk live, so the answer streams the way Claude Code's does.
   streamChunk(text: string): void {
     if (!this.streaming) this.beginAssistantStream();
     this.streamBuffer += text;
+    this.sink?.assistantChunk?.(text);
+  }
+
+  // Reasoning text as it streams (Ink shows the tail; plain path ignores it).
+  thinkingChunk(text: string): void {
+    this.sink?.thinkingChunk?.(text);
+  }
+
+  // Reasoning ended: the Ink sink commits a collapsed stub; plain prints a line.
+  thinkingEnd(durationMs: number): void {
+    if (this.sink?.thinkingEnd) { this.sink.thinkingEnd(durationMs); return; }
+    if (this.sink) return;
+    process.stdout.write(pc.dim(`  ✻ thought for ${(durationMs / 1000).toFixed(1)}s`) + '\n');
+  }
+
+  // One line per turn: duration and the token/cost account.
+  turnEnd(info: TurnEndInfo): void {
+    if (this.sink?.turnEnd) { this.sink.turnEnd(info); return; }
+    const cacheTotal = info.cacheReadTokens + info.cacheWriteTokens;
+    const cachePct = Math.round((info.cacheReadTokens / Math.max(1, info.inputTokens + cacheTotal)) * 100);
+    const parts = [`in: ${info.inputTokens}`, `out: ${info.outputTokens}`];
+    if (cacheTotal > 0) parts.push(`cache: ${cachePct}%`);
+    if (info.todos && info.todos.total > 0) parts.push(`${info.todos.done}/${info.todos.total} todos`);
+    if (info.todos && info.todos.interrupted > 0) parts.push(`${info.todos.interrupted} interrupted`);
+    if (info.costUsd > 0) parts.push(`$${info.costUsd.toFixed(info.costUsd < 0.01 ? 4 : 2)}`);
+    this.status(`  (${parts.join(' · ')})`);
+  }
+
+  // Called by the spinner facade so the Ink sink can mirror the label.
+  notifyActivity(label: string | null): void {
+    this.sink?.activity?.(label);
   }
 
   endAssistantStream(): void {

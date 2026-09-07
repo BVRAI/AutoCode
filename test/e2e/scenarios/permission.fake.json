@@ -1,0 +1,41 @@
+{
+  "chunk": 8,
+  "delayMs": 3,
+  "turns": [
+    {
+      "when": "rename",
+      "text": "I'll rename the helper.",
+      "tools": [
+        {
+          "name": "edit_file",
+          "input": {
+            "path": "src/util.ts",
+            "old_text": "export function parseArgs(argv: string[]): Args {",
+            "new_text": "export function parseArguments(argv: string[]): Args {"
+          }
+        }
+      ]
+    },
+    {
+      "tools": [{ "name": "run_shell", "input": { "command": "npm test" } }]
+    },
+    {
+      "tools": [{ "name": "run_shell", "input": { "command": "npm run test" } }]
+    },
+    {
+      "tools": [
+        {
+          "name": "edit_file",
+          "input": {
+            "path": "src/cli.ts",
+            "old_text": "import { parseArgs } from './util.js';",
+            "new_text": "import { parseArguments } from './util.js';"
+          }
+        }
+      ]
+    },
+    {
+      "text": "Understood — I'll leave cli.ts as it is and only rename the helper in util.ts."
+    }
+  ]
+}

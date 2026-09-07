@@ -34,6 +34,10 @@ export interface SessionContext {
   // the provider sampling default and the built-in iteration cap apply).
   sampling?: { temperature?: number };
   budget?: { maxCostUsd?: number; maxIterations?: number };
+  // The user's UI language as a locale code ("fr", "zh-Hans"), when a host
+  // passes one (Automax: AUTOMAX_LOCALE). The agent replies in that language;
+  // the CLI's own chrome stays English. Absent = English, prompt unchanged.
+  locale?: string;
 }
 
 // Shift+Tab cycle order: default → autocode → planning → default.

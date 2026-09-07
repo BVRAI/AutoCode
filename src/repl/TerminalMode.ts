@@ -29,6 +29,7 @@ import { type EventEmitter, NullEventEmitter } from './EventEmitter.js';
 import { COMMAND_DEFS } from './commands.js';
 import { getKnownModels, modelCatalogSource } from '../llm/models.js';
 import { cwdStatus, resolveCwdTarget } from './cwd.js';
+import { resolveThemeName } from './ink/theme.js';
 
 const MAX_QUEUE = 5;
 
@@ -66,6 +67,10 @@ export class TerminalMode {
   private readonly queue: string[] = [];
   private resolveExit: ((code: number) => void) | null = null;
   private inkInstance: { unmount: () => void; waitUntilExit: () => Promise<void> } | null = null;
+  // The composer's text and history, owned here so an inline-mode remount
+  // (rebuild-on-resize) does not lose what the user was typing.
+  private readonly draft: import('./ink/InkApp.js').ComposerDraft = { input: '', cursor: 0, history: [] };
+  private remounting = false;
   // Reference to the live BridgeStore (only set while Bridge is mounted)
   // so slash-command handlers can open overlays like the model picker.
   private bridgeStore: import('./ink/store.js').BridgeStore | null = null;
@@ -183,10 +188,11 @@ export class TerminalMode {
       }
     })();
     const uiMode: 'inline' | 'cockpit' = uiCfg.mode === 'cockpit' ? 'cockpit' : 'inline';
-    const uiTheme = uiCfg.theme === 'light' ? 'light' : 'dark';
+    const uiTheme = resolveThemeName(process.env.AUTOMAX_THEME, uiCfg.theme);
 
-    this.inkInstance = await mountInkApp({
+    const appProps: import('./ink/InkApp.js').InkAppProps = {
       store,
+      draft: this.draft,
       sessionId: this.ctx.sessionId,
       projectRoot: this.ctx.projectRoot,
       modelProvider: this.ctx.model.provider,
@@ -216,10 +222,32 @@ export class TerminalMode {
         await removeByokKey(provider);
         this.renderer.dim(`removed ${provider} key`);
       },
-    });
+    };
+
+    const mount = (): Promise<{ unmount: () => void; waitUntilExit: () => Promise<void> }> => mountInkApp(appProps);
+    this.inkInstance = await mount();
+
+    // Inline mode rebuilds the transcript from source on resize (Codex CLI's
+    // approach): the rows Ink's <Static> wrote were laid out for the old
+    // width, so after the drag settles we unmount, clear screen + scrollback
+    // and mount again — the store and the composer draft survive, only the
+    // paint is redone. Cockpit mode owns the alternate screen and relayouts
+    // itself.
+    let resizeTimer: NodeJS.Timeout | null = null;
+    const onResize = (): void => {
+      if (uiMode !== 'inline' || this.exiting) return;
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        resizeTimer = null;
+        void this.remountInk(mount);
+      }, 200);
+    };
+    process.stdout.on('resize', onResize);
 
     return new Promise<number>((resolve) => {
       this.resolveExit = (code) => {
+        process.stdout.off('resize', onResize);
+        if (resizeTimer) clearTimeout(resizeTimer);
         clearInterval(mcpTimer);
         clearInterval(usageTimer);
         try {
@@ -243,6 +271,29 @@ export class TerminalMode {
   private exitInk(): void {
     if (this.exiting) return;
     this.exit(0);
+  }
+
+  // Tear the Ink tree down and mount it again at the current terminal size.
+  // Everything the transcript shows lives in the BridgeStore, so the new
+  // instance re-emits the whole history at the new width.
+  private async remountInk(
+    mount: () => Promise<{ unmount: () => void; waitUntilExit: () => Promise<void> }>,
+  ): Promise<void> {
+    if (this.exiting || this.remounting || !this.inkInstance) return;
+    this.remounting = true;
+    try {
+      try {
+        this.inkInstance.unmount();
+      } catch {
+        /* nothing */
+      }
+      this.inkInstance = null;
+      // Clear the screen and the scrollback so no row from the old width survives.
+      process.stdout.write('\x1b[2J\x1b[3J\x1b[H');
+      this.inkInstance = await mount();
+    } finally {
+      this.remounting = false;
+    }
   }
 
   private async readVersion(): Promise<string> {
@@ -464,7 +515,10 @@ export class TerminalMode {
     const cfg = cs.load();
     const ui = cfg.ui ?? {};
     if (args.length === 0) {
-      this.renderer.info(`ui mode: ${ui.mode ?? 'inline'} · theme: ${ui.theme ?? 'dark'}`);
+      const hostTheme = process.env.AUTOMAX_THEME;
+      const effective = resolveThemeName(hostTheme, ui.theme);
+      const source = effective !== (ui.theme ?? 'dark') && hostTheme ? ' (set by Automax)' : '';
+      this.renderer.info(`ui mode: ${ui.mode ?? 'inline'} · theme: ${effective}${source}`);
       this.renderer.dim('set with  /ui inline|cockpit  or  /ui dark|light');
       return;
     }

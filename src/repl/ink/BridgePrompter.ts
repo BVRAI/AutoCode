@@ -9,7 +9,7 @@
 // can't clobber each other's overlay.
 
 import { type EventEmitter, NullEventEmitter } from '../EventEmitter.js';
-import type { ApproveVerdict, Prompter } from '../Prompter.js';
+import type { ApproveDetail, ApproveVerdict, Prompter } from '../Prompter.js';
 import type { BridgeStore, PromptRequest } from './store.js';
 
 export class BridgePrompter implements Prompter {
@@ -65,11 +65,17 @@ export class BridgePrompter implements Prompter {
     return picked;
   }
 
-  async approve(label: string): Promise<ApproveVerdict> {
-    this.emitter.emit('picker_opened', { kind: 'approve', label, options: ['Accept', 'Decline', 'Revise'] });
+  async approve(label: string, detail?: ApproveDetail): Promise<ApproveVerdict> {
+    this.emitter.emit('picker_opened', {
+      kind: 'approve',
+      label,
+      tool: detail?.tool,
+      options: ['Yes', "Yes, and don't ask again", 'No'],
+    });
     const verdict = await this.enqueue<ApproveVerdict>((done) => ({
       type: 'approve',
       label,
+      detail,
       resolve: done,
     }));
     this.emitter.emit('picker_resolved', { choice: verdict.decision });

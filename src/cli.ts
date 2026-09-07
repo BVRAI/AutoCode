@@ -8,7 +8,8 @@ import { PrompterRef, AutoDenyPrompter, PlainPrompter } from './repl/Prompter.js
 import { checkForUpdate, readOwnPackage, runUpdate, shouldAutoUpdate } from './update/UpdateChecker.js';
 import { isBundled } from './util/host.js';
 import pc from 'picocolors';
-import { NullEventEmitter, StdoutEventEmitter, type EventEmitter } from './repl/EventEmitter.js';
+import { FileEventEmitter, NullEventEmitter, StdoutEventEmitter, type EventEmitter } from './repl/EventEmitter.js';
+import { installTtyEmulation } from './util/ttyEmulation.js';
 import { StubAgent } from './agent/StubAgent.js';
 import { LiveAgent } from './agent/LiveAgent.js';
 import { newSessionId, type SessionContext } from './session/SessionContext.js';
@@ -69,6 +70,9 @@ program
       maxCost?: string;
       maxIterations?: string;
     }) => {
+    // End-to-end tests over pipes: AUTOCODE_TTY_EMULATE=<cols>x<rows> makes the
+    // stdio look interactive before any isTTY check below runs.
+    installTtyEmulation();
     // Fresh-screen launch (like Claude Code / Gemini / Codex — effectively a
     // Ctrl+L first): clear the terminal so the banner opens on a clean slate.
     // Done here, before any startup notice prints, so resume/.env/first-run
@@ -85,6 +89,11 @@ program
         typeof opts.print !== 'string' &&
         !opts.automax &&
         uiMode !== 'cockpit';
+      // One blank row above the banner so it never sits flush against the top edge
+      // of the pane. (Hosted --automax runs skip the clear and get their blank row
+      // from the host, which hides the launch-time <<AMX>> line but keeps its newline.)
+      // (The welcome box carries the single blank row above itself, so hosted
+      // and standalone launches look the same.)
       if (interactiveInline) process.stdout.write('\x1b[2J\x1b[3J\x1b[H');
     } catch {
       /* clearing is cosmetic — never let it block startup */
@@ -221,6 +230,9 @@ program
         maxCostFlag !== undefined || maxIterationsFlag !== undefined
           ? { maxCostUsd: maxCostFlag, maxIterations: maxIterationsFlag }
           : undefined,
+      // Automax passes its UI language so the agent answers in it (see
+      // PromptBuilder.userLanguageLine). Standalone runs leave it unset.
+      locale: process.env.AUTOMAX_LOCALE?.trim() || undefined,
     };
 
     const renderer = new ConsoleRenderer();
@@ -361,12 +373,21 @@ program
     // per significant moment so the V6 host can track state without scraping
     // the terminal. Also set an env var so deeper code can branch on it
     // without threading the flag everywhere.
-    const emitter: EventEmitter = opts.automax ? new StdoutEventEmitter() : new NullEventEmitter();
+    // A host that sets AUTOMAX_EVENT_FILE tails that file instead, which keeps
+    // the events off the screen stream the Ink UI owns (see FileEventEmitter).
+    const eventFile = process.env.AUTOMAX_EVENT_FILE?.trim();
+    const emitter: EventEmitter = !opts.automax
+      ? new NullEventEmitter()
+      : eventFile
+        ? new FileEventEmitter(eventFile)
+        : new StdoutEventEmitter();
     if (opts.automax) process.env.AUTOCODE_AUTOMAX = '1';
 
     const auth = new AuthResolver().resolve(ctx.model.provider);
+    // The scripted model (AUTOCODE_FAKE_LLM) needs no credentials — see FakeProvider.
+    const fakeLlm = Boolean(process.env.AUTOCODE_FAKE_LLM?.trim());
     const agent =
-      auth.kind === 'missing'
+      auth.kind === 'missing' && !fakeLlm
         ? (renderer.warn(
             `no credentials for ${ctx.model.provider} — set ${envKeyFor(ctx.model.provider)} or AUTOMAX_PROXY_TOKEN. Running in stub mode.`,
           ),

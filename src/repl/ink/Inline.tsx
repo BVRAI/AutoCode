@@ -1,27 +1,39 @@
-// Inline.tsx — the flicker-free renderer (default).
+// Inline.tsx — the default renderer: Claude Code's transcript grammar in
+// native scrollback.
 //
-// Append-only: committed history prints once into native scrollback via Ink
-// <Static> and is never redrawn. Only a small live region at the bottom
-// (busy line + bordered input + status) repaints. Per the Claude Design
-// handoff, tuned for legibility on plain terminals (Git Bash / mintty):
-//   - committed = user message, the agent's final answer, ONE compact line
-//     per tool (consecutive same-tool calls consolidate), and edit diffs;
-//   - ephemeral = the live spinner / current tool run, input, status bar;
-//   - glyphs fall back to ASCII where the terminal can't render the fancy set.
+// Committed history prints once into scrollback via Ink <Static> and is never
+// redrawn; only the live region at the bottom repaints. What commits and what
+// stays transient follows Claude Code exactly:
+//   committed  — the user turn (tinted band), tool rows with their collapsed
+//                result row, the thinking stub, the streamed answer, notices,
+//                the end-of-turn duration line;
+//   transient  — the status line (verb · elapsed · tokens · esc to interrupt),
+//                the live thinking/answer text, the running tool row, the todo
+//                tray, dialogs, the composer and the footer.
 
 import React from 'react';
 import { Box, Text, Static } from 'ink';
 import { basename } from 'node:path';
-import type { BridgeState, TranscriptItem } from './store.js';
+import type { BridgeState, ToolEntry, TranscriptItem } from './store.js';
 import { useTheme, type Theme } from './theme.js';
 import { useTick, useTerminalSize } from './hooks.js';
 import { StatusBar } from './StatusBar.js';
 import { PlanPanel } from './PlanPanel.js';
 import { Markdown } from './Markdown.js';
 import { glyphs } from './glyphs.js';
-import { WORDMARK, WORDMARK_COMPACT, TAGLINE, gradientSegments, hexToRgb } from '../Banner.js';
-
-const DIFF_CAP = 24;
+import { WORDMARK_COMPACT, gradientSegments, hexToRgb } from '../Banner.js';
+import {
+  DONE_VERBS,
+  diffRows,
+  formatClock,
+  formatDuration,
+  formatTokens,
+  shortName,
+  truncateMiddle,
+  verbFor,
+  wrapPad,
+  type DiffRow,
+} from './grammar.js';
 
 export interface InlineProps {
   state: BridgeState;
@@ -36,24 +48,25 @@ export interface InlineProps {
   modelName: string;
 }
 
-// A render entry: either a plain transcript item, or a consolidated run of
-// consecutive same-name tools.
+// A committed entry: a plain item, or a run of consecutive same-group tool
+// rows collapsed into one ("Read 3 files").
 type Entry =
   | { type: 'item'; key: string; item: TranscriptItem }
-  | { type: 'toolrun'; key: string; name: string; count: number; target?: string; failed: boolean };
+  | { type: 'toolgroup'; key: string; tools: ToolEntry[] };
 
 type StaticEntry = { type: 'welcome'; key: string } | Entry;
 
+const RESULT_INDENT = '     '; // under "⏺ " + "⎿  "
+
 export function Inline(props: InlineProps): React.JSX.Element {
   const t = useTheme();
-  const g = glyphs();
   const { columns } = useTerminalSize();
   const { state } = props;
 
-  // Hold the actively-running trailing run of same-name tools out of <Static>
-  // (it's still changing); everything before it is committed.
-  const { committed, liveRun } = splitLiveRun(state.items);
+  const { committed, live } = splitLive(state.items);
   const entries = groupEntries(committed);
+  const liveGroup = liveReadGroup(live);
+  const liveEntries = liveGroup ? [] : groupEntries(live);
   const staticItems: StaticEntry[] = [{ type: 'welcome', key: '__welcome__' }, ...entries];
 
   return (
@@ -77,57 +90,85 @@ export function Inline(props: InlineProps): React.JSX.Element {
         }
       </Static>
 
-      {/* live region — the only part that repaints; kept small + stable */}
-      <Box flexDirection="column" marginTop={1}>
-        <ActivityLine t={t} state={state} liveRun={liveRun} columns={columns} />
+      {/* live region — the only part that repaints */}
+      <Box flexDirection="column">
+        {liveGroup ? (
+          <LiveGroupRow t={t} tools={liveGroup} columns={columns} />
+        ) : (
+          liveEntries.map((entry) =>
+            entry.type === 'item' && entry.item.kind === 'tool' && entry.item.tool?.status === 'running' ? (
+              <ToolRow key={entry.key} t={t} tool={entry.item.tool} columns={columns} live />
+            ) : (
+              <EntryRow key={entry.key} t={t} entry={entry} columns={columns} />
+            ),
+          )
+        )}
+        {state.thinkingLive && <ThinkingLive t={t} text={state.thinkingLive.text} since={state.thinkingLive.since} />}
+        {state.streaming && (
+          <Box marginTop={1}>
+            <Text color={t.ink}>{glyphs().bullet} </Text>
+            <Box width={Math.max(10, columns - 2)}>
+              <Markdown text={state.streaming} />
+            </Box>
+          </Box>
+        )}
+        <StatusLine t={t} state={state} />
 
         <PlanPanel items={state.plan.items} collapsed={state.plan.collapsed} />
 
         {props.overlay}
 
-        {/* bordered prompt — a distinct zone, set off from the output */}
-        <Box borderStyle="single" borderColor={t.ruleStrong} borderLeft={false} borderRight={false}>
-          <Text color={t.accent} bold>{g.user} </Text>
-          <Text color={t.ink}>{props.input.slice(0, props.cursor)}</Text>
-          <Text backgroundColor={t.accent} color={t.cursorInk}>
-            {props.input.slice(props.cursor, props.cursor + 1) || ' '}
-          </Text>
-          <Text color={t.ink}>{props.input.slice(props.cursor + 1)}</Text>
-        </Box>
+        <Composer t={t} state={state} input={props.input} cursor={props.cursor} columns={columns} />
 
-        <StatusBar state={state} columns={columns} />
-
-        <Text color={t.inkFaint}>
-          enter send · esc {state.busy ? 'interrupt' : 'clear'} · ^P plan · {g.rich ? '↑' : 'up'} history
-          {' '}· ^c {props.exitArmed ? 'EXIT' : 'exit'}
-        </Text>
+        <StatusBar state={state} columns={columns} exitArmed={props.exitArmed ?? false} />
       </Box>
     </Box>
   );
 }
 
-// ── committed entry rendering ────────────────────────────────────────────
+// ── committed entries ─────────────────────────────────────────────────────
 
 function EntryRow({ t, entry, columns }: { t: Theme; entry: Entry; columns: number }): React.JSX.Element {
-  if (entry.type === 'toolrun') {
-    return <ToolLine t={t} name={entry.name} target={entry.target} count={entry.count} failed={entry.failed} columns={columns} />;
-  }
+  if (entry.type === 'toolgroup') return <ToolGroupRow t={t} tools={entry.tools} columns={columns} />;
   const item = entry.item;
+  const g = glyphs();
   switch (item.kind) {
     case 'user':
-      return (
-        <Box marginTop={1}>
-          <Text color={t.accent} bold>{glyphs().user} </Text>
-          <Text color={t.ink} bold>{item.text ?? ''}</Text>
-        </Box>
-      );
+      return <UserBand t={t} text={item.text ?? ''} columns={columns} />;
     case 'assistant':
       return (
-        <Box marginTop={1} flexGrow={1}>
-          <Markdown text={item.text ?? ''} />
+        <Box marginTop={1}>
+          <Text color={t.ink}>{g.bullet} </Text>
+          {/* An explicit width: a flex box next to the prefix lets the text wrap at
+              the full terminal width, and the terminal then breaks the last word. */}
+          <Box width={Math.max(10, columns - 2)}>
+            <Markdown text={item.text ?? ''} />
+          </Box>
         </Box>
       );
+    case 'thinking':
+      return (
+        <Box marginTop={1}>
+          <Text color={t.inkDim}>
+            {g.star} Thought for {formatDuration(item.durationMs ?? 0)}
+          </Text>
+        </Box>
+      );
+    case 'turn_end': {
+      const info = item.turnEnd;
+      const verb = verbFor(DONE_VERBS, item.turn);
+      const when = info ? formatClock(new Date(info.endedAt)) : '';
+      return (
+        <Box marginTop={1}>
+          <Text color={t.inkDim}>
+            {g.star} {verb} for {formatDuration(item.durationMs ?? 0)}
+            {when ? ` · done ${when}` : ''}
+          </Text>
+        </Box>
+      );
+    }
     case 'info':
+    case 'compact':
       return (
         <Box>
           <Text color={t.inkDim}>  {item.text ?? ''}</Text>
@@ -136,141 +177,334 @@ function EntryRow({ t, entry, columns }: { t: Theme; entry: Entry; columns: numb
     case 'warn':
       return (
         <Box>
-          <Text color={t.warn}>  {glyphs().warn} {item.text ?? ''}</Text>
+          <Text color={t.warn}>
+            {'  '}{g.warn} {item.text ?? ''}
+          </Text>
         </Box>
       );
     case 'error':
       return (
         <Box>
-          <Text color={t.rose}>  {glyphs().error} {item.text ?? ''}</Text>
+          <Text color={t.rose}>
+            {'  '}{g.error} {item.text ?? ''}
+          </Text>
         </Box>
       );
     case 'tool':
-      return item.tool ? (
-        <ToolLine t={t} name={item.tool.name} target={item.tool.target} count={1} failed={item.tool.status === 'err'} columns={columns} />
+      return item.tool ? <ToolRow t={t} tool={item.tool} columns={columns} /> : <></>;
+    case 'diff':
+      return item.diff ? (
+        <StandaloneDiff t={t} label={item.diff.label} before={item.diff.before} after={item.diff.after} columns={columns} />
       ) : (
         <></>
       );
-    case 'diff':
-      return item.diff ? <CommittedDiff t={t} before={item.diff.before} after={item.diff.after} /> : <></>;
     case 'rule':
-      return <></>; // turn spacing comes from the user-message margin
-    case 'thinking':
-    case 'compact':
-      return (
-        <Box>
-          <Text color={t.inkFaint}>  {item.text ?? ''}</Text>
-        </Box>
-      );
+      return <></>;
   }
 }
 
-function ToolLine({
-  t,
-  name,
-  target,
-  count,
-  failed,
-  columns,
-}: {
-  t: Theme;
-  name: string;
-  target?: string;
-  count: number;
-  failed: boolean;
-  columns: number;
-}): React.JSX.Element {
-  const g = glyphs();
-  const glyph = failed ? g.toolFail : g.toolDone;
-  const glyphColor = failed ? t.rose : t.add;
-  const room = Math.max(8, columns - name.length - 12);
+function UserBand({ t, text, columns }: { t: Theme; text: string; columns: number }): React.JSX.Element {
+  const width = Math.max(10, columns - 2);
+  const lines = wrapPad(text, width - 3);
   return (
-    <Box>
-      <Text color={glyphColor}>  {glyph} </Text>
-      <Text color={t.accent}>{name}</Text>
-      {count > 1 && <Text color={t.inkDim}> {g.times}{count}</Text>}
-      {target && <Text color={t.inkDim}>  {truncate(target, room)}</Text>}
+    <Box flexDirection="column" marginTop={1}>
+      {lines.map((l, i) => (
+        <Text key={i} backgroundColor={t.userBand} color={t.ink}>
+          {` ${i === 0 ? '> ' : '  '}${l}`}
+        </Text>
+      ))}
     </Box>
   );
 }
 
-function CommittedDiff({ t, before, after }: { t: Theme; before: string; after: string }): React.JSX.Element {
-  if (before === after) return <></>;
-  // Minimal line-level diff: show removed then added lines (capped).
-  const removed = before.split('\n');
-  const added = after.split('\n');
-  const lines: Array<{ k: 'a' | 'd'; x: string }> = [];
-  for (const l of removed) if (!added.includes(l) && l.length > 0) lines.push({ k: 'd', x: l });
-  for (const l of added) if (!removed.includes(l) && l.length > 0) lines.push({ k: 'a', x: l });
-  if (lines.length === 0) return <></>;
+/** One tool row: "⏺ Label(arg)" then "⎿  summary" and whatever hangs under it. */
+function ToolRow({ t, tool, columns, live }: { t: Theme; tool: ToolEntry; columns: number; live?: boolean }): React.JSX.Element {
   const g = glyphs();
-  const shown = lines.slice(0, DIFF_CAP);
+  const bulletColor = tool.status === 'err' ? t.rose : tool.status === 'running' ? t.inkDim : t.add;
+  const room = Math.max(12, columns - tool.label.length - 6);
+  const arg = tool.arg ? truncateMiddle(tool.arg, room) : '';
   return (
     <Box flexDirection="column">
-      {shown.map((l, i) => (
-        <Box key={i}>
-          <Text color={t.ruleStrong}>    {g.diffGuide} </Text>
-          <Text color={l.k === 'a' ? t.add : t.del} backgroundColor={l.k === 'a' ? t.addBg : t.delBg}>
-            {l.k === 'a' ? '+' : '-'} {l.x}
+      <Box>
+        <Text color={bulletColor}>{g.bullet} </Text>
+        <Text color={t.ink} bold>
+          {tool.label}
+        </Text>
+        {arg.length > 0 && (
+          <Text color={t.ink}>
+            (<Text color={t.inkDim}>{arg}</Text>)
           </Text>
-        </Box>
-      ))}
-      {lines.length > DIFF_CAP && (
+        )}
+      </Box>
+      {live ? <LiveResult t={t} tool={tool} /> : <ToolResult t={t} tool={tool} columns={columns} />}
+    </Box>
+  );
+}
+
+function LiveResult({ t, tool }: { t: Theme; tool: ToolEntry }): React.JSX.Element {
+  const g = glyphs();
+  useTick(1000);
+  const secs = Math.max(0, Math.round((Date.now() - tool.startedAt) / 1000));
+  return (
+    <Box>
+      <Text color={t.inkDim}>
+        {'  '}{g.elbow}  Running… ({secs}s)
+      </Text>
+    </Box>
+  );
+}
+
+function ToolResult({ t, tool, columns }: { t: Theme; tool: ToolEntry; columns: number }): React.JSX.Element {
+  const g = glyphs();
+  const errColor = tool.status === 'err' ? t.rose : t.inkDim;
+  const rows: React.ReactNode[] = [];
+
+  if (tool.summary && tool.summary.length > 0) {
+    rows.push(
+      <Box key="summary">
+        <Text color={errColor}>
+          {'  '}{g.elbow}  {tool.summary}
+        </Text>
+      </Box>,
+    );
+  }
+  if (tool.todos && tool.todos.length > 0) {
+    tool.todos.forEach((todo, i) => {
+      const done = todo.status === 'completed';
+      const mark = done ? g.checked : g.unchecked;
+      rows.push(
+        <Box key={`todo-${i}`}>
+          <Text color={t.inkDim}>
+            {'  '}{i === 0 && !tool.summary ? g.elbow : ' '}{'  '}
+          </Text>
+          <Text color={done ? t.inkDim : t.ink} strikethrough={done}>
+            {mark} {todo.text}
+          </Text>
+        </Box>,
+      );
+    });
+  }
+  if (tool.bodyLines && tool.bodyLines.length > 0) {
+    const width = Math.max(20, columns - RESULT_INDENT.length - 1);
+    tool.bodyLines.forEach((line, i) => {
+      const first = i === 0 && !tool.summary;
+      rows.push(
+        <Box key={`body-${i}`}>
+          <Text color={t.inkDim}>
+            {'  '}{first ? g.elbow : ' '}{'  '}
+          </Text>
+          <Text color={tool.status === 'err' ? t.rose : t.inkDim}>{line.length > width ? `${line.slice(0, width - 1)}…` : line}</Text>
+        </Box>,
+      );
+    });
+    if ((tool.hiddenLines ?? 0) > 0) {
+      rows.push(
+        <Box key="hidden">
+          <Text color={t.inkDim}>
+            {RESULT_INDENT}… +{tool.hiddenLines} lines (ctrl+o to expand)
+          </Text>
+        </Box>,
+      );
+    }
+  }
+  if (tool.diffRows && tool.diffRows.length > 0) {
+    rows.push(<DiffBlock key="diff" t={t} rows={tool.diffRows} hidden={tool.diffHidden ?? 0} columns={columns} />);
+  }
+  if (rows.length === 0 && tool.status !== 'running') {
+    rows.push(
+      <Box key="done">
+        <Text color={errColor}>
+          {'  '}{g.elbow}  {tool.status === 'err' ? 'Error' : 'Done'}
+        </Text>
+      </Box>,
+    );
+  }
+  return <Box flexDirection="column">{rows}</Box>;
+}
+
+/** Consecutive reads/lists collapse: "⏺ Read 3 files (ctrl+o to expand)" + the names. */
+function ToolGroupRow({ t, tools, columns }: { t: Theme; tools: ToolEntry[]; columns: number }): React.JSX.Element {
+  const g = glyphs();
+  const failed = tools.some((x) => x.status === 'err');
+  const kind = tools[0]!.group;
+  const n = tools.length;
+  const head = kind === 'read' ? `Read ${n} files` : kind === 'list' ? `Listed ${n} directories` : `Searched ${n} times`;
+  const names = tools.map((x) => shortName(x.arg)).filter(Boolean);
+  const width = Math.max(20, columns - RESULT_INDENT.length - 1);
+  const joined = names.join(', ');
+  return (
+    <Box flexDirection="column">
+      <Box>
+        <Text color={failed ? t.rose : t.add}>{g.bullet} </Text>
+        <Text color={t.ink} bold>
+          {head}
+        </Text>
+        <Text color={t.inkDim}> (ctrl+o to expand)</Text>
+      </Box>
+      <Box>
+        <Text color={t.inkDim}>
+          {'  '}{g.elbow}  {joined.length > width ? `${joined.slice(0, width - 1)}…` : joined}
+        </Text>
+      </Box>
+    </Box>
+  );
+}
+
+/** While reads are in flight: "⏺ Reading 3 files… (ctrl+o to expand)" + the names so far. */
+function LiveGroupRow({ t, tools, columns }: { t: Theme; tools: ToolEntry[]; columns: number }): React.JSX.Element {
+  const g = glyphs();
+  const kind = tools[0]!.group;
+  const n = tools.length;
+  const head = kind === 'read' ? `Reading ${n} files…` : `Listing ${n} directories…`;
+  const names = tools.map((x) => shortName(x.arg)).filter(Boolean).join(', ');
+  const width = Math.max(20, columns - RESULT_INDENT.length - 1);
+  return (
+    <Box flexDirection="column">
+      <Box>
+        <Text color={t.inkDim}>{g.bullet} </Text>
+        <Text color={t.ink} bold>
+          {head}
+        </Text>
+        <Text color={t.inkDim}> (ctrl+o to expand)</Text>
+      </Box>
+      <Box>
+        <Text color={t.inkDim}>
+          {'  '}{g.elbow}  {names.length > width ? `${names.slice(0, width - 1)}…` : names}
+        </Text>
+      </Box>
+    </Box>
+  );
+}
+
+function DiffBlock({ t, rows, hidden, columns }: { t: Theme; rows: DiffRow[]; hidden: number; columns: number }): React.JSX.Element {
+  const g = glyphs();
+  const width = Math.max(20, columns - 12);
+  return (
+    <Box flexDirection="column">
+      {rows.map((r, i) => {
+        if (r.kind === 'gap') {
+          return (
+            <Box key={i}>
+              <Text color={t.inkDim}>
+                {RESULT_INDENT}{g.ellipsisV}
+              </Text>
+            </Box>
+          );
+        }
+        const no = (r.kind === 'del' ? r.oldNo : r.newNo) ?? r.oldNo ?? 0;
+        const sign = r.kind === 'add' ? '+' : r.kind === 'del' ? '-' : ' ';
+        const text = r.text.length > width ? `${r.text.slice(0, width - 1)}…` : r.text;
+        const fg = r.kind === 'add' ? t.add : r.kind === 'del' ? t.del : t.inkDim;
+        const bg = r.kind === 'add' ? t.addBg : r.kind === 'del' ? t.delBg : undefined;
+        return (
+          <Box key={i}>
+            <Text color={t.inkDim}>
+              {RESULT_INDENT}{String(no).padStart(4)}{' '}
+            </Text>
+            <Text color={fg} backgroundColor={bg}>
+              {sign} {text}
+            </Text>
+          </Box>
+        );
+      })}
+      {hidden > 0 && (
         <Box>
-          <Text color={t.inkFaint}>    {g.diffGuide} … +{lines.length - DIFF_CAP} more</Text>
+          <Text color={t.inkDim}>
+            {RESULT_INDENT}… +{hidden} lines (ctrl+o to expand)
+          </Text>
         </Box>
       )}
     </Box>
   );
 }
 
-// ── live region pieces ───────────────────────────────────────────────────
-
-function ActivityLine({
-  t,
-  state,
-  liveRun,
-  columns,
-}: {
-  t: Theme;
-  state: BridgeState;
-  liveRun: TranscriptItem[];
-  columns: number;
-}): React.JSX.Element | null {
+function StandaloneDiff({ t, label, before, after, columns }: { t: Theme; label: string; before: string; after: string; columns: number }): React.JSX.Element {
   const g = glyphs();
-  const frame = g.spinner[useTick(g.rich ? 90 : 130) % g.spinner.length]!;
+  const { rows, stats, hidden } = diffRows(before, after, 24);
+  if (rows.length === 0) return <></>;
+  return (
+    <Box flexDirection="column">
+      <Box>
+        <Text color={t.add}>{g.bullet} </Text>
+        <Text color={t.ink} bold>
+          Update
+        </Text>
+        <Text color={t.ink}>
+          (<Text color={t.inkDim}>{label}</Text>)
+        </Text>
+      </Box>
+      <Box>
+        <Text color={t.inkDim}>
+          {'  '}{g.elbow}  Updated {label} with {stats.added} addition{stats.added === 1 ? '' : 's'} and {stats.removed} removal{stats.removed === 1 ? '' : 's'}
+        </Text>
+      </Box>
+      <DiffBlock t={t} rows={rows} hidden={hidden} columns={columns} />
+    </Box>
+  );
+}
 
-  if (liveRun.length > 0) {
-    const last = liveRun[liveRun.length - 1]!;
-    const name = last.tool?.name ?? 'tool';
-    const target = last.tool?.target;
-    const room = Math.max(8, columns - name.length - 14);
-    return (
-      <Box>
-        <Text color={t.amber}>{frame} </Text>
-        <Text color={t.accent}>{name}</Text>
-        {liveRun.length > 1 && <Text color={t.inkDim}> {g.times}{liveRun.length}</Text>}
-        {target && <Text color={t.inkDim}>  {truncate(target, room)}</Text>}
-      </Box>
-    );
-  }
-  if (state.thinking) {
-    return (
-      <Box>
-        <Text color={t.accent}>{frame} </Text>
-        <Text color={t.inkDim}>{state.thinking}</Text>
-      </Box>
-    );
-  }
-  if (state.busy) {
-    return (
-      <Box>
-        <Text color={t.accent}>{frame} </Text>
-        <Text color={t.inkDim}>working</Text>
-      </Box>
-    );
-  }
-  return null;
+// ── live region ───────────────────────────────────────────────────────────
+
+function ThinkingLive({ t, text, since }: { t: Theme; text: string; since: number }): React.JSX.Element {
+  const g = glyphs();
+  useTick(1000);
+  const secs = Math.max(0, Math.round((Date.now() - since) / 1000));
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0)
+    .slice(-4);
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      <Text color={t.inkDim}>
+        {g.star} Thinking… ({secs}s)
+      </Text>
+      {lines.map((l, i) => (
+        <Text key={i} color={t.thinkingInk} italic>
+          {'  '}{l}
+        </Text>
+      ))}
+    </Box>
+  );
+}
+
+/** "✽ Cogitating… (23s · ↓ 1.2k tokens · esc to interrupt)" — transient. */
+function StatusLine({ t, state }: { t: Theme; state: BridgeState }): React.JSX.Element | null {
+  const g = glyphs();
+  const tick = useTick(200);
+  if (!state.busy || !state.activity) return null;
+  const frame = g.stars[tick % g.stars.length]!;
+  const elapsedMs = Date.now() - (state.turnStartedAt ?? state.activity.since);
+  const tokens = Math.round(state.liveOutputChars / 4);
+  const color = elapsedMs > 10_000 ? t.amber : t.accent;
+  return (
+    <Box marginTop={1}>
+      <Text color={color}>{frame} </Text>
+      <Text color={t.ink}>{state.activity.verb}…</Text>
+      <Text color={t.inkDim}>
+        {' '}({formatDuration(elapsedMs)}
+        {tokens > 0 ? ` · ${g.down} ${formatTokens(tokens)} tokens` : ''} · esc to interrupt)
+      </Text>
+    </Box>
+  );
+}
+
+function Composer({ t, state, input, cursor, columns }: { t: Theme; state: BridgeState; input: string; cursor: number; columns: number }): React.JSX.Element {
+  const borderColor =
+    state.mode === 'planning' ? t.borderPlan : state.mode === 'autocode' || state.mode === 'admin' ? t.borderAuto : t.border;
+  const shell = input.startsWith('!');
+  return (
+    <Box borderStyle="round" borderColor={shell ? t.warn : borderColor} paddingX={1} marginTop={1} width={Math.max(20, columns)}>
+      <Text color={shell ? t.warn : t.accent} bold>
+        {shell ? '! ' : '> '}
+      </Text>
+      <Text color={t.ink}>{shell ? input.slice(1, cursor) : input.slice(0, cursor)}</Text>
+      <Text backgroundColor={t.accent} color={t.cursorInk}>
+        {input.slice(cursor, cursor + 1) || ' '}
+      </Text>
+      <Text color={t.ink}>{input.slice(cursor + 1)}</Text>
+    </Box>
+  );
 }
 
 function Welcome({
@@ -291,95 +525,107 @@ function Welcome({
   columns: number;
 }): React.JSX.Element {
   const g = glyphs();
-  // Big face when there's room (≥ 69 cols), else the 2-row compact face.
-  const art = columns >= WORDMARK[0]!.length + 1 ? WORDMARK : WORDMARK_COMPACT;
-  const width = art[0]!.length;
-  // Theme-aware gradient: accent (teal) → agent (violet), painted natively as
-  // per-color <Text> runs so it's safe inside <Static> (no embedded ANSI).
   const from = hexToRgb(t.accent);
   const to = hexToRgb(t.agent);
+  const showMark = columns >= WORDMARK_COMPACT[0]!.length + 6;
+  const width = WORDMARK_COMPACT[0]!.length;
+  const v = version.startsWith('v') ? version : `v${version}`;
   return (
-    <Box flexDirection="column">
-      {art.map((row, r) => (
-        <Box key={r}>
-          {gradientSegments(row, width, from, to).map((s, i) => (
-            <Text key={i} color={s.color}>{s.text}</Text>
-          ))}
-        </Box>
-      ))}
-      {/* tagline — version already carries its own leading 'v' */}
-      <Box marginTop={1}>
-        <Text color={t.inkFaint}>{TAGLINE}{'  ·  '}{version}</Text>
+    <Box flexDirection="column" borderStyle="round" borderColor={t.border} paddingX={1} marginTop={1} width={Math.min(columns, 78)}>
+      {showMark &&
+        WORDMARK_COMPACT.map((row, r) => (
+          <Box key={r}>
+            {gradientSegments(row, width, from, to).map((s, i) => (
+              <Text key={i} color={s.color}>
+                {s.text}
+              </Text>
+            ))}
+          </Box>
+        ))}
+      <Box marginTop={showMark ? 1 : 0}>
+        <Text color={t.accent}>{g.star} </Text>
+        <Text color={t.ink} bold>
+          AutoCode {v}
+        </Text>
       </Box>
-      {/* meta — wordmark + tagline cover name/version, so this drops them */}
-      <Box marginTop={1}>
-        <Text color={t.ink}>{provider}/{model}</Text>
-        <Text color={t.inkFaint}>{'  ·  '}</Text>
-        <Text color={t.inkDim}>{basename(projectRoot)}</Text>
-        {branch && (
-          <>
-            <Text color={t.inkFaint}>{'  '}</Text>
-            <Text color={t.inkDim}>{g.branch}</Text>
-            <Text color={t.accent}>{branch}</Text>
-          </>
-        )}
+      <Box>
+        <Text color={t.inkDim}>
+          {'  '}{provider}/{model} · {basename(projectRoot) || projectRoot}
+          {branch ? ` (${branch})` : ''}
+        </Text>
       </Box>
-      <Text color={t.inkFaint}>/help for commands · /model to switch · shift+tab cycles mode</Text>
+      <Box>
+        <Text color={t.inkDim}>{'  '}/help for commands · shift+tab cycles mode · ctrl+o expands results</Text>
+      </Box>
     </Box>
   );
 }
 
-// ── helpers ──────────────────────────────────────────────────────────────
+// ── helpers ───────────────────────────────────────────────────────────────
 
-// Pull the actively-running trailing run of consecutive same-name tools out of
-// the committed list so it stays in the live region (and consolidates) until
-// it settles. If the last item isn't a running tool, nothing is live.
-function splitLiveRun(items: TranscriptItem[]): { committed: TranscriptItem[]; liveRun: TranscriptItem[] } {
-  const last = items[items.length - 1];
-  if (!(last && last.kind === 'tool' && last.tool && last.tool.status === 'running')) {
-    return { committed: items, liveRun: [] };
-  }
-  const name = last.tool.name;
-  let i = items.length - 1;
-  while (i >= 0) {
-    const it = items[i]!;
-    if (it.kind === 'tool' && it.tool && it.tool.name === name) i--;
-    else break;
-  }
-  return { committed: items.slice(0, i + 1), liveRun: items.slice(i + 1) };
+/**
+ * Ink's <Static> is append-only and must never shrink (a shorter list resets
+ * its cursor and later re-emits rows): an entry, once written, never changes
+ * and nothing may commit ahead of an item that is still changing. So
+ * everything from the first running tool onward stays in the live region, and
+ * a trailing run of finished reads/lists waits there too, so it can commit as
+ * one row ("Read 3 files") once something else lands after it. A turn always
+ * ends with an item (turn_end, error, interrupt), so the run never lingers.
+ */
+function splitLive(items: TranscriptItem[]): { committed: TranscriptItem[]; live: TranscriptItem[] } {
+  let cut = items.findIndex((it) => it.kind === 'tool' && it.tool?.status === 'running');
+  if (cut < 0) cut = items.length;
+  while (cut > 0 && isGroupable(items[cut - 1]!)) cut--;
+  return { committed: items.slice(0, cut), live: items.slice(cut) };
 }
 
-// Collapse consecutive same-name tool items into one run entry. These runs are
-// complete (a non-matching item follows), so they're safe to freeze in <Static>.
+/** The live region is a run of same-group reads/lists ending in the one still running. */
+function liveReadGroup(live: TranscriptItem[]): ToolEntry[] | null {
+  if (live.length < 2) return null;
+  const tools: ToolEntry[] = [];
+  for (const it of live) {
+    if (it.kind !== 'tool' || !it.tool) return null;
+    tools.push(it.tool);
+  }
+  const group = tools[0]!.group;
+  if (group !== 'read' && group !== 'list') return null;
+  if (!tools.every((x) => x.group === group && !x.bodyLines)) return null;
+  if (tools.slice(0, -1).some((x) => x.status === 'running')) return null;
+  if (tools[tools.length - 1]!.status !== 'running') return null;
+  return tools;
+}
+
+function isGroupable(it: TranscriptItem): boolean {
+  if (it.kind !== 'tool' || !it.tool) return false;
+  const tool = it.tool;
+  return (tool.group === 'read' || tool.group === 'list') && tool.status !== 'running' && !tool.bodyLines;
+}
+
+/** Collapse runs of ≥2 consecutive finished reads (or lists) into one row. */
 function groupEntries(items: TranscriptItem[]): Entry[] {
   const out: Entry[] = [];
   let i = 0;
   while (i < items.length) {
     const it = items[i]!;
-    if (it.kind === 'tool' && it.tool) {
-      const name = it.tool.name;
+    const group = it.kind === 'tool' && it.tool ? it.tool.group : null;
+    if (group === 'read' || group === 'list') {
       let j = i;
-      let failed = false;
-      let lastTarget: string | undefined;
+      const run: ToolEntry[] = [];
       while (j < items.length) {
-        const t = items[j]!;
-        if (t.kind === 'tool' && t.tool && t.tool.name === name) {
-          if (t.tool.status === 'err') failed = true;
-          if (t.tool.target) lastTarget = t.tool.target;
+        const c = items[j]!;
+        if (c.kind === 'tool' && c.tool && c.tool.group === group && c.tool.status !== 'running' && !c.tool.bodyLines) {
+          run.push(c.tool);
           j++;
         } else break;
       }
-      out.push({ type: 'toolrun', key: it.id, name, count: j - i, target: lastTarget, failed });
-      i = j;
-    } else {
-      out.push({ type: 'item', key: it.id, item: it });
-      i++;
+      if (run.length >= 2) {
+        out.push({ type: 'toolgroup', key: it.id, tools: run });
+        i = j;
+        continue;
+      }
     }
+    out.push({ type: 'item', key: it.id, item: it });
+    i++;
   }
   return out;
-}
-
-function truncate(s: string, n: number): string {
-  if (n <= 1) return s.slice(0, Math.max(0, n));
-  return s.length <= n ? s : s.slice(0, n - 1) + '…';
 }

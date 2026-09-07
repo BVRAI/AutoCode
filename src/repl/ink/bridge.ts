@@ -1,46 +1,39 @@
-// Adapters that let the existing ConsoleRenderer and EventEmitter route
-// into the BridgeStore instead of stdout. Drop-in: no other code in the
-// project needs to know whether the Ink path is active.
+// Adapters that let the ConsoleRenderer sink and the EventEmitter route into
+// the BridgeStore instead of stdout. Drop-in: no other code in the project
+// needs to know whether the Ink path is active.
 
-import type { BridgeStore } from './store.js';
-import type { ToolDiff } from './store.js';
+import type { BridgeStore, ToolDiff } from './store.js';
 import type { EventEmitter } from '../EventEmitter.js';
 import type { RendererSink } from '../ConsoleRenderer.js';
 import { renderUnifiedDiff } from '../../util/diff.js';
+import { ACTIVITY_VERBS, describeCall, verbFor } from './grammar.js';
 
 // Routes ConsoleRenderer writes into the store.
 export function createRendererSink(store: BridgeStore): RendererSink {
-  // The agent loop narrates tool execution as dim/info text: a shell-command
-  // preview block, a "→ tool summary (Nms)" result line, hook chatter. The
-  // structured tool cards (from tool_call/completed events) already represent
-  // each tool, so surfacing this text too would double everything. Drop it —
-  // purely a rendering choice; the agent still emits it (and --automax sees it).
-  let inPreview = false;
+  // The agent loop still narrates a few things as dim text that the
+  // structured rows already show (the "→ tool summary (Nms)" line, hook
+  // chatter). Drop those — a rendering choice; --automax still sees them.
   const isNoise = (text: string): boolean => {
     const t = text.trim();
-    if (t === '--- preview ---') {
-      inPreview = true;
-      return true;
-    }
-    if (/^-{3,}$/.test(t)) {
-      inPreview = false;
-      return true; // closing rule of the preview block
-    }
-    if (inPreview) return true; // the echoed command between the markers
-    if (t.startsWith('→ ')) return true; // tool result summary (the card shows it)
-    if (t.startsWith('hook[')) return true; // pre-hook chatter
+    if (/^-{3,}$/.test(t)) return true;
+    if (t.startsWith('→ ')) return true;
+    if (t.startsWith('hook[')) return true;
     return false;
   };
+  // One activity verb per turn for the status line, Claude Code style.
+  let turnSeed = 0;
   return {
     info(text) {
       if (isNoise(text)) return;
       store.appendText('info', text);
     },
     assistant(text) {
-      store.appendText('assistant', text);
+      store.commitAssistant(text);
     },
     dim(text) {
       if (isNoise(text)) return;
+      // "✗ tool blocked/declined" echoes duplicate the tool row's Error line.
+      if (text.trim().startsWith('✗ ')) return;
       store.appendText('info', text);
     },
     warn(text) {
@@ -57,25 +50,61 @@ export function createRendererSink(store: BridgeStore): RendererSink {
       store.appendRule();
     },
     diff(label, before, after) {
-      store.appendDiff(label, before, after);
+      store.attachDiff(label, before, after);
     },
     user(text) {
       store.appendText('user', text);
     },
+    assistantChunk(text) {
+      store.streamChunk(text);
+    },
+    thinkingChunk(text) {
+      store.thinkingChunk(text);
+    },
+    thinkingEnd(durationMs) {
+      store.thinkingEnd(durationMs);
+    },
+    turnEnd(info) {
+      store.turnEnd(info);
+    },
+    activity(label) {
+      if (label === null) {
+        store.setActivity(null);
+        return;
+      }
+      store.setActivity(activityVerb(label, store.get().turn + turnSeed));
+      if (label === 'thinking') turnSeed = store.get().turn;
+    },
   };
 }
 
-// Routes AgentLoop's emit() calls into the store: tool_call → startTool;
-// completed/failed → finishTool; file_edit_proposed → recordEdit.
+/** Map the loop's spinner labels onto Claude-Code-style status verbs. */
+export function activityVerb(label: string, seed: number): string {
+  const l = label.trim();
+  if (l === 'thinking' || l.length === 0) return verbFor(ACTIVITY_VERBS, seed);
+  if (l.startsWith('verifying')) return 'Verifying';
+  if (l.startsWith('task')) return 'Exploring';
+  const known = describeCall(l, {});
+  if (known.label !== l) return known.activity;
+  return l.charAt(0).toUpperCase() + l.slice(1);
+}
+
+// Routes AgentLoop's emit() calls into the store: started → beginTurn;
+// tool_call → startTool; tool_result → finishTool; completed/failed → close.
 export function createBridgeEventEmitter(
   store: BridgeStore,
   inner?: EventEmitter,
 ): EventEmitter {
-  // Track which tool we just started so completed/failed can finish it.
-  // AgentLoop emits in a strict order: one tool_call → tool runs → next
-  // tool_call. We track the most recent tool id; if events arrive out of
-  // order we just abandon the unmatched one.
-  let openToolId: string | null = null;
+  // Tool rows are opened by tool_call and closed by the matching
+  // tool_result. AgentLoop emits them in order for sequential tools; the
+  // parallel `task` fan-out emits several tool_calls before their results,
+  // so keep a FIFO of open rows keyed by tool name.
+  const open: Array<{ id: string; name: string }> = [];
+
+  const closeAll = (status: 'ok' | 'err'): void => {
+    for (const o of open) store.closeTool(o.id, status);
+    open.length = 0;
+  };
 
   return {
     emit(type, data) {
@@ -89,74 +118,50 @@ export function createBridgeEventEmitter(
             break;
           }
           case 'tool_call': {
-            // Finish the previously-open tool first: the agent loop emits only
-            // one 'completed' per turn, so without this every tool except the
-            // last would stay stuck in the running state.
-            if (openToolId) {
-              store.finishTool(openToolId, 'ok');
-              openToolId = null;
-            }
             const name = String(data['name'] ?? 'tool');
             const args = (data['args'] as Record<string, unknown>) ?? {};
-            const target = pickTarget(args);
-            openToolId = store.startTool(name, target);
+            const id = store.startTool(name, args);
+            open.push({ id, name });
             break;
           }
           case 'tool_result': {
-            if (openToolId) {
-              const name = String(data['name'] ?? 'tool');
-              const summary = String(data['summary'] ?? '');
-              const content = String(data['content'] ?? '');
-              const isError = data['isError'] === true;
-              store.finishTool(openToolId, isError ? 'err' : 'ok', {
-                detail: summary || undefined,
-                body: resultBodyFor(name, content, isError),
-              });
-              openToolId = null;
+            const name = String(data['name'] ?? 'tool');
+            let idx = open.findIndex((o) => o.name === name);
+            if (idx < 0) idx = open.length - 1;
+            if (idx >= 0) {
+              const [row] = open.splice(idx, 1);
+              const durationMs = typeof data['durationMs'] === 'number' ? (data['durationMs'] as number) : undefined;
+              store.finishTool(
+                row!.id,
+                {
+                  summary: String(data['summary'] ?? ''),
+                  content: String(data['content'] ?? ''),
+                  isError: data['isError'] === true,
+                  metadata: (data['metadata'] as Record<string, unknown> | undefined) ?? undefined,
+                },
+                durationMs,
+              );
             }
             break;
           }
           case 'file_edit_proposed': {
             const path = String(data['path'] ?? '');
-            const summary =
-              (data['summary'] as { added?: number; deleted?: number; isNew?: boolean }) ?? {};
-            store.recordEdit({
-              file: path,
-              added: summary.added ?? 0,
-              deleted: summary.deleted ?? 0,
-              isNew: summary.isNew ?? false,
-            });
+            const summary = String(data['summary'] ?? '');
+            store.recordEdit({ file: path, added: 0, deleted: 0, isNew: summary === 'create' || summary === 'mkdir' });
             break;
           }
           case 'completed': {
-            if (openToolId) {
-              store.finishTool(openToolId, 'ok');
-              openToolId = null;
-            }
+            closeAll('ok');
             store.setBusy(false);
             store.setThinking(null);
-            // Usage totals come through here as well.
-            const u = data['usage'] as
-              | { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number; costUsd?: number }
-              | undefined;
-            if (u) {
-              store.setUsage({
-                inputTokens: u.inputTokens ?? 0,
-                outputTokens: u.outputTokens ?? 0,
-                cacheReadTokens: u.cacheReadTokens ?? 0,
-                cacheWriteTokens: u.cacheWriteTokens ?? 0,
-                costUsd: u.costUsd ?? 0,
-              });
-            }
+            store.setActivity(null);
             break;
           }
           case 'failed': {
-            if (openToolId) {
-              store.finishTool(openToolId, 'err');
-              openToolId = null;
-            }
+            closeAll('err');
             store.setBusy(false);
             store.setThinking(null);
+            store.setActivity(null);
             const err = String(data['error'] ?? 'failed');
             store.appendText('error', err);
             break;
@@ -165,36 +170,12 @@ export function createBridgeEventEmitter(
       } catch {
         /* never let a UI bug kill the agent */
       }
-      // Pass through to inner emitter (e.g. --automax JSON) if present.
-      // `tool_result` is a Bridge-internal UI detail; the host already gets
+      // Pass through to the inner emitter (the --automax JSON stream).
+      // `tool_result` is a Bridge-internal UI detail; the host already gets the
       // public tool lifecycle through tool_call/completed/failed.
       if (type !== 'tool_result') inner?.emit(type, data);
     },
   };
-}
-
-function pickTarget(args: Record<string, unknown>): string | undefined {
-  for (const k of ['path', 'file', 'target', 'filepath', 'file_path', 'command', 'pattern', 'query', 'url', 'name']) {
-    const v = args[k];
-    if (typeof v === 'string') return v;
-  }
-  return undefined;
-}
-
-function resultBodyFor(name: string, content: string, isError: boolean): string | undefined {
-  const trimmed = content.trim();
-  if (trimmed.length === 0 || trimmed === '(no output)') return undefined;
-  if (name !== 'run_shell' && !isError) return undefined;
-  return excerpt(trimmed, 18, 1800);
-}
-
-function excerpt(text: string, maxLines: number, maxChars: number): string {
-  const lines = text.split(/\r?\n/);
-  const sliced = lines.slice(0, maxLines).join('\n');
-  const lineSuffix = lines.length > maxLines ? `\n... +${lines.length - maxLines} more line${lines.length - maxLines === 1 ? '' : 's'}` : '';
-  const withLineSuffix = sliced + lineSuffix;
-  if (withLineSuffix.length <= maxChars) return withLineSuffix;
-  return withLineSuffix.slice(0, maxChars) + `\n... +${withLineSuffix.length - maxChars} more chars`;
 }
 
 // Used elsewhere when we want to render a raw unified diff inside a tool card.

@@ -1,0 +1,24 @@
+{
+  "cols": 100,
+  "rows": 30,
+  "theme": "light",
+  "mode": "autocode",
+  "fake": "./slow.fake.json",
+  "project": "../fixtures/project",
+  "steps": [
+    { "waitFor": "/help for commands", "timeoutMs": 30000 },
+    { "type": "add a --verbose flag to the CLI" },
+    { "key": "enter" },
+    { "waitFor": "/Thinking…|Reading/", "timeoutMs": 30000 },
+    { "snapshot": "mid-turn" },
+    { "resize": [72, 22] },
+    { "waitIdle": 400, "timeoutMs": 10000 },
+    { "snapshot": "resized-mid-turn" },
+    { "waitFor": "TURN_END", "timeoutMs": 60000 },
+    { "waitIdle": 600 },
+    { "snapshot": "after-turn" },
+    { "resize": [110, 34] },
+    { "waitIdle": 800, "timeoutMs": 10000 },
+    { "snapshot": "after-grow" }
+  ]
+}

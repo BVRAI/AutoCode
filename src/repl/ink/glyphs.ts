@@ -25,6 +25,18 @@ export interface GlyphSet {
   planDone: string;
   planInterrupted: string;
   spinner: string[]; // busy-indicator frames
+  // Claude Code's transcript glyphs.
+  bullet: string;      // ⏺ before assistant text and tool calls
+  elbow: string;       // ⎿ before a tool result
+  star: string;        // ✻ thinking stub / end-of-turn line
+  stars: string[];     // status-line spinner frames (the ✢ ✽ ✻ family)
+  pause: string;       // ⏸ mode badge (manual / plan)
+  play: string;        // ⏵⏵ mode badge (auto)
+  checked: string;     // ☒ todo done
+  unchecked: string;   // ☐ todo pending
+  ellipsisV: string;   // ⋮ between diff hunks
+  pointer: string;     // ▸ selected option
+  down: string;        // ↓ token counter arrow
 }
 
 const RICH: GlyphSet = {
@@ -49,6 +61,17 @@ const RICH: GlyphSet = {
   planDone: '✓',
   planInterrupted: '⚠',
   spinner: ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'],
+  bullet: '⏺',
+  elbow: '⎿',
+  star: '✻',
+  stars: ['✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳'],
+  pause: '⏸',
+  play: '⏵⏵',
+  checked: '☒',
+  unchecked: '☐',
+  ellipsisV: '⋮',
+  pointer: '▸',
+  down: '↓',
 };
 
 const ASCII: GlyphSet = {
@@ -73,11 +96,24 @@ const ASCII: GlyphSet = {
   planDone: '[x]',
   planInterrupted: '[!]',
   spinner: ['-', '\\', '|', '/'],
+  bullet: '*',
+  elbow: 'L',
+  star: '*',
+  stars: ['*', '+', 'x', '+'],
+  pause: '||',
+  play: '>>',
+  checked: '[x]',
+  unchecked: '[ ]',
+  ellipsisV: ':',
+  pointer: '>',
+  down: 'v',
 };
 
 function isRichTerminal(): boolean {
   if (process.env.AUTOCODE_ASCII === '1') return false; // explicit override
   if (process.env.AUTOCODE_RICH === '1') return true;
+  // Automax's own terminal pane renders the full set (WPF font fallback).
+  if (process.env.AUTOMAX_THEME || process.env.AUTOCODE_AUTOMAX === '1') return true;
   if (process.env.WT_SESSION) return true; // Windows Terminal
   if (process.env.KITTY_WINDOW_ID || process.env.GHOSTTY_RESOURCES_DIR) return true;
   const tp = process.env.TERM_PROGRAM ?? '';

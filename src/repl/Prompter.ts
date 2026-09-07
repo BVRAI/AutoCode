@@ -7,9 +7,21 @@ import { type EventEmitter, NullEventEmitter } from './EventEmitter.js';
 // non-TTY contexts (V6, --automax, CI) we use AutoDenyPrompter
 // (auto-decline) or PlainPrompter (readline). The TuiPrompter that drove
 // the legacy pinned-bar TUI was removed when that TUI was retired.
-export type ApproveVerdict = { decision: 'accept' | 'decline' | 'revise'; guidance?: string };
+// `accept_always` = Claude Code's "Yes, and don't ask again for …": the loop
+// remembers the scope (see ApproveDetail.scope) for the rest of the session.
+export type ApproveVerdict = { decision: 'accept' | 'accept_always' | 'decline' | 'revise'; guidance?: string };
 
-const APPROVE_OPTIONS = ['Accept', 'Decline', 'Revise — give the agent more guidance'];
+// What the approval dialog shows: the tool, its arguments, a text preview (the
+// command, or the edit as a unified diff) and the human-readable scope that
+// "don't ask again" would cover.
+export interface ApproveDetail {
+  tool: string;
+  args: Record<string, unknown>;
+  preview: string;
+  scope: string;
+}
+
+const APPROVE_OPTIONS = ['Yes', "Yes, and don't ask again for this scope", 'No, and tell the agent what to do differently'];
 
 export interface Prompter {
   confirm(message: string): Promise<boolean>;
@@ -17,8 +29,8 @@ export interface Prompter {
   // Present a multiple-choice question; resolves with the selected option
   // indices ([] on cancel / no selection).
   choose(question: string, options: string[], multiSelect: boolean): Promise<number[]>;
-  // Present an action for approval — accept / decline / revise.
-  approve(label: string): Promise<ApproveVerdict>;
+  // Present an action for approval — yes / yes-always / no (with guidance).
+  approve(label: string, detail?: ApproveDetail): Promise<ApproveVerdict>;
 }
 
 export function parseYes(answer: string): boolean {
@@ -128,12 +140,14 @@ export class PlainPrompter implements Prompter {
     this.emitter.emit('picker_resolved', { choice: choices });
     return choices;
   }
-  async approve(label: string): Promise<ApproveVerdict> {
-    this.emitter.emit('picker_opened', { kind: 'approve', label, options: ['Accept', 'Decline', 'Revise'] });
+  async approve(label: string, detail?: ApproveDetail): Promise<ApproveVerdict> {
+    this.emitter.emit('picker_opened', { kind: 'approve', label, options: APPROVE_OPTIONS });
     const list = APPROVE_OPTIONS.map((o, i) => `  ${i + 1}) ${o}`).join('\n');
-    const ans = (await this.askInternal(`${label}\n${list}\nchoice: `)).trim();
-    let decision: 'accept' | 'decline' | 'revise' = 'decline';
+    const preview = detail?.preview ? `${detail.preview}\n` : '';
+    const ans = (await this.askInternal(`${label}\n${preview}${list}\nchoice: `)).trim();
+    let decision: ApproveVerdict['decision'] = 'decline';
     if (ans === '1') decision = 'accept';
+    else if (ans === '2') decision = 'accept_always';
     else if (ans === '3') decision = 'revise';
     this.emitter.emit('picker_resolved', { choice: decision });
     if (decision === 'revise') return { decision, guidance: await this.ask('Guidance: ') };
@@ -160,7 +174,7 @@ export class PrompterRef implements Prompter {
   choose(question: string, options: string[], multiSelect: boolean): Promise<number[]> {
     return this.impl.choose(question, options, multiSelect);
   }
-  approve(label: string): Promise<ApproveVerdict> {
-    return this.impl.approve(label);
+  approve(label: string, detail?: ApproveDetail): Promise<ApproveVerdict> {
+    return this.impl.approve(label, detail);
   }
 }

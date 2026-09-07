@@ -1,0 +1,20 @@
+{
+  "cols": 100,
+  "rows": 30,
+  "theme": "dark",
+  "mode": "autocode",
+  "fake": "./basic.fake.json",
+  "project": "../fixtures/project",
+  "steps": [
+    { "waitFor": "/help for commands", "timeoutMs": 30000 },
+    { "snapshot": "welcome" },
+    { "type": "add a --verbose flag to the CLI that prints tool timings" },
+    { "key": "enter" },
+    { "waitFor": "TURN_END", "timeoutMs": 60000 },
+    { "waitIdle": 600 },
+    { "snapshot": "after-turn" },
+    { "resize": [80, 24] },
+    { "waitIdle": 800, "timeoutMs": 10000 },
+    { "snapshot": "after-resize" }
+  ]
+}

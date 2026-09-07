@@ -10,11 +10,11 @@ import { ToolRegistry } from './ToolRegistry.js';
 import { buildSystemPromptParts } from './PromptBuilder.js';
 import { currentTodos, markInProgressInterrupted } from '../tools/todoWrite.js';
 import { renderUnifiedDiff } from '../util/diff.js';
-import { estimateCost, formatUsd } from '../util/pricing.js';
+import { estimateCost } from '../util/pricing.js';
 import { contextWindowFor, defaultMaxOutputTokens, shouldAutoCompact, shouldMaskObservations } from '../util/contextWindow.js';
 import { classifyCommand } from '../safety/SafetyPolicy.js';
 import type { SubagentFactory } from '../tools/types.js';
-import type { ApproveVerdict } from '../repl/Prompter.js';
+import type { ApproveDetail, ApproveVerdict } from '../repl/Prompter.js';
 import { resolveVerifyPlanForFiles, runVerification } from './Verify.js';
 import { invalidateRepoMap, refreshRepoMapIfStale } from './RepoMap.js';
 import { loadProjectInstructions } from './ProjectInstructions.js';
@@ -82,8 +82,9 @@ export interface AgentDeps {
   router: LlmRouter;
   registry: ToolRegistry;
   confirm: (prompt: string) => Promise<boolean>;
-  // Approve / decline / revise an edit or command (default-mode gate).
-  approve: (label: string) => Promise<ApproveVerdict>;
+  // Approve / approve-always / decline / revise an edit or command (the
+  // default-mode gate). `detail` carries what the dialog shows.
+  approve: (label: string, detail?: ApproveDetail) => Promise<ApproveVerdict>;
   // Ask the user a multiple-choice question (the `ask_user` tool).
   choose?: (question: string, options: string[], multiSelect: boolean) => Promise<number[]>;
   // Optional — when present, the `task` tool will use this to spawn
@@ -115,6 +116,8 @@ export class AgentLoop {
   // Repo-supplied `verify:` directives the user has approved this session
   // (trust-on-first-use for commands the safety policy flags).
   private readonly approvedVerifyCommands = new Set<string>();
+  // "Yes, and don't ask again for …" scopes (see approvalScope) for this session.
+  private readonly alwaysApproved = new Set<string>();
   private readonly conversation: Message[] = [];
   private cumIn = 0;
   private cumOut = 0;
@@ -309,6 +312,7 @@ export class AgentLoop {
 
   async submit(input: string | ContentBlock[], ctx: SessionContext): Promise<void> {
     this.cancelled = false;
+    const turnStartedAt = Date.now();
     this.deps.checkpoints?.beginTurn();
     // Rebuild the repo map if last turn's edits made it stale. Turn-boundary
     // (not per-edit) so the system prompt stays byte-stable within a turn —
@@ -512,7 +516,7 @@ export class AgentLoop {
           filesChanged: [...filesChanged],
         });
       }
-      this.emitStatusLine(totals.in, totals.out, totals.cacheRead, totals.cacheWrite, ctx);
+      this.emitTurnEnd(turnStartedAt, totals, ctx);
     } catch (e) {
       this.deps.emitter.emit('failed', { error: e instanceof Error ? e.message : String(e) });
       throw e;
@@ -546,7 +550,7 @@ export class AgentLoop {
     for (let iter = 0; iter < maxIterations; iter++) {
       if (this.cancelled) {
         this.deps.renderer.spinner.stop();
-        this.deps.renderer.dim('(cancelled)');
+        this.deps.renderer.dim('[Request interrupted by user]');
         this.conversation.push({ role: 'user', content: '[user cancelled the task]' });
         // Mark any in-progress todo as 'interrupted' so the user can see at
         // a glance where we stopped.
@@ -632,16 +636,17 @@ export class AgentLoop {
         let thinkingStartedAt = 0;
         const noteThinkingDone = (): void => {
           if (thinkingStartedAt > 0) {
-            const secs = ((Date.now() - thinkingStartedAt) / 1000).toFixed(1);
-            this.deps.renderer.dim(`  ✻ thought for ${secs}s`);
+            // Ink commits a collapsed "Thought for Ns" stub; plain prints a line.
+            this.deps.renderer.thinkingEnd(Date.now() - thinkingStartedAt);
             thinkingStartedAt = 0;
           }
         };
         for await (const evt of stream as AsyncIterable<StreamEvent>) {
           if (evt.type === 'thinking_delta') {
-            // Reasoning trace streaming in — keep the spinner alive and note
-            // when it started so the transition can report duration.
+            // Reasoning trace streaming in — the Ink UI shows its tail live and
+            // collapses it on transition; the plain path only times it.
             if (thinkingStartedAt === 0) thinkingStartedAt = Date.now();
+            this.deps.renderer.thinkingChunk(evt.text);
           } else if (evt.type === 'text_delta') {
             noteThinkingDone();
             // The reply is buffered (rendered as styled markdown at the end),
@@ -740,6 +745,8 @@ export class AgentLoop {
               summary: result.summary,
               content: result.content,
               isError: result.isError === true,
+              durationMs: dt,
+              metadata: result.metadata,
             });
             this.deps.store.appendToolLog({
               tool: tu.name,
@@ -804,13 +811,19 @@ export class AgentLoop {
           this.deps.renderer.dim(`  ✗ ${tu.name} blocked (planning mode)`);
           continue;
         }
-        if (gate === 'approve') {
+        const scope = approvalScope(tu.name, tu.input);
+        if (gate === 'approve' && !this.alwaysApproved.has(scope.key)) {
+          // The dialog shows the preview (the command, or the edit as a diff);
+          // "Yes, and don't ask again" remembers the scope for the session.
           const preview = formatToolPreview(tu.name, tu.input);
-          this.deps.renderer.dim('  --- preview ---');
-          this.deps.renderer.info(preview);
-          this.deps.renderer.dim('  ---------------');
-          const verdict = await this.deps.approve(`Run ${tu.name}?`);
-          if (verdict.decision !== 'accept') {
+          const verdict = await this.deps.approve(`Run ${tu.name}?`, {
+            tool: tu.name,
+            args: tu.input,
+            preview,
+            scope: scope.label,
+          });
+          if (verdict.decision === 'accept_always') this.alwaysApproved.add(scope.key);
+          if (verdict.decision !== 'accept' && verdict.decision !== 'accept_always') {
             const content =
               verdict.decision === 'revise'
                 ? `User declined this tool call and asks you to revise the approach: ${verdict.guidance || '(no guidance given)'}`
@@ -880,6 +893,8 @@ export class AgentLoop {
           summary: result.summary,
           content: result.content,
           isError: result.isError === true,
+          durationMs: dt,
+          metadata: result.metadata,
         });
 
         if (result.isError) {
@@ -1025,30 +1040,51 @@ export class AgentLoop {
     return { mutated };
   }
 
-  private emitStatusLine(
-    inT: number,
-    outT: number,
-    cacheRead: number,
-    cacheWrite: number,
+  // One line per turn. The Ink UI renders it as Claude Code's
+  // "✻ Sautéed for 23s · done 6:05 PM"; the plain path prints the token/cost
+  // account it always printed.
+  private emitTurnEnd(
+    startedAt: number,
+    totals: { in: number; out: number; cacheRead: number; cacheWrite: number },
     ctx: SessionContext,
   ): void {
-    const cacheTotal = cacheRead + cacheWrite;
-    // Anthropic's input_tokens EXCLUDES cached tokens — the hit rate is
-    // cacheRead over the full prompt (fresh + read + written), else a good
-    // cache turn reads ">30000%".
-    const cachePct = Math.round((cacheRead / Math.max(1, inT + cacheTotal)) * 100);
     const todos = currentTodos(ctx.sessionId);
     const done = todos.filter((t) => t.status === 'completed').length;
     const interrupted = todos.filter((t) => t.status === 'interrupted').length;
-    const usage = { inputTokens: inT, outputTokens: outT, cacheReadTokens: cacheRead, cacheWriteTokens: cacheWrite };
+    const usage = {
+      inputTokens: totals.in,
+      outputTokens: totals.out,
+      cacheReadTokens: totals.cacheRead,
+      cacheWriteTokens: totals.cacheWrite,
+    };
     const { cost } = estimateCost(usage, ctx.model.provider, ctx.model.model);
-    const parts = [`in: ${inT}`, `out: ${outT}`];
-    if (cacheTotal > 0) parts.push(`cache: ${cachePct}%`);
-    if (todos.length > 0) parts.push(`${done}/${todos.length} todos`);
-    if (interrupted > 0) parts.push(`${interrupted} interrupted`);
-    if (cost > 0) parts.push(formatUsd(cost));
-    this.deps.renderer.status(`  (${parts.join(' · ')})`);
+    const now = Date.now();
+    this.deps.renderer.turnEnd({
+      durationMs: now - startedAt,
+      endedAt: now,
+      ...usage,
+      costUsd: cost,
+      todos: { done, total: todos.length, interrupted },
+    });
   }
+}
+
+// The scope "Yes, and don't ask again" covers — Claude Code's rule: for shell
+// commands, commands that start with the same first word; for file tools, that
+// tool for the rest of the session.
+function approvalScope(toolName: string, input: Record<string, unknown>): { key: string; label: string } {
+  if (toolName === 'run_shell') {
+    const cmd = typeof input.command === 'string' ? input.command.trim() : '';
+    const first = cmd.split(/\s+/)[0] ?? '';
+    return { key: `run_shell:${first}`, label: first ? `commands that start with "${first}"` : 'shell commands' };
+  }
+  const labels: Record<string, string> = {
+    edit_file: 'file edits',
+    write_file: 'file writes',
+    delete_path: 'deletions',
+    create_directory: 'directory creation',
+  };
+  return { key: toolName, label: `${labels[toolName] ?? toolName} this session` };
 }
 
 function formatToolPreview(toolName: string, input: Record<string, unknown>): string {

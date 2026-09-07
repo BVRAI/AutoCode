@@ -1,0 +1,31 @@
+{
+  "cols": 100,
+  "rows": 30,
+  "theme": "dark",
+  "mode": "default",
+  "fake": "./permission.fake.json",
+  "project": "../fixtures/project",
+  "steps": [
+    { "waitFor": "/help for commands", "timeoutMs": 30000 },
+    { "type": "rename parseArgs to parseArguments" },
+    { "key": "enter" },
+    { "waitFor": "Do you want to proceed?", "timeoutMs": 30000 },
+    { "waitIdle": 300 },
+    { "snapshot": "edit-dialog" },
+    { "key": "1" },
+    { "waitFor": "/Bash command[\\s\\S]*Do you want to proceed\\?/", "timeoutMs": 30000 },
+    { "waitIdle": 300 },
+    { "snapshot": "bash-dialog" },
+    { "key": "2" },
+    { "waitFor": "/Edit file[\\s\\S]*Do you want to proceed\\?/", "timeoutMs": 30000 },
+    { "waitIdle": 300 },
+    { "snapshot": "second-edit-dialog" },
+    { "key": "3" },
+    { "waitFor": "tell AutoCode what to do differently", "timeoutMs": 10000 },
+    { "type": "leave cli.ts alone" },
+    { "key": "enter" },
+    { "waitFor": "TURN_END", "timeoutMs": 60000 },
+    { "waitIdle": 600 },
+    { "snapshot": "after-turn" }
+  ]
+}
