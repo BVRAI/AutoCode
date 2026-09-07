@@ -87,7 +87,7 @@ Turn a loosely worded request ("the export button", "where tasks get materialize
 2. **Candidates.** \`search_entity\` with the request's words (try 2–3 phrasings: the user's words, the likely identifier, the likely file name). Filter by \`path\` when the map points at a folder. Keep the top 5–10.
 3. **Context.** \`traverse_graph\` on the best candidates: "in" to see who uses them (the entry point the user probably means), "out" to see what they delegate to (where the behavior really lives).
 4. **Confirm.** \`retrieve_entity\` for the outline of each candidate file and the source of the best symbols. \`grep\` only for literal strings the user quoted (button labels, error messages) and scope it to the candidate directories. \`read_file\` with offset (first line) and limit (lines) for a range the index does not cover (XAML, templates, config).
-5. **Decide.** Rank by how directly each location implements what the user described: the component, page or handler that renders or handles the behaviour outranks the shared model, store, util or dictionary it imports — those are the answer only when the same rule must change for every consumer, or the request names that rule. If two readings of the request lead to different places, keep both and say so in \`ambiguity\` — the main agent will ask the user.
+5. **Decide.** Rank by how directly each location implements what the user described. If two readings of the request lead to different places, keep both and say so in \`ambiguity\` — the main agent will ask the user.
 
 # Tools you have (read-only)
 - \`search_entity\` — ranked entities by name / path fragment / keywords
