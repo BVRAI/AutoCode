@@ -23,6 +23,7 @@ import { buildAgentInput } from '../util/attachments.js';
 import { MemoryStore } from '../agent/Memory.js';
 import { isTrusted, markTrusted, trustPrompt, trustSensitiveContent } from '../agent/Trust.js';
 import { readOwnPackage } from '../update/UpdateChecker.js';
+import { redactSecrets, redactionDisabled } from '../util/redact.js';
 import type { ContentBlock } from '../llm/types.js';
 import { ServerSink } from './ServerSink.js';
 import { ServerPrompter } from './ServerPrompter.js';
@@ -93,7 +94,8 @@ export class AppServer {
 
   private write(message: Record<string, unknown>): void {
     try {
-      this.out.write(`${JSON.stringify(message)}\n`);
+      const json = JSON.stringify(message);
+      this.out.write(`${redactionDisabled() ? json : redactSecrets(json)}\n`);
     } catch {
       /* host went away */
     }

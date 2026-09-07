@@ -12,6 +12,7 @@
 // surfaced-by-design).
 
 import { openSync, writeSync } from 'node:fs';
+import { redactSecrets, redactionDisabled } from '../util/redact.js';
 
 export interface EventEmitter {
   emit(type: string, data: Record<string, unknown>): void;
@@ -47,7 +48,8 @@ export class NullEventEmitter implements EventEmitter {
 
 export function formatEnvelope(type: string, data: Record<string, unknown>): string {
   const safeData = truncateForEvent(data) as Record<string, unknown>;
-  return `<<AMX>>${JSON.stringify({ type, data: safeData })}<</AMX>>\n`;
+  const json = JSON.stringify({ type, data: safeData });
+  return `<<AMX>>${redactionDisabled() ? json : redactSecrets(json)}<</AMX>>\n`;
 }
 
 // `--automax` mode: write one `<<AMX>>{…}<</AMX>>\n` line to stdout per

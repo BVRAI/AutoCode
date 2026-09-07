@@ -2,6 +2,11 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { join } from 'node:path';
 import type { SessionContext } from './SessionContext.js';
 import type { Message } from '../llm/types.js';
+import { redactSecrets, redactionDisabled } from '../util/redact.js';
+
+function redactLine(json: string): string {
+  return redactionDisabled() ? json : redactSecrets(json);
+}
 
 export interface CumulativeUsage {
   inputTokens: number;
@@ -82,14 +87,17 @@ export class TranscriptStore {
     });
   }
 
+  // The on-disk records are redacted (secret-shaped tokens masked, see
+  // util/redact.ts); conversation.json — what a resumed session replays to
+  // the model — is written as-is.
   appendTranscript(entry: Omit<TranscriptEntry, 'timestamp'>): void {
     const line: TranscriptEntry = { timestamp: new Date().toISOString(), ...entry };
-    appendFileSync(this.transcriptPath, JSON.stringify(line) + '\n', 'utf8');
+    appendFileSync(this.transcriptPath, redactLine(JSON.stringify(line)) + '\n', 'utf8');
   }
 
   appendToolLog(entry: Omit<ToolLogEntry, 'timestamp'>): void {
     const line: ToolLogEntry = { timestamp: new Date().toISOString(), ...entry };
-    appendFileSync(this.toolLogPath, JSON.stringify(line) + '\n', 'utf8');
+    appendFileSync(this.toolLogPath, redactLine(JSON.stringify(line)) + '\n', 'utf8');
   }
 
   writeState(state: SessionState): void {

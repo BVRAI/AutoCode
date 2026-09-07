@@ -50,6 +50,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "allowWrite": ["."], "denyRead": ["~/.ssh"] }` in config; the package is
   installed separately, and a missing runtime is reported once
   (`AUTOCODE_NO_SANDBOX=1` disables).
+- Secret redaction: key-shaped tokens (vendor API keys, bearer tokens, JWTs,
+  `*_API_KEY=` / `password:` assignments) are masked in the session
+  transcript and tool log on disk, in the `<<AMX>>` event stream and in
+  app-server notifications; the conversation the model sees is untouched
+  (`AUTOCODE_NO_REDACT=1` disables).
+- Request watchdog in the LLM router: a provider that sends nothing for 2
+  minutes (first event) or 3 minutes (between stream events) fails the
+  request — retryable before the first event — instead of hanging the turn;
+  non-streaming completions time out at 10 minutes
+  (`AUTOCODE_LLM_FIRST_EVENT_MS`, `AUTOCODE_LLM_IDLE_MS`,
+  `AUTOCODE_LLM_COMPLETE_MS`). `AUTOCODE_TRACE_LOG` now also records each
+  iteration's request, first event, stream end and tool start/end.
+- Subagents end with an answer-only final iteration (no tools, a request for
+  the verdict or list), so Review and Localize runs on a budget model no
+  longer finish with "review unavailable" after exploring to the cap.
 - Bundling and CI: `node scripts/bundle.mjs --out <dir>` produces a
   self-contained harness (node runtime, dist, production modules, launchers)
   that Automax's Release build drops under `Resources/autocode/`; GitHub

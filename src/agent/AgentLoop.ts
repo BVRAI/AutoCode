@@ -822,10 +822,12 @@ export class AgentLoop {
         }
       }
       this.deps.store.touch(userText.slice(0, 80));
+      trace(`iter ${iter}: request start (messages=${this.conversation.length}, lastInput=${this.lastInputTokens})`);
 
       this.deps.renderer.spinner.start('thinking');
       let response: { content: ContentBlock[]; stopReason: string; usage: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number } } | null = null;
       let firstTextSeen = false;
+      let firstEventSeen = false;
       const abort = new AbortController();
       this.inflightAbort = abort;
       try {
@@ -867,6 +869,10 @@ export class AgentLoop {
           }
         };
         for await (const evt of stream as AsyncIterable<StreamEvent>) {
+          if (!firstEventSeen) {
+            firstEventSeen = true;
+            trace(`iter ${iter}: first stream event (${evt.type})`);
+          }
           if (evt.type === 'thinking_delta') {
             // Reasoning trace streaming in — the Ink UI shows its tail live and
             // collapses it on transition; the plain path only times it.
@@ -906,6 +912,7 @@ export class AgentLoop {
         if (firstTextSeen) this.deps.renderer.endAssistantStream();
       }
 
+      trace(`iter ${iter}: stream end (${response ? response.stopReason : 'no message_stop'})`);
       if (!response) {
         this.deps.renderer.error('stream ended without a message_stop event');
         return { mutated };
@@ -1094,6 +1101,7 @@ export class AgentLoop {
         // PreToolUse hooks — can block the call (exit 2 or a `deny`
         // decision; stderr / reason goes back to the model as the tool
         // result), rewrite its input (`updatedInput`), or add context.
+        trace(`tool pre-hooks ${tu.name}`);
         const preOutcomes = (await this.deps.hooks?.fire('PreToolUse', { tool_name: tu.name, tool_input: tu.input })) ?? [];
         const rewritten = updatedInput(preOutcomes);
         if (rewritten) {
@@ -1125,8 +1133,10 @@ export class AgentLoop {
         // under one step number so step-level /undo rewinds exactly one
         // tool's worth of work.
         this.deps.checkpoints?.beginStep();
+        trace(`tool start ${tu.name}`);
         const result = await this.deps.registry.execute(tu.name, tu.input, toolExecCtx);
         const dt = Date.now() - t0;
+        trace(`tool end ${tu.name} ${dt}ms${result.isError ? ' (error)' : ''}`);
         this.deps.renderer.spinner.stop();
         if (tu.name === 'use_skill' && !result.isError && typeof tu.input['name'] === 'string') {
           this.invokedSkills.add(tu.input['name'] as string);
@@ -1243,7 +1253,9 @@ export class AgentLoop {
             last.content = `${last.content}\n\n[hook context]\n${extra.join('\n')}`;
           }
         }
+        trace(`tool done ${tu.name}`);
       }
+      trace(`iter ${iter}: tools done`);
 
       // Harness advisories (loop detection, retry caps) ride in a SEPARATE
       // follow-up user message as plain text — NOT as tool_result blocks.

@@ -8,3 +8,4 @@ coverage/
 .vitest/
 *.tsbuildinfo
 _context_only/
+dist-debug/

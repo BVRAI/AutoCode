@@ -12,6 +12,53 @@ export type ProviderName = 'anthropic' | 'openai' | 'google' | 'xai' | 'openrout
 const MAX_RETRIES = 3;
 const BACKOFF_BASE_MS = 800;
 
+// Request watchdog. A provider that stops sending — a half-open socket, a
+// stalled gateway — must fail the request (retryable before the first
+// event) instead of hanging the turn forever; the Phase 5 battery lost a
+// 15-minute Aider task to exactly that silence. Thinking models can be quiet
+// for a while, so the ceilings are generous and env-tunable.
+function envMs(name: string, fallback: number): number {
+  const raw = process.env[name];
+  const n = raw ? Number.parseInt(raw, 10) : Number.NaN;
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+const FIRST_EVENT_TIMEOUT_MS = envMs('AUTOCODE_LLM_FIRST_EVENT_MS', 120_000);
+const IDLE_TIMEOUT_MS = envMs('AUTOCODE_LLM_IDLE_MS', 180_000);
+const COMPLETE_TIMEOUT_MS = envMs('AUTOCODE_LLM_COMPLETE_MS', 600_000);
+
+class Watchdog {
+  readonly signal: AbortSignal;
+  fired = false;
+  lastMs = 0;
+  private readonly ctrl = new AbortController();
+  private timer: NodeJS.Timeout | null = null;
+
+  constructor(parent?: AbortSignal) {
+    this.signal = parent ? AbortSignal.any([parent, this.ctrl.signal]) : this.ctrl.signal;
+  }
+
+  arm(ms: number): void {
+    this.disarm();
+    this.lastMs = ms;
+    this.timer = setTimeout(() => {
+      this.fired = true;
+      this.ctrl.abort();
+    }, ms);
+    this.timer.unref?.();
+  }
+
+  disarm(): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+  }
+
+  /** The error to surface: the watchdog's own message when it fired, else the original. */
+  explain(provider: string, e: unknown, stage: string): unknown {
+    if (!this.fired) return e;
+    return new Error(`${provider} timeout: no ${stage} for ${Math.round(this.lastMs / 1000)}s`);
+  }
+}
+
 export class LlmRouter {
   private readonly cache = new Map<ProviderName, LlmProvider>();
 
@@ -21,12 +68,17 @@ export class LlmRouter {
     const p = this.providerFor(provider);
     let lastErr: unknown;
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      const dog = new Watchdog(req.signal);
       try {
-        return await p.complete(req);
-      } catch (e) {
+        dog.arm(COMPLETE_TIMEOUT_MS);
+        return await p.complete({ ...req, signal: dog.signal });
+      } catch (raw) {
+        const e = dog.explain(provider, raw, 'response');
         lastErr = e;
-        if (!isRetryable(e) || attempt === MAX_RETRIES - 1) throw e;
+        if (req.signal?.aborted === true || !isRetryable(e) || attempt === MAX_RETRIES - 1) throw e;
         await sleep(BACKOFF_BASE_MS * 2 ** attempt);
+      } finally {
+        dog.disarm();
       }
     }
     throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
@@ -43,13 +95,17 @@ export class LlmRouter {
     // a partial stream would duplicate deltas the consumer already rendered.
     for (let attempt = 0; ; attempt++) {
       let yielded = false;
+      const dog = new Watchdog(req.signal);
       try {
-        for await (const evt of p.completeStream(req)) {
+        dog.arm(FIRST_EVENT_TIMEOUT_MS);
+        for await (const evt of p.completeStream({ ...req, signal: dog.signal })) {
+          dog.arm(IDLE_TIMEOUT_MS);
           yielded = true;
           yield evt;
         }
         return;
-      } catch (e) {
+      } catch (raw) {
+        const e = dog.explain(provider, raw, yielded ? 'stream data' : 'response');
         if (
           yielded ||
           req.signal?.aborted === true ||
@@ -59,6 +115,8 @@ export class LlmRouter {
           throw e;
         }
         await sleep(BACKOFF_BASE_MS * 2 ** attempt);
+      } finally {
+        dog.disarm();
       }
     }
   }
