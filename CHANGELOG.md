@@ -31,7 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (answered with `respond`), `status`, `usage`, `log`. The same LiveAgent the
   terminal uses sits behind it, so Automax's `TsHarnessBackend` (v6) and the
   console cannot drift. `turn.completed` is sent only after the turn's
-  verification and review tail has settled.
+  verification and review tail has settled. Items `todo` (the checklist after
+  every `todo_write`) and `verification` (every check stage and test run,
+  with `passed`, `exitCode` and the output tail) reach the host too, and
+  `session.new` accepts a per-session policy: `maxCostUsd`, `maxIterations`,
+  `temperature`, `systemAppendix` (appended to the stable system prompt),
+  `autoVerify`, `verifyCommand` and `apiKeys`.
 - Permission rules in Claude Code's shape: `permissions.allow / ask / deny`
   lists of `Tool(prefix *)` matchers in config and, for trusted projects, in
   `.autocode/permissions.json` or `.claude/settings.json`; deny wins, allow
