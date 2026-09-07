@@ -223,6 +223,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rotating startup banner cycling through 10 designs every 2s until first prompt.
 
 ### Fixed
+- Cost accounting: gpt-5.1 / gpt-5 were priced at $5 / $20 per million (real:
+  $1.25 / $10, cached input $0.125), gpt-4.1 and o3 at pre-cut rates, and every
+  OpenAI-compatible provider billed cached prompt tokens at the full rate. A
+  planning turn on a large repo estimated ~4× its real spend and tripped the
+  cost cap. `inputTokens` now excludes cached tokens on every provider and
+  the auto-compaction threshold counts the cached prefix it used to ignore.
+- A timed-out `run_shell` (or verification run) could wait forever on Windows:
+  killing `cmd.exe` left the program it started alive holding the pipes. The
+  whole process tree is killed now and the call settles two seconds later.
 - `run_shell` on Windows mangled quoted arguments containing spaces (Node argv
   escaping clashing with `cmd.exe /s`). Switched to `spawn(cmd, { shell: true })`.
 
