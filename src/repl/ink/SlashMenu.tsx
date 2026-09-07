@@ -8,7 +8,7 @@
 
 import React from 'react';
 import { Box, Text } from 'ink';
-import { BR } from './theme.js';
+import { useTheme } from './theme.js';
 import type { CommandDef } from '../commands.js';
 
 export interface SlashMenuProps {
@@ -17,10 +17,11 @@ export interface SlashMenuProps {
 }
 
 export function SlashMenu({ commands, selectedIdx }: SlashMenuProps): React.JSX.Element {
+  const t = useTheme();
   if (commands.length === 0) {
     return (
-      <Box borderStyle="single" borderColor={BR.rule} paddingX={1} marginX={2}>
-        <Text color={BR.inkDim}>no matching command</Text>
+      <Box borderStyle="single" borderColor={t.rule} paddingX={1} marginX={2}>
+        <Text color={t.inkDim}>no matching command</Text>
       </Box>
     );
   }
@@ -34,13 +35,13 @@ export function SlashMenu({ commands, selectedIdx }: SlashMenuProps): React.JSX.
     <Box
       flexDirection="column"
       borderStyle="single"
-      borderColor={BR.teal}
+      borderColor={t.teal}
       paddingX={1}
       marginX={2}
     >
       <Box>
-        <Text color={BR.teal} bold>Slash commands</Text>
-        <Text color={BR.inkFaint}>  ↑↓ pick · enter complete · esc close</Text>
+        <Text color={t.teal} bold>Slash commands</Text>
+        <Text color={t.inkFaint}>  ↑↓ pick · enter complete · esc close</Text>
       </Box>
       <Box flexDirection="column" marginTop={1}>
         {visible.map((c, i) => {
@@ -48,20 +49,20 @@ export function SlashMenu({ commands, selectedIdx }: SlashMenuProps): React.JSX.
           const selected = absIdx === clampedSelected;
           return (
             <Box key={c.name}>
-              <Text color={selected ? BR.teal : BR.inkFaint}>{selected ? '▸ ' : '  '}</Text>
+              <Text color={selected ? t.teal : t.inkFaint}>{selected ? '▸ ' : '  '}</Text>
               <Box width={36}>
-                <Text color={selected ? BR.teal : BR.ink} bold={selected}>
+                <Text color={selected ? t.teal : t.ink} bold={selected}>
                   {c.signature}
                 </Text>
               </Box>
-              <Text color={BR.inkDim}>{c.summary}</Text>
+              <Text color={t.inkDim}>{c.summary}</Text>
             </Box>
           );
         })}
       </Box>
       {commands.length > MAX_ROWS && (
         <Box>
-          <Text color={BR.inkFaint}>… {commands.length - MAX_ROWS} more (keep typing to narrow)</Text>
+          <Text color={t.inkFaint}>… {commands.length - MAX_ROWS} more (keep typing to narrow)</Text>
         </Box>
       )}
     </Box>

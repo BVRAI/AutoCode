@@ -15,7 +15,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { Box, Text, useInput } from 'ink';
-import { BR } from './theme.js';
+import { useTheme } from './theme.js';
 import { getKnownModels, modelBadges, modelCatalogDetail, type ModelInfo } from '../../llm/models.js';
 
 const WINDOW = 14;
@@ -54,6 +54,7 @@ export function ModelPicker({
   onPick,
   onBack,
 }: ModelPickerProps): React.JSX.Element {
+  const t = useTheme();
   const models = useMemo<ModelInfo[]>(
     () => getKnownModels().filter((m) => m.provider.toLowerCase() === provider.toLowerCase()),
     [provider],
@@ -135,58 +136,58 @@ export function ModelPicker({
     <Box
       flexDirection="column"
       borderStyle="single"
-      borderColor={BR.teal}
+      borderColor={t.teal}
       paddingX={1}
       paddingY={0}
       marginX={2}
     >
       <Box>
         <Box flexShrink={0}>
-          <Text color={BR.teal} bold>{provider.toUpperCase()} models</Text>
+          <Text color={t.teal} bold>{provider.toUpperCase()} models</Text>
         </Box>
-        <Text color={BR.inkFaint} wrap="truncate-end">
+        <Text color={t.inkFaint} wrap="truncate-end">
           {`  ${countText} · type to filter · ↑↓ pick · pgup/pgdn page · enter confirm · esc back`}
         </Text>
       </Box>
-      <Text color={BR.inkFaint} wrap="truncate-end">
+      <Text color={t.inkFaint} wrap="truncate-end">
         {query.length > 0 ? `${detail} · filter: ${query}` : detail}
       </Text>
       {visibleModels.length === 0 ? (
         <Box marginTop={1}>
-          <Text color={BR.inkFaint}>
+          <Text color={t.inkFaint}>
             {query.length > 0 ? `(no ${provider} model matches "${query}")` : `(no models available for ${provider})`}
           </Text>
         </Box>
       ) : (
         <Box flexDirection="column" marginTop={1}>
-          {above > 0 && <Text color={BR.inkFaint}>  … {above} more above</Text>}
+          {above > 0 && <Text color={t.inkFaint}>  … {above} more above</Text>}
           {visible.map((m, offset) => {
             const i = start + offset;
             const selected = i === selectedIdx;
             const isCurrent =
               m.provider === currentProvider && currentModel.startsWith(m.model);
             const marker = selected ? '▸' : ' ';
-            const labelColor = selected ? BR.teal : isCurrent ? BR.add : BR.ink;
+            const labelColor = selected ? t.teal : isCurrent ? t.add : t.ink;
             const price = m.priceUnknown ? 'price unknown' : `$${fmt(m.inputPerM)}/M in · $${fmt(m.outputPerM)}/M out`;
             const badges = modelBadges(m);
             return (
               <Box key={`m-${m.provider}-${m.model}`}>
-                <Text color={selected ? BR.teal : BR.inkFaint}>{marker} </Text>
+                <Text color={selected ? t.teal : t.inkFaint}>{marker} </Text>
                 <Box width={32} flexShrink={0} marginRight={1}>
                   <Text color={labelColor} bold={selected} wrap="truncate-end">
                     {m.label}
                   </Text>
-                  {isCurrent && <Text color={BR.add}>  ← current</Text>}
+                  {isCurrent && <Text color={t.add}>  ← current</Text>}
                 </Box>
                 <Box flexShrink={0}>
-                  <Text color={BR.inkDim}>{price}</Text>
+                  <Text color={t.inkDim}>{price}</Text>
                 </Box>
-                {badges.length > 0 && <Text color={BR.inkDim} wrap="truncate-end">  · {badges.join(' · ')}</Text>}
-                {m.notes && <Text color={BR.inkFaint} wrap="truncate-end">  · {m.notes}</Text>}
+                {badges.length > 0 && <Text color={t.inkDim} wrap="truncate-end">  · {badges.join(' · ')}</Text>}
+                {m.notes && <Text color={t.inkFaint} wrap="truncate-end">  · {m.notes}</Text>}
               </Box>
             );
           })}
-          {below > 0 && <Text color={BR.inkFaint}>  … {below} more below</Text>}
+          {below > 0 && <Text color={t.inkFaint}>  … {below} more below</Text>}
         </Box>
       )}
     </Box>

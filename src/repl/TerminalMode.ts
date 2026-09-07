@@ -47,6 +47,7 @@ import { discoverModels, discoveryState } from '../llm/ProviderDiscovery.js';
 import { byokKeyFor } from '../auth/AuthResolver.js';
 import { cwdStatus, resolveCwdTarget } from './cwd.js';
 import { resolveThemeName } from './ink/theme.js';
+import { onHostTheme } from '../util/ttyEmulation.js';
 
 const MAX_QUEUE = 5;
 
@@ -258,6 +259,17 @@ export class TerminalMode {
 
     const mount = (): Promise<{ unmount: () => void; waitUntilExit: () => Promise<void> }> => mountInkApp(appProps);
     this.inkInstance = await mount();
+
+    // The host's background can change under a running session (Automax's
+    // theme toggle sends `[[amx:theme:light|dark]]` on stdin). Swap the
+    // palette and rebuild the transcript the same way a resize does; the
+    // remount re-reads appProps.theme.
+    onHostTheme((name) => {
+      if (name === appProps.theme) return;
+      appProps.theme = name;
+      resizeTrace(`theme ${name} → remount`);
+      void this.remountInk(mount);
+    });
 
     // Inline mode rebuilds the transcript from source on resize (Codex CLI's
     // approach): the rows Ink's <Static> wrote were laid out for the old

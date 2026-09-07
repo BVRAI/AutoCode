@@ -10,7 +10,7 @@
 
 import React, { useMemo, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
-import { BR } from './theme.js';
+import { useTheme } from './theme.js';
 import { getKnownModels, modelCatalogDetail } from '../../llm/models.js';
 
 export interface ProviderPickerProps {
@@ -26,6 +26,7 @@ interface ProviderRow {
 }
 
 export function ProviderPicker({ currentProvider, onPick, onCancel }: ProviderPickerProps): React.JSX.Element {
+  const t = useTheme();
   // Group the active catalog by provider so each row can show a count.
   // Order preserved from the model list (catalog declaration order).
   const rows = useMemo<ProviderRow[]>(() => {
@@ -71,36 +72,36 @@ export function ProviderPicker({ currentProvider, onPick, onCancel }: ProviderPi
     <Box
       flexDirection="column"
       borderStyle="single"
-      borderColor={BR.teal}
+      borderColor={t.teal}
       paddingX={1}
       paddingY={0}
       marginX={2}
     >
       <Box>
         <Box flexShrink={0}>
-          <Text color={BR.teal} bold>Select a provider</Text>
+          <Text color={t.teal} bold>Select a provider</Text>
         </Box>
-        <Text color={BR.inkFaint} wrap="truncate-end">
+        <Text color={t.inkFaint} wrap="truncate-end">
           {`  ${rows.length} providers · ↑↓ pick · enter confirm · esc cancel`}
         </Text>
       </Box>
-      <Text color={BR.inkFaint} wrap="truncate-end">{detail}</Text>
+      <Text color={t.inkFaint} wrap="truncate-end">{detail}</Text>
       <Box flexDirection="column" marginTop={1}>
         {rows.map((r, i) => {
           const selected = i === selectedIdx;
           const isCurrent = r.name.toLowerCase() === currentProvider.toLowerCase();
           const marker = selected ? '▸' : ' ';
-          const labelColor = selected ? BR.teal : isCurrent ? BR.add : BR.ink;
+          const labelColor = selected ? t.teal : isCurrent ? t.add : t.ink;
           return (
             <Box key={`p-${r.name}`}>
-              <Text color={selected ? BR.teal : BR.inkFaint}>{marker} </Text>
+              <Text color={selected ? t.teal : t.inkFaint}>{marker} </Text>
               <Box width={20}>
                 <Text color={labelColor} bold={selected}>
                   {r.name.toUpperCase()}
                 </Text>
-                {isCurrent && <Text color={BR.add}>  ← current</Text>}
+                {isCurrent && <Text color={t.add}>  ← current</Text>}
               </Box>
-              <Text color={BR.inkDim}>{r.modelCount} model{r.modelCount === 1 ? '' : 's'}</Text>
+              <Text color={t.inkDim}>{r.modelCount} model{r.modelCount === 1 ? '' : 's'}</Text>
             </Box>
           );
         })}

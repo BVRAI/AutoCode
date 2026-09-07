@@ -6,24 +6,54 @@
 // byte stream into a headless xterm.
 //
 // Independently of emulation, the Ink app reads stdin through a filter that
-// understands one host-only marker, `[[amx:resize:<cols>x<rows>]]`, and
-// applies it as a window-size change (stdout columns/rows + the 'resize'
-// event). Hosts that own the pseudo-console — Automax's terminal, the e2e
+// understands two host-only markers. `[[amx:resize:<cols>x<rows>]]` is
+// applied as a window-size change (stdout columns/rows + the 'resize'
+// event): hosts that own the pseudo-console — Automax's terminal, the e2e
 // driver — send it right after resizing the pty, because ConPTY hands the
 // native resize to an idle Node process late or not at all (which is what
-// left stale rows behind after a drag). The marker is plain printable text on
-// purpose: ConPTY drops escape sequences and private-use characters written
-// to its input, but forwards ordinary keys.
+// left stale rows behind after a drag). `[[amx:theme:light|dark]]` tells the
+// app the host's background changed (Automax's theme toggle) so it can swap
+// palettes and rebuild — without it a session launched in dark mode kept
+// painting near-white text on the now-white pane. Both markers are plain
+// printable text on purpose: ConPTY drops escape sequences and private-use
+// characters written to its input, but forwards ordinary keys.
 
 import { PassThrough, type Readable } from 'node:stream';
 import { trace } from './trace.js';
 
 export const RESIZE_MARK_RE = /\[\[amx:resize:(\d+)x(\d+)\]\]/g;
-const RESIZE_MARK_PREFIX = '[[amx:resize:';
+export const THEME_MARK_RE = /\[\[amx:theme:(light|dark)\]\]/g;
+const MARK_PREFIXES = ['[[amx:resize:', '[[amx:theme:'];
 const PENDING_FLUSH_MS = 120;
 
 export function resizeMark(cols: number, rows: number): string {
   return `[[amx:resize:${cols}x${rows}]]`;
+}
+
+export function themeMark(name: 'light' | 'dark'): string {
+  return `[[amx:theme:${name}]]`;
+}
+
+export type HostThemeName = 'light' | 'dark';
+const themeListeners = new Set<(name: HostThemeName) => void>();
+
+/** Subscribe to host theme notices; returns the unsubscribe function. */
+export function onHostTheme(listener: (name: HostThemeName) => void): () => void {
+  themeListeners.add(listener);
+  return () => {
+    themeListeners.delete(listener);
+  };
+}
+
+export function applyHostTheme(name: HostThemeName): void {
+  trace(`theme: marker ${name}`);
+  for (const listener of themeListeners) {
+    try {
+      listener(name);
+    } catch {
+      /* one listener must not break the others */
+    }
+  }
 }
 
 let emulated: { cols: number; rows: number } | null = null;
@@ -46,14 +76,36 @@ export function isTtyEmulated(): boolean {
   return emulated !== null;
 }
 
+export interface HostMarkHandlers {
+  resize: (cols: number, rows: number) => void;
+  theme: (name: HostThemeName) => void;
+}
+
+/** Could `tail` be the beginning of a marker that the next chunk completes? */
+function isPartialMark(tail: string): boolean {
+  for (const prefix of MARK_PREFIXES) {
+    if (tail.length <= prefix.length) {
+      if (prefix.startsWith(tail)) return true;
+      continue;
+    }
+    if (!tail.startsWith(prefix)) continue;
+    const body = tail.slice(prefix.length);
+    if (prefix === '[[amx:resize:' && /^\d*(x\d*)?\]?$/.test(body)) return true;
+    if (prefix === '[[amx:theme:' && /^[a-z]*\]?$/.test(body)) return true;
+  }
+  return false;
+}
+
 /**
- * Strip complete resize markers from `text`, applying each; keep a trailing
+ * Strip complete host markers from `text`, applying each; keep a trailing
  * partial marker for the next chunk (ConPTY may split a write). Returns the
  * text to forward and the pending tail.
  */
-export function filterResizeMarks(text: string, apply: (cols: number, rows: number) => void): { out: string; pending: string } {
-  let out = text.replace(RESIZE_MARK_RE, (_m, c: string, r: string) => {
-    apply(Number(c), Number(r));
+export function filterHostMarks(text: string, apply: HostMarkHandlers): { out: string; pending: string } {
+  // One pass so markers apply in the order the host wrote them.
+  let out = text.replace(/\[\[amx:(?:resize:(\d+)x(\d+)|theme:(light|dark))\]\]/g, (_m, c?: string, r?: string, name?: string) => {
+    if (name === 'light' || name === 'dark') apply.theme(name);
+    else if (c !== undefined && r !== undefined) apply.resize(Number(c), Number(r));
     return '';
   });
   // A partial marker at the end: the longest suffix that is a prefix of a
@@ -61,14 +113,18 @@ export function filterResizeMarks(text: string, apply: (cols: number, rows: numb
   let pending = '';
   for (let len = Math.min(out.length, 30); len > 0; len--) {
     const tail = out.slice(out.length - len);
-    const probe = tail.length <= RESIZE_MARK_PREFIX.length ? RESIZE_MARK_PREFIX.startsWith(tail) : tail.startsWith(RESIZE_MARK_PREFIX) && /^\[\[amx:resize:\d*(x\d*)?\]?$/.test(tail);
-    if (probe) {
+    if (isPartialMark(tail)) {
       pending = tail;
       out = out.slice(0, out.length - len);
       break;
     }
   }
   return { out, pending };
+}
+
+/** Resize-only view of filterHostMarks (theme markers are still stripped and applied). */
+export function filterResizeMarks(text: string, apply: (cols: number, rows: number) => void): { out: string; pending: string } {
+  return filterHostMarks(text, { resize: apply, theme: applyHostTheme });
 }
 
 /**
@@ -112,7 +168,7 @@ export function resizeAwareStdin(): NodeJS.ReadStream {
       pendingTimer = null;
     }
     trace(`stdin: data ${JSON.stringify(text).slice(0, 48)}`);
-    const r = filterResizeMarks(text, applyResize);
+    const r = filterHostMarks(text, { resize: applyResize, theme: applyHostTheme });
     pending = r.pending;
     if (r.out.length > 0) proxy.write(r.out);
     if (pending.length > 0) pendingTimer = setTimeout(flushPending, PENDING_FLUSH_MS);

@@ -94,43 +94,48 @@ export const DARK: Theme = {
   yellow: '#e8c75e',
 };
 
+// Light palette on Gregory's rule for Automax's light mode: text is black,
+// the semantic colors are dark red / dark blue / dark green, and a yellow
+// highlight (with bold or italics) marks the few things that need emphasis —
+// here the band behind the user's own turn. Every text color clears 4.5:1
+// on pure white (Automax's light pane is white, not cream).
 export const LIGHT: Theme = {
   name: 'light',
-  bg: '#f6f3ec',
-  panel: '#efeadf',
-  rail: '#efeadf',
-  ink: '#1d2422',
-  inkDim: '#5c6863', // 5.8:1 on white — the tier for secondary TEXT
-  inkFaint: '#9aa49d', // decoration only — never for text
-  rule: '#e1dbcd',
-  ruleStrong: '#b9b3a3',
-  accent: '#0a6f64', // ≥ 4.5:1 on pure white (Automax's light pane is white, not cream)
-  accentDim: '#0a5a51',
-  agent: '#7a3f9c',
-  add: '#2f7a3f',
-  del: '#b8433a',
-  warn: '#8a6912',
-  amber: '#93601a',
-  rose: '#c0463c',
-  codeBg: '#dae7df', // teal 12% over paper
-  addBg: '#e3e8dc', // green 10% over paper
-  delBg: '#f1e3dc', // red 9% over paper
-  liveBg: '#eaeee7', // teal 5% over paper
-  cursorInk: '#f6f3ec',
-  chrome: '#e7e1d4',
-  chromeRule: '#d3ccbc',
-  chromeInk: '#6b756e',
-  userBand: '#e9ecef',
-  border: '#9aa4a0',
-  borderPlan: '#3f6fa3',
-  borderAuto: '#2f7a3f',
-  permission: '#93601a',
-  thinkingInk: '#5c6863',
+  bg: '#ffffff',
+  panel: '#f4f4f4',
+  rail: '#f4f4f4',
+  ink: '#000000',
+  inkDim: '#4a4a4a', // 9.7:1 on white — the tier for secondary TEXT
+  inkFaint: '#9a9a9a', // decoration only — never for text
+  rule: '#dcdcdc',
+  ruleStrong: '#b0b0b0',
+  accent: '#1a44a8', // dark blue — brand, prompts, links
+  accentDim: '#153a8c',
+  agent: '#1a44a8', // the assistant's glyphs share the dark blue
+  add: '#1e6b2e', // dark green
+  del: '#a11a1a', // dark red
+  warn: '#7a5a00', // dark yellow text (warnings, planning, context ≥ 80%)
+  amber: '#7a5a00',
+  rose: '#a11a1a',
+  codeBg: '#efefef', // neutral gray behind code
+  addBg: '#e2f0e4', // green 10% over white
+  delBg: '#f6e1e1', // red 9% over white
+  liveBg: '#f3f3f3',
+  cursorInk: '#ffffff',
+  chrome: '#ebebeb',
+  chromeRule: '#d0d0d0',
+  chromeInk: '#4a4a4a',
+  userBand: '#fff3a3', // yellow highlight behind the user's turn
+  border: '#8c8c8c',
+  borderPlan: '#1a44a8',
+  borderAuto: '#1e6b2e',
+  permission: '#7a5a00',
+  thinkingInk: '#4a4a4a',
   // aliases
-  teal: '#0a6f64',
-  tealDim: '#0a5a51',
-  violet: '#7a3f9c',
-  yellow: '#8a6912',
+  teal: '#1a44a8',
+  tealDim: '#153a8c',
+  violet: '#1a44a8',
+  yellow: '#7a5a00',
 };
 
 export const THEMES: Record<Theme['name'], Theme> = { dark: DARK, light: LIGHT };
