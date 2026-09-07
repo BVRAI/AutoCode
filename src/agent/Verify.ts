@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { killTree, spawnOptionsForTree } from '../util/processTree.js';
 import { platform } from 'node:os';
 import { join } from 'node:path';
 
@@ -404,6 +405,7 @@ export function runVerification(
       cwd: root,
       shell: true,
       stdio: ['ignore', 'pipe', 'pipe'],
+      ...spawnOptionsForTree(),
     });
 
     const finish = (code: number | null): void => {
@@ -422,7 +424,7 @@ export function runVerification(
 
     const poll = setInterval(() => {
       if (isCancelled() && !settled) {
-        child.kill('SIGKILL');
+        killTree(child);
         output += '\n[verification cancelled]';
         finish(null);
       }

@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { resolveInsideRoot, toRelative } from '../util/pathSafety.js';
 import { classifyCommand, type SafetyVerdict } from '../safety/SafetyPolicy.js';
 import { annotateSandboxFailures, sandboxEnabled, wrapForSandbox } from '../safety/Sandbox.js';
+import { killTree, spawnOptionsForTree } from '../util/processTree.js';
 import {
   optionalBoolean,
   optionalNumber,
@@ -38,13 +39,7 @@ const BACKGROUND_GRACE_MS = 3_000;
 // `npm run dev` never outlives its session.
 const bgChildren = new Set<ChildProcess>();
 process.on('exit', () => {
-  for (const c of bgChildren) {
-    try {
-      c.kill();
-    } catch {
-      /* ignore */
-    }
-  }
+  for (const c of bgChildren) killTree(c);
 });
 
 const DEFINITION: ToolDefinition = {
@@ -251,7 +246,7 @@ function runBackground(command: string, cwd: string): Promise<BackgroundResult> 
     // shell:true lets Node invoke the platform shell correctly — on Windows it
     // passes the command verbatim to cmd.exe (no argv re-escaping that would
     // mangle embedded quotes); on POSIX it uses /bin/sh -c.
-    const child = spawn(command, { cwd, shell: true });
+    const child = spawn(command, { cwd, shell: true, ...spawnOptionsForTree() });
     bgChildren.add(child);
     // A background process must not keep autocode's event loop alive on its
     // own — autocode's lifetime is governed by the REPL, not the dev server.
@@ -294,23 +289,33 @@ function runBackground(command: string, cwd: string): Promise<BackgroundResult> 
   });
 }
 
+// After a timeout kill, how long to wait for 'close' before settling anyway —
+// a grandchild that survived the shell can keep the pipes open for hours.
+const KILL_GRACE_MS = 2_000;
+
 function runCommand(command: string, cwd: string, timeoutMs: number): Promise<CommandResult> {
   return new Promise((resolve) => {
     // shell:true — see runBackground: avoids the argv re-escaping that
     // corrupted quoted arguments containing spaces.
-    const child = spawn(command, { cwd, shell: true });
+    const child = spawn(command, { cwd, shell: true, ...spawnOptionsForTree() });
 
     const outCap = createCapture();
     const errCap = createCapture();
     let timedOut = false;
+    let settled = false;
+    const settle = (code: number | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ code, stdout: outCap.snapshot(), stderr: errCap.snapshot(), timedOut });
+    };
 
     const timer = setTimeout(() => {
       timedOut = true;
-      try {
-        child.kill('SIGKILL');
-      } catch {
-        /* ignore */
-      }
+      errCap.push(Buffer.from(`\n[timed out after ${Math.round(timeoutMs / 1000)}s — process tree killed]`, 'utf8'));
+      killTree(child);
+      // Never wait on 'close' after a kill: settle once the grace period passes.
+      setTimeout(() => settle(null), KILL_GRACE_MS).unref?.();
     }, timeoutMs);
 
     child.stdout?.on('data', (d: Buffer) => {
@@ -319,14 +324,10 @@ function runCommand(command: string, cwd: string, timeoutMs: number): Promise<Co
     child.stderr?.on('data', (d: Buffer) => {
       errCap.push(d);
     });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      resolve({ code, stdout: outCap.snapshot(), stderr: errCap.snapshot(), timedOut });
-    });
+    child.on('close', (code) => settle(code));
     child.on('error', (err) => {
-      clearTimeout(timer);
       errCap.push(Buffer.from(`\n[spawn error] ${err.message}`, 'utf8'));
-      resolve({ code: 1, stdout: outCap.snapshot(), stderr: errCap.snapshot(), timedOut });
+      settle(1);
     });
   });
 }
