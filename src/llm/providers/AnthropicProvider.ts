@@ -6,8 +6,10 @@ import type {
   Message,
   StreamEvent,
 } from '../types.js';
+import type { EffortLevel } from '../types.js';
 import { isProxyAuth, type AuthMode } from '../../auth/AuthResolver.js';
 import { parseSseStream } from '../sse.js';
+import { EFFORT_BUDGETS, isModernAnthropicShape } from '../models.js';
 
 const DEFAULT_BASE = 'https://api.anthropic.com/v1';
 const API_VERSION = '2023-06-01';
@@ -52,6 +54,7 @@ export class AnthropicProvider implements LlmProvider {
 
     const thinking = thinkingParam(req);
     const budget = thinkingBudgetOf(thinking);
+    const outputConfig = effortParam(req);
     const contextManagement = this.contextManagementParam(req);
     const body = {
       model: req.model,
@@ -64,6 +67,7 @@ export class AnthropicProvider implements LlmProvider {
         ? {}
         : { temperature: thinking ? 1.0 : (req.temperature ?? 1.0) }),
       ...(thinking ? { thinking } : {}),
+      ...(outputConfig ? { output_config: outputConfig } : {}),
       ...(contextManagement ? { context_management: contextManagement } : {}),
       // The cache breakpoint sits on the stable `system` block. Any volatile
       // suffix (live git working-state) goes in a SECOND block after it, so it
@@ -125,6 +129,7 @@ export class AnthropicProvider implements LlmProvider {
 
     const thinking = thinkingParam(req);
     const budget = thinkingBudgetOf(thinking);
+    const outputConfig = effortParam(req);
     const contextManagement = this.contextManagementParam(req);
     const body = {
       model: req.model,
@@ -134,6 +139,7 @@ export class AnthropicProvider implements LlmProvider {
         ? {}
         : { temperature: thinking ? 1.0 : (req.temperature ?? 1.0) }),
       ...(thinking ? { thinking } : {}),
+      ...(outputConfig ? { output_config: outputConfig } : {}),
       ...(contextManagement ? { context_management: contextManagement } : {}),
       stream: true,
       system: [
@@ -332,21 +338,30 @@ export function withRollingCacheBreakpoint(
 //
 // Prefix match so dated variants (claude-opus-4-7-20251001) and an `anthropic/` prefix
 // still resolve.
-const MODERN_REQUEST_SHAPE =
-  /^(?:anthropic\/)?claude-(?:fable-5|mythos-5|opus-5|opus-4-8|opus-4-7|sonnet-5)\b/;
-
 function usesModernRequestShape(model: string): boolean {
-  return MODERN_REQUEST_SHAPE.test(model.trim());
+  return isModernAnthropicShape(model);
 }
 
 type ThinkingParam = { type: 'adaptive' } | { type: 'enabled'; budget_tokens: number };
 
 function thinkingParam(req: CompletionRequest): ThinkingParam | null {
-  if (!req.thinking || req.thinking.budgetTokens <= 0) return null;
-  // On the modern shape the caller's budget is advisory only — the model paces itself.
+  const t = req.thinking;
+  if (!t) return null;
+  // On the modern shape the model paces itself; the effort level, if any,
+  // travels in output_config (see effortParam).
   if (usesModernRequestShape(req.model)) return { type: 'adaptive' };
+  // Older models need an explicit budget; an effort level maps to one.
+  const budget = t.mode === 'budget' ? (t.budgetTokens ?? 0) : EFFORT_BUDGETS[t.effort ?? 'medium'];
+  if (budget <= 0) return null;
   // Anthropic's documented minimum budget is 1024.
-  return { type: 'enabled', budget_tokens: Math.max(1024, req.thinking.budgetTokens) };
+  return { type: 'enabled', budget_tokens: Math.max(1024, budget) };
+}
+
+/** `output_config.effort` — modern shape only, when a level was requested. */
+function effortParam(req: CompletionRequest): { effort: EffortLevel } | null {
+  const t = req.thinking;
+  if (!t || t.mode !== 'effort' || !t.effort || !usesModernRequestShape(req.model)) return null;
+  return { effort: t.effort };
 }
 
 /** Thinking budget to reserve headroom for, or 0 when the model paces itself. */
@@ -382,6 +397,13 @@ export function toAnthropicMessage(m: Message): { role: 'user' | 'assistant'; co
         blocks.push({
           type: 'image',
           source: { type: 'base64', media_type: b.mediaType, data: b.data },
+        });
+        break;
+      case 'document':
+        blocks.push({
+          type: 'document',
+          source: { type: 'base64', media_type: b.mediaType, data: b.data },
+          ...(b.name ? { title: b.name } : {}),
         });
         break;
       case 'thinking':

@@ -21,6 +21,7 @@ import { StatusBar } from './StatusBar.js';
 import { PlanPanel } from './PlanPanel.js';
 import { Markdown } from './Markdown.js';
 import { glyphs } from './glyphs.js';
+import { cursorToRowCol } from './composerText.js';
 import { WORDMARK_COMPACT, gradientSegments, hexToRgb } from '../Banner.js';
 import {
   DONE_VERBS,
@@ -483,7 +484,8 @@ function StatusLine({ t, state }: { t: Theme; state: BridgeState }): React.JSX.E
       <Text color={t.ink}>{state.activity.verb}…</Text>
       <Text color={t.inkDim}>
         {' '}({formatDuration(elapsedMs)}
-        {tokens > 0 ? ` · ${g.down} ${formatTokens(tokens)} tokens` : ''} · esc to interrupt)
+        {tokens > 0 ? ` · ${g.down} ${formatTokens(tokens)} tokens` : ''}
+        {state.effort ? ` · ${state.effort}` : ''} · esc to interrupt)
       </Text>
     </Box>
   );
@@ -493,16 +495,47 @@ function Composer({ t, state, input, cursor, columns }: { t: Theme; state: Bridg
   const borderColor =
     state.mode === 'planning' ? t.borderPlan : state.mode === 'autocode' || state.mode === 'admin' ? t.borderAuto : t.border;
   const shell = input.startsWith('!');
+  const prefixColor = shell ? t.warn : t.accent;
+  // Multi-line input: `\` + Enter (or a short paste) adds lines; the cursor
+  // is drawn on the line it sits in.
+  const lines = input.split('\n');
+  const { row, col } = cursorToRowCol(input, cursor);
   return (
-    <Box borderStyle="round" borderColor={shell ? t.warn : borderColor} paddingX={1} marginTop={1} width={Math.max(20, columns)}>
-      <Text color={shell ? t.warn : t.accent} bold>
-        {shell ? '! ' : '> '}
-      </Text>
-      <Text color={t.ink}>{shell ? input.slice(1, cursor) : input.slice(0, cursor)}</Text>
-      <Text backgroundColor={t.accent} color={t.cursorInk}>
-        {input.slice(cursor, cursor + 1) || ' '}
-      </Text>
-      <Text color={t.ink}>{input.slice(cursor + 1)}</Text>
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor={shell ? t.warn : borderColor}
+      paddingX={1}
+      marginTop={1}
+      width={Math.max(20, columns)}
+    >
+      {lines.map((line, i) => {
+        const prefix = i === 0 ? (shell ? '! ' : '> ') : '  ';
+        const text = i === 0 && shell ? line.slice(1) : line;
+        const c = Math.max(0, i === 0 && shell ? col - 1 : col);
+        if (i !== row) {
+          return (
+            <Text key={i}>
+              <Text color={prefixColor} bold>
+                {prefix}
+              </Text>
+              <Text color={t.ink}>{text}</Text>
+            </Text>
+          );
+        }
+        return (
+          <Text key={i}>
+            <Text color={prefixColor} bold>
+              {prefix}
+            </Text>
+            <Text color={t.ink}>{text.slice(0, c)}</Text>
+            <Text backgroundColor={t.accent} color={t.cursorInk}>
+              {text.slice(c, c + 1) || ' '}
+            </Text>
+            <Text color={t.ink}>{text.slice(c + 1)}</Text>
+          </Text>
+        );
+      })}
     </Box>
   );
 }

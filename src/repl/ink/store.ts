@@ -149,6 +149,8 @@ export interface BridgeState {
   turnStartedAt: number | null;
   // Ctrl+O: results commit expanded instead of collapsed.
   verbose: boolean;
+  // The resolved thinking policy for the status line ("high effort"), or null.
+  effort: string | null;
   editsThisTurn: RailEditSummary[];
   mcpStatus: McpStatusEntry[];
   usage: {
@@ -197,6 +199,7 @@ const INITIAL: BridgeState = {
   liveOutputChars: 0,
   turnStartedAt: null,
   verbose: false,
+  effort: null,
   editsThisTurn: [],
   mcpStatus: [],
   usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0, currentContextTokens: 0, contextWindow: 0 },
@@ -218,6 +221,19 @@ export class BridgeStore {
   private readonly toolArgs = new Map<string, Record<string, unknown>>();
   // The most recently finished edit/write, so a diff that follows attaches to it.
   private lastFinishedToolId: string | null = null;
+  // What the next user band shows instead of the submitted text (placeholders
+  // for long pastes and images, Claude Code style). Consumed by the next turn.
+  private pendingUserDisplay: string | null = null;
+
+  setUserDisplay(text: string | null): void {
+    this.pendingUserDisplay = text;
+  }
+
+  takeUserDisplay(): string | null {
+    const t = this.pendingUserDisplay;
+    this.pendingUserDisplay = null;
+    return t;
+  }
 
   get(): BridgeState {
     return this.state;
@@ -393,6 +409,11 @@ export class BridgeStore {
     this.emit({ ...this.state, verbose: !this.state.verbose });
   }
 
+  setEffort(label: string | null): void {
+    if (this.state.effort === label) return;
+    this.emit({ ...this.state, effort: label });
+  }
+
   // ── status ops ────────────────────────────────────────────────────────
   // All setters are equality-guarded: the polling refresh (usage / busy /
   // queue / mode every 1.5 s) would otherwise re-render the whole tree.
@@ -512,6 +533,7 @@ export class BridgeStore {
       project: this.state.project,
       model: this.state.model,
       verbose: this.state.verbose,
+      effort: this.state.effort,
     });
   }
 }

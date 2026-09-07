@@ -15,6 +15,7 @@
 
 import { RATES } from '../util/pricing.js';
 import type { FullCatalog } from './CatalogClient.js';
+import type { EffortLevel, ThinkingRequest } from './types.js';
 
 export interface ModelInfo {
   provider: string;
@@ -34,6 +35,12 @@ export interface ModelInfo {
   supportsThinking?: boolean;
   /** Provider-recommended thinking budget (tokens), when the catalog has one. */
   thinkingBudgetDefault?: number | null;
+  /** Accepts image input (catalog `vision`). */
+  vision?: boolean;
+  /** Largest `max_tokens` the model accepts (catalog `max_output_tokens`). */
+  maxOutputTokens?: number;
+  /** Supports tool calling (catalog `tools`); undefined = assume yes. */
+  supportsTools?: boolean;
 }
 
 export type ModelCatalogSource = 'bundled' | 'proxy';
@@ -63,9 +70,9 @@ const EXTRA_METADATA: Record<string, { label: string; notes?: string; thinking?:
   'o3':       { label: 'o3',       notes: 'reasoning · slow & expensive', thinking: true },
   'o4-mini':  { label: 'o4-mini',  notes: 'reasoning · cheaper', thinking: true },
 
-  // openrouter — reasoning params are route-specific; leave unarmed.
-  'anthropic/claude-opus-4-7':  { label: 'OpenRouter → Claude Opus 4.7',     notes: 'frontier via OR' },
-  'openai/gpt-5.1':              { label: 'OpenRouter → GPT-5.1',             notes: 'frontier via OR' },
+  // openrouter — the unified `reasoning: { effort }` param reaches these upstreams.
+  'anthropic/claude-opus-4-7':  { label: 'OpenRouter → Claude Opus 4.7',     notes: 'frontier via OR', thinking: true },
+  'openai/gpt-5.1':              { label: 'OpenRouter → GPT-5.1',             notes: 'frontier via OR', thinking: true },
   'meta-llama/llama-3.3-70b':    { label: 'OpenRouter → Llama 3.3 70B',       notes: 'open-weights · very cheap' },
 };
 
@@ -138,6 +145,9 @@ export function setProxyCatalog(catalog: FullCatalog | null): void {
         contextWindow: entry.context_window,
         supportsThinking: entry.supports_thinking === true,
         thinkingBudgetDefault: entry.thinking_budget_default,
+        vision: entry.vision === true,
+        maxOutputTokens: typeof entry.max_output_tokens === 'number' && entry.max_output_tokens > 0 ? entry.max_output_tokens : undefined,
+        supportsTools: entry.tools !== false,
       });
     }
   }
@@ -155,6 +165,15 @@ export function getKnownModels(): ModelInfo[] {
 
 export function getKnownProviders(): string[] {
   return Array.from(new Set(getKnownModels().map((m) => m.provider)));
+}
+
+/** Capability badges for pickers: "200k ctx", "think", "vision". */
+export function modelBadges(m: ModelInfo): string[] {
+  const out: string[] = [];
+  if (m.contextWindow) out.push(`${Math.round(m.contextWindow / 1000)}k ctx`);
+  if (m.supportsThinking) out.push('think');
+  if (m.vision) out.push('vision');
+  return out;
 }
 
 // Cheap same-provider models for internal summarization work (compaction,
@@ -177,19 +196,96 @@ export function summarizerModelFor(provider: string, sessionModel: string): stri
 // without dominating the output budget.
 const DEFAULT_THINKING_BUDGET = 8_192;
 
+// ── Effort policy ────────────────────────────────────────────────────────────
+// One setting, per session (and remembered per model): how hard the model
+// thinks. 'auto' = the provider's recommended default for the model, 'off' =
+// no thinking request, or an explicit level. Resolved into a ThinkingRequest
+// by thinkingFor(); each provider maps that natively.
+
+export type EffortSetting = 'auto' | 'off' | EffortLevel;
+export const EFFORT_LEVELS: readonly EffortLevel[] = ['low', 'medium', 'high', 'max'];
+export const EFFORT_SETTINGS: readonly EffortSetting[] = ['auto', 'off', ...EFFORT_LEVELS];
+
+/** Token budgets an effort level maps to on providers that take a budget. */
+export const EFFORT_BUDGETS: Record<EffortLevel, number> = {
+  low: 2_048,
+  medium: 8_192,
+  high: 16_384,
+  max: 32_768,
+};
+
+export function parseEffortSetting(raw: string | undefined | null): EffortSetting | null {
+  const v = (raw ?? '').trim().toLowerCase();
+  return (EFFORT_SETTINGS as readonly string[]).includes(v) ? (v as EffortSetting) : null;
+}
+
+// Anthropic's modern request shape (Opus 4.7+, Sonnet 5, Opus 5, Fable/Mythos 5):
+// no sampling params, adaptive thinking, effort via output_config. Prefix
+// match so dated variants (claude-opus-4-7-20251001) and an `anthropic/`
+// prefix still resolve. Shared with AnthropicProvider.
+const MODERN_ANTHROPIC_SHAPE = /^(?:anthropic\/)?claude-(?:fable-5|mythos-5|opus-5|opus-4-8|opus-4-7|sonnet-5)\b/;
+
+export function isModernAnthropicShape(model: string): boolean {
+  return MODERN_ANTHROPIC_SHAPE.test(model.trim());
+}
+
+// Gemini thinking is armed: GeminiProvider replays thoughtSignatures on the
+// parts they arrived with, which is what keeps tool use working with thoughts on.
+const GEMINI_THINKING_ARMED = true;
+
 // Resolve whether (and how) to arm extended thinking for a model. Returns
-// undefined when the model has no thinking param, when the user disabled it
-// (AUTOCODE_NO_THINKING=1), or for providers whose echo path can't sustain
-// it yet. This is what AgentLoop passes as CompletionRequest.thinking.
-export function thinkingFor(provider: string, model: string): { budgetTokens: number } | undefined {
-  if (process.env.AUTOCODE_NO_THINKING === '1') return undefined;
-  // Gemini: enabling thinkingConfig without re-attaching thoughtSignature on
-  // function calls breaks tool-use continuity — deferred until the outbound
-  // pairing pass exists (see GeminiProvider's thinking comment).
-  if (provider === 'google') return undefined;
+// undefined when the model has no thinking param, when the user turned it
+// off (`/effort off`, AUTOCODE_NO_THINKING=1), or for providers whose echo
+// path can't sustain it yet. This is what AgentLoop passes as
+// CompletionRequest.thinking.
+export function thinkingFor(
+  provider: string,
+  model: string,
+  setting: EffortSetting = 'auto',
+): ThinkingRequest | undefined {
+  if (process.env.AUTOCODE_NO_THINKING === '1' || setting === 'off') return undefined;
+  const level: EffortLevel | null = setting === 'auto' ? null : setting;
   const m = findModel(provider, model);
-  if (!m?.supportsThinking) return undefined;
-  return { budgetTokens: m.thinkingBudgetDefault ?? DEFAULT_THINKING_BUDGET };
+  switch (provider) {
+    case 'anthropic': {
+      // Modern shape: adaptive thinking paces itself; effort is the knob.
+      if (isModernAnthropicShape(model)) return { mode: 'effort', effort: level ?? 'high' };
+      if (!m?.supportsThinking) return undefined;
+      return {
+        mode: 'budget',
+        budgetTokens: level ? EFFORT_BUDGETS[level] : (m.thinkingBudgetDefault ?? DEFAULT_THINKING_BUDGET),
+      };
+    }
+    case 'openai':
+      if (!m?.supportsThinking) return undefined;
+      return { mode: 'effort', effort: level ?? 'medium', summary: true };
+    case 'google': {
+      if (!GEMINI_THINKING_ARMED) return undefined;
+      if (/^gemini-3/.test(model)) return { mode: 'effort', effort: level ?? 'high', summary: true };
+      if (/^gemini-2\.5/.test(model)) {
+        return {
+          mode: 'budget',
+          budgetTokens: level ? EFFORT_BUDGETS[level] : (m?.thinkingBudgetDefault ?? DEFAULT_THINKING_BUDGET),
+          summary: true,
+        };
+      }
+      return undefined;
+    }
+    case 'xai':
+    case 'openrouter':
+      if (!m?.supportsThinking) return undefined;
+      return { mode: 'effort', effort: level ?? 'medium' };
+    default:
+      return undefined;
+  }
+}
+
+/** Short label for the status line and `/effort`: "high effort", "8k budget", or null. */
+export function describeThinking(t: ThinkingRequest | undefined): string | null {
+  if (!t) return null;
+  if (t.mode === 'effort') return `${t.effort ?? 'medium'} effort`;
+  const b = t.budgetTokens ?? 0;
+  return b >= 1000 ? `${Math.round(b / 1024)}k budget` : `${b} budget`;
 }
 
 // Lookup helper: returns the catalog entry matching a (provider, model)

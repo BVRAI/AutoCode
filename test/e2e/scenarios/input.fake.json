@@ -1,0 +1,8 @@
+{
+  "chunk": 8,
+  "delayMs": 3,
+  "turns": [
+    { "text": "Got it — I see the file and the pasted block.", "usage": { "inputTokens": 900, "outputTokens": 20 } },
+    { "text": "Second turn done.", "usage": { "inputTokens": 950, "outputTokens": 10 } }
+  ]
+}

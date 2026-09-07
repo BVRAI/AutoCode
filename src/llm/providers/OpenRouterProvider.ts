@@ -32,7 +32,7 @@ export class OpenRouterProvider implements LlmProvider {
       headers,
       // OpenRouter's docs require reasoning_details passed back unmodified
       // for reasoning continuity across tool calls (Anthropic/Gemini upstreams).
-      body: JSON.stringify(buildBody(req, { reasoningEcho: 'reasoning_details' })),
+      body: JSON.stringify(buildBody(req, { reasoningEcho: 'reasoning_details', effortStyle: 'openrouter' })),
       signal: req.signal,
     });
     if (!res.ok) {
@@ -61,7 +61,7 @@ export class OpenRouterProvider implements LlmProvider {
       method: 'POST',
       headers,
       body: JSON.stringify({
-        ...buildBody(req, { reasoningEcho: 'reasoning_details' }),
+        ...buildBody(req, { reasoningEcho: 'reasoning_details', effortStyle: 'openrouter' }),
         stream: true,
         stream_options: { include_usage: true },
       }),

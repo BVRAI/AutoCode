@@ -5,6 +5,8 @@ export type MessageRole = 'system' | 'user' | 'assistant';
 export interface TextBlock {
   type: 'text';
   text: string;
+  /** Provider-native metadata to replay with this block (Gemini thoughtSignature). */
+  opaque?: unknown;
 }
 
 export interface ToolUseBlock {
@@ -12,6 +14,8 @@ export interface ToolUseBlock {
   id: string;
   name: string;
   input: Record<string, unknown>;
+  /** Provider-native metadata to replay with this block (Gemini thoughtSignature). */
+  opaque?: unknown;
 }
 
 export interface ToolResultBlock {
@@ -46,7 +50,16 @@ export interface ThinkingBlock {
   opaque?: unknown;
 }
 
-export type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock | ImageBlock | ThinkingBlock;
+/** A file attached whole (PDF today): Anthropic `document`, OpenAI Responses
+ *  `input_file`, Gemini `inlineData`. Providers without a document type skip it. */
+export interface DocumentBlock {
+  type: 'document';
+  mediaType: 'application/pdf';
+  data: string; // base64
+  name?: string;
+}
+
+export type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock | ImageBlock | ThinkingBlock | DocumentBlock;
 
 export interface Message {
   role: MessageRole;
@@ -57,6 +70,28 @@ export interface ToolSchema {
   name: string;
   description: string;
   inputSchema: unknown;
+}
+
+/** How hard the model should think. Mirrors the levels the providers expose
+ *  (Anthropic `output_config.effort`, OpenAI `reasoning.effort`, Gemini
+ *  `thinkingLevel`, xAI/OpenRouter `reasoning_effort`); providers clamp levels
+ *  they lack (xAI has low|high; `max` becomes `high` elsewhere). */
+export type EffortLevel = 'low' | 'medium' | 'high' | 'max';
+
+/** A resolved thinking request. `effort` mode carries a level for providers
+ *  that take one; `budget` mode carries a token budget for the older
+ *  Anthropic shape and Gemini 2.5. Each provider maps it natively:
+ *  Anthropic modern shape → `thinking:{type:'adaptive'}` + `output_config.effort`,
+ *  legacy → `thinking:{type:'enabled',budget_tokens}` (forces temp 1);
+ *  OpenAI → `reasoning_effort`; OpenRouter → `reasoning:{effort}`; xAI →
+ *  `reasoning_effort` low|high; Gemini → `thinkingConfig.thinkingLevel` or
+ *  `thinkingBudget`. `summary` asks for a displayable reasoning summary
+ *  where the API distinguishes one. */
+export interface ThinkingRequest {
+  mode: 'effort' | 'budget';
+  effort?: EffortLevel;
+  budgetTokens?: number;
+  summary?: boolean;
 }
 
 export interface CompletionRequest {
@@ -72,12 +107,9 @@ export interface CompletionRequest {
   tools: ToolSchema[];
   maxTokens?: number;
   temperature?: number;
-  /** Request extended thinking / reasoning. Providers map it natively:
-   *  Anthropic `thinking:{type:'enabled',budget_tokens}` (forces temp 1),
-   *  OpenAI o-series & gpt-5 family `reasoning_effort`, Gemini
-   *  `thinkingConfig` (currently never armed — thoughtSignature re-attach
-   *  is deferred). Omitted → provider default (off). */
-  thinking?: { budgetTokens: number };
+  /** Request extended thinking / reasoning — see ThinkingRequest. Omitted →
+   *  provider default (off). Resolved per model by llm/models.ts:thinkingFor. */
+  thinking?: ThinkingRequest;
   /** Ask the provider to clear stale tool results SERVER-SIDE once the
    *  prompt crosses `triggerInputTokens` (Anthropic context-management
    *  beta; applied after cache lookup, so unlike client-side masking it

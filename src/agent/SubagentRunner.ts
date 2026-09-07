@@ -66,9 +66,9 @@ export class SubagentRunner {
           system: systemPrompt,
           messages,
           tools: registry.schemas(),
-          maxTokens: defaultMaxOutputTokens(input.parent.model.model),
+          maxTokens: defaultMaxOutputTokens(input.parent.model.model, input.parent.model.provider),
           temperature: input.parent.sampling?.temperature ?? 0,
-          thinking: thinkingFor(input.parent.model.provider, input.parent.model.model),
+          thinking: thinkingFor(input.parent.model.provider, input.parent.model.model, input.parent.effort),
         },
       );
 

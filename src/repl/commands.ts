@@ -32,6 +32,7 @@ export const COMMAND_DEFS: ReadonlyArray<CommandDef> = [
   { name: 'auth',     signature: '/auth [provider key]',                      summary: 'Configure an API key (alias of /keys)',                     args: 'optional' },
   { name: 'login',    signature: '/login [sk_amx_…]',                         summary: 'Sign in to BVRAI for proxy-routed LLMs',                    args: 'optional' },
   { name: 'mode',     signature: '/mode [planning|default|autocode|admin]',   summary: 'Show or set the workflow mode',                             args: 'optional' },
+  { name: 'effort',   signature: '/effort [low|medium|high|max|off|auto]',    summary: 'Show or set how hard the model thinks',                     args: 'optional' },
   { name: 'undo',     signature: '/undo [turn]',                              summary: 'Revert last tool step (or whole turn)',                     args: 'optional' },
   { name: 'trash',    signature: '/trash',                                    summary: 'List recently deleted files (recoverable)',                 args: 'none' },
   { name: 'restore',  signature: '/restore <id>',                             summary: 'Restore a deleted file from the trash',                     args: 'required' },

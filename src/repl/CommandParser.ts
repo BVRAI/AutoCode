@@ -15,6 +15,7 @@ export type LocalCommandName =
   | 'auth'
   | 'login'
   | 'mode'
+  | 'effort'
   | 'undo'
   | 'trash'
   | 'restore'

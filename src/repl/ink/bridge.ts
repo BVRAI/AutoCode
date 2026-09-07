@@ -113,7 +113,7 @@ export function createBridgeEventEmitter(
           case 'started': {
             store.beginTurn();
             store.setBusy(true);
-            const task = (data['task'] as string | undefined) ?? '';
+            const task = store.takeUserDisplay() ?? ((data['task'] as string | undefined) ?? '');
             if (task) store.appendText('user', task);
             break;
           }

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { configDir } from '../util/paths.js';
+import type { EffortSetting } from '../llm/models.js';
 
 export interface McpServerConfig {
   command: string;
@@ -11,6 +12,10 @@ export interface McpServerConfig {
 export interface AutocodeConfig {
   defaultProvider?: string;
   defaultModel?: string;
+  // Thinking effort remembered per model ("provider/model" → setting) by
+  // `/effort`, and the fallback for models without an entry. Absent = 'auto'.
+  effort?: Record<string, EffortSetting>;
+  defaultEffort?: EffortSetting;
   apiKeys?: {
     anthropic?: string;
     openai?: string;

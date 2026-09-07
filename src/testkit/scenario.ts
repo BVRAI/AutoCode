@@ -24,6 +24,7 @@ export type ScenarioStep =
   | { key: string }
   | { keys: string[] }
   | { write: string }
+  | { paste: string }
   | { waitFor: string; timeoutMs?: number }
   | { waitIdle: number; timeoutMs?: number }
   | { sleep: number }
@@ -83,6 +84,7 @@ export async function runScenario(
       else if ('key' in step) await session.key(step.key);
       else if ('keys' in step) for (const k of step.keys) await session.key(k);
       else if ('write' in step) session.write(step.write);
+      else if ('paste' in step) await session.paste(step.paste);
       else if ('waitFor' in step) await session.waitFor(patternFor(step.waitFor), step.timeoutMs ?? 20_000);
       else if ('waitIdle' in step) await session.waitIdle(step.waitIdle, step.timeoutMs ?? 20_000);
       else if ('sleep' in step) await new Promise((r) => setTimeout(r, step.sleep));

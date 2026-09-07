@@ -3,7 +3,21 @@
 // the controller (typically TerminalMode) for submit / mode-cycle / exit.
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { Box, useApp, useInput } from 'ink';
+import { Box, useApp, useInput, usePaste } from 'ink';
+import { MentionMenu } from './MentionMenu.js';
+import {
+  completeMention,
+  expandPastes,
+  imageRefs,
+  insertAt,
+  isShortPaste,
+  makeImagePlaceholder,
+  makePastePlaceholder,
+  mentionTokenAt,
+  type SubmitExtras,
+} from './composerText.js';
+import { fuzzyRankPaths, listProjectFiles } from '../../util/projectFiles.js';
+import { readClipboardImage } from '../../util/clipboard.js';
 import { Rail, RAIL_COMPACT_WIDTH, RAIL_WIDTH } from './Rail.js';
 import { Main } from './Main.js';
 import { Inline } from './Inline.js';
@@ -48,7 +62,7 @@ export interface InkAppProps {
   theme?: string;
 
   // Callbacks into the host (TerminalMode/AgentHandler).
-  onSubmit: (text: string) => void;
+  onSubmit: (text: string, extras?: SubmitExtras) => void;
   onCycleMode: () => void;
   onInterrupt: () => void;
   onExit: () => void;
@@ -101,17 +115,39 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
   // Prevents accidental exits during long coding ops. Esc remains the
   // interrupt-the-agent keystroke.
   const [exitArmed, setExitArmed] = useState<boolean>(false);
+  // Long pastes and clipboard images sit in the composer as numbered
+  // placeholders ("[Pasted text #1 +120 lines]", "[Image #1]") and are
+  // expanded / attached on submit — Claude Code's behavior.
+  const pastesRef = useRef<Map<number, string>>(new Map());
+  const imagesRef = useRef<Map<number, { path: string; mediaType: string }>>(new Map());
+  // Live copies for async handlers (clipboard) that outlive a render.
+  const inputRef = useRef(input);
+  const cursorRef = useRef(cursor);
+  inputRef.current = input;
+  cursorRef.current = cursor;
+  // `@` file picker state.
+  const [mentionIdx, setMentionIdx] = useState<number>(0);
+  const [mentionDismissed, setMentionDismissed] = useState<number | null>(null);
+  const [projectFiles, setProjectFiles] = useState<string[]>([]);
 
   const submit = useCallback((override?: string) => {
-    const text = override ?? input;
-    if (text.trim().length === 0) return;
-    setHistory((h) => [...h, text]);
+    const raw = override ?? input;
+    if (raw.trim().length === 0) return;
+    const expanded = expandPastes(raw, pastesRef.current);
+    const images = imageRefs(raw)
+      .map((n) => imagesRef.current.get(n))
+      .filter((x): x is { path: string; mediaType: string } => Boolean(x));
+    setHistory((h) => [...h, raw]);
     setHistPos(-1);
     setInput('');
     setCursor(0);
     setSlashIdx(0);
     setScrollOffset(0);
-    props.onSubmit(text);
+    setMentionDismissed(null);
+    props.onSubmit(expanded, {
+      display: expanded !== raw || images.length > 0 ? raw : undefined,
+      images: images.length > 0 ? images : undefined,
+    });
   }, [input, props]);
 
   const maxScrollOffset = Math.max(0, state.items.length - 1);
@@ -155,6 +191,43 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
   useEffect(() => {
     if (slashIdx >= slashMatches.length) setSlashIdx(Math.max(0, slashMatches.length - 1));
   }, [slashMatches.length, slashIdx]);
+
+  // `@` picker: opens while the token at the cursor starts with `@` (unless
+  // the user dismissed it for that token with Esc).
+  const mention = state.overlay === null && !slashOpen ? mentionTokenAt(input, cursor) : null;
+  const mentionOpen = mention !== null && mentionDismissed !== mention.start;
+  useEffect(() => {
+    if (!mentionOpen) return;
+    try {
+      setProjectFiles(listProjectFiles(props.projectRoot));
+    } catch {
+      setProjectFiles([]);
+    }
+  }, [mentionOpen, props.projectRoot]);
+  const mentionMatches = mentionOpen ? fuzzyRankPaths(projectFiles, mention!.query, 10) : [];
+  useEffect(() => {
+    if (mentionIdx >= mentionMatches.length) setMentionIdx(Math.max(0, mentionMatches.length - 1));
+  }, [mentionMatches.length, mentionIdx]);
+
+  // Pastes arrive on their own channel (bracketed paste). Short ones drop in
+  // as typed; long ones collapse to a placeholder until submit.
+  usePaste(
+    (pasted) => {
+      const text = pasted.replace(/\r\n?/g, '\n');
+      if (text.length === 0) return;
+      const piece = isShortPaste(text)
+        ? text
+        : (() => {
+            const n = pastesRef.current.size + 1;
+            pastesRef.current.set(n, text);
+            return makePastePlaceholder(n, text);
+          })();
+      const r = insertAt(inputRef.current, cursorRef.current, piece);
+      setInput(r.text);
+      setCursor(r.cursor);
+    },
+    { isActive: state.overlay === null },
+  );
 
   useInput((ch, key) => {
     if (props.uiMode === 'cockpit') {
@@ -260,7 +333,56 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
       // Fall through for character / backspace edits so the user can
       // keep narrowing the filter.
     }
+    // `@` picker intercepts the same keys as the slash menu while it is open.
+    if (mentionOpen && mention) {
+      if (key.upArrow) {
+        setMentionIdx((i) => Math.max(0, i - 1));
+        return;
+      }
+      if (key.downArrow) {
+        setMentionIdx((i) => Math.min(Math.max(0, mentionMatches.length - 1), i + 1));
+        return;
+      }
+      if ((key.tab || key.return) && mentionMatches.length > 0) {
+        const picked = mentionMatches[Math.min(mentionIdx, mentionMatches.length - 1)]!;
+        const r = completeMention(input, cursor, picked);
+        setInput(r.text);
+        setCursor(r.cursor);
+        setMentionIdx(0);
+        return;
+      }
+      if (key.escape) {
+        setMentionDismissed(mention.start);
+        return;
+      }
+    }
+    // Ctrl+V: the terminal pastes text itself; when it reaches us the
+    // clipboard usually holds an image — attach it as "[Image #N]".
+    if (key.ctrl && (ch === 'v' || ch === 'V')) {
+      void readClipboardImage().then((img) => {
+        if (!img) return;
+        const n = imagesRef.current.size + 1;
+        imagesRef.current.set(n, img);
+        const sep = inputRef.current.length > 0 && !inputRef.current.endsWith(' ') ? ' ' : '';
+        const r = insertAt(inputRef.current, cursorRef.current, `${sep}${makeImagePlaceholder(n)} `);
+        setInput(r.text);
+        setCursor(r.cursor);
+      });
+      return;
+    }
+    // Ctrl+J inserts a newline where the terminal lets it through.
+    if (key.ctrl && (ch === 'j' || ch === 'J')) {
+      const r = insertAt(input, cursor, '\n');
+      setInput(r.text);
+      setCursor(r.cursor);
+      return;
+    }
     if (key.return) {
+      // A trailing backslash turns Enter into a newline (Claude Code's binding).
+      if (input.slice(0, cursor).endsWith('\\')) {
+        setInput(input.slice(0, cursor - 1) + '\n' + input.slice(cursor));
+        return;
+      }
       submit();
       return;
     }
@@ -398,6 +520,8 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
     overlay = <CwdPreview currentRoot={liveProjectRoot} rawArg={cwdPreviewArg} />;
   } else if (slashOpen) {
     overlay = <SlashMenu commands={slashMatches} selectedIdx={slashIdx} />;
+  } else if (mentionOpen && mention) {
+    overlay = <MentionMenu query={mention.query} matches={mentionMatches} selectedIdx={mentionIdx} />;
   }
 
   const theme = themeByName(props.theme);

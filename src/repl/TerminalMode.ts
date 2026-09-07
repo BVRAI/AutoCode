@@ -6,7 +6,9 @@ import { nextMode, type SessionContext, type AgentMode } from '../session/Sessio
 import type { CumulativeUsage } from '../session/TranscriptStore.js';
 import type { TrashItem } from '../session/CheckpointStore.js';
 import type { Message, ContentBlock } from '../llm/types.js';
-import { buildAgentInput } from '../util/imageInput.js';
+import type { SubmitExtras } from './ink/composerText.js';
+import { readFileSync } from 'node:fs';
+import { buildAgentInput } from '../util/attachments.js';
 import { estimateCost, formatUsd } from '../util/pricing.js';
 import { ConsoleRenderer } from './ConsoleRenderer.js';
 import { parse, type ParsedInput, type LocalCommandName } from './CommandParser.js';
@@ -27,7 +29,15 @@ import { runHooksForEvent } from '../agent/HookRunner.js';
 import { getPlugins, pluginHooksForEvent } from '../agent/Plugins.js';
 import { type EventEmitter, NullEventEmitter } from './EventEmitter.js';
 import { COMMAND_DEFS } from './commands.js';
-import { getKnownModels, modelCatalogSource } from '../llm/models.js';
+import {
+  EFFORT_SETTINGS,
+  describeThinking,
+  getKnownModels,
+  modelBadges,
+  modelCatalogSource,
+  parseEffortSetting,
+  thinkingFor,
+} from '../llm/models.js';
 import { cwdStatus, resolveCwdTarget } from './cwd.js';
 import { resolveThemeName } from './ink/theme.js';
 
@@ -64,7 +74,7 @@ export interface AgentHandler {
 export class TerminalMode {
   private exiting = false;
   private busy = false;
-  private readonly queue: string[] = [];
+  private readonly queue: Array<{ text: string; extras?: SubmitExtras }> = [];
   private resolveExit: ((code: number) => void) | null = null;
   private inkInstance: { unmount: () => void; waitUntilExit: () => Promise<void> } | null = null;
   // The composer's text and history, owned here so an inline-mode remount
@@ -174,6 +184,7 @@ export class TerminalMode {
       store.setBusy(this.busy);
       store.setMode(this.ctx.mode);
       store.setModel(this.ctx.model.provider, this.ctx.model.model);
+      store.setEffort(describeThinking(thinkingFor(this.ctx.model.provider, this.ctx.model.model, this.ctx.effort)));
       refreshProjectGit();
       store.setPlan(currentTodos(this.ctx.sessionId).map((td) => ({ text: td.text, status: td.status })));
     }, 1500);
@@ -200,7 +211,7 @@ export class TerminalMode {
       version,
       uiMode,
       theme: uiTheme,
-      onSubmit: (text) => this.handleSubmit(text),
+      onSubmit: (text, extras) => this.handleSubmit(text, extras),
       onCycleMode: () => {
         this.handleCycle();
         store.setMode(this.ctx.mode);
@@ -318,24 +329,24 @@ export class TerminalMode {
 
   // ── Input plumbing (shared by Bridge callbacks) ───────────────────────
 
-  private handleSubmit(text: string): void {
+  private handleSubmit(text: string, extras?: SubmitExtras): void {
     if (this.busy) {
-      if (this.queue.length < MAX_QUEUE) this.queue.push(text);
+      if (this.queue.length < MAX_QUEUE) this.queue.push({ text, extras });
       return;
     }
-    void this.runTurn(text);
+    void this.runTurn(text, extras);
   }
 
-  private async runTurn(text: string): Promise<void> {
+  private async runTurn(text: string, extras?: SubmitExtras): Promise<void> {
     this.busy = true;
     try {
-      await this.dispatch(parse(text));
+      await this.dispatch(parse(text), extras);
     } catch (e) {
       this.renderer.error(e instanceof Error ? e.message : String(e));
     }
     this.busy = false;
     const next = this.queue.shift();
-    if (next && !this.exiting) void this.runTurn(next);
+    if (next && !this.exiting) void this.runTurn(next.text, next.extras);
   }
 
   private handleInterrupt(): void {
@@ -389,14 +400,29 @@ export class TerminalMode {
   }
 
   // ── Dispatch ──────────────────────────────────────────────────────────
-  private async dispatch(parsed: ParsedInput): Promise<void> {
+  private async dispatch(parsed: ParsedInput, extras?: SubmitExtras): Promise<void> {
     switch (parsed.kind) {
       case 'empty':
         return;
       case 'agent': {
-        const { input, missing } = buildAgentInput(parsed.text, this.ctx.projectRoot);
-        for (const ref of missing) this.renderer.warn(`(could not read image: ${ref})`);
-        await this.agent.submit(input, this.ctx);
+        const { input, missing, notes } = buildAgentInput(parsed.text, this.ctx.projectRoot, {
+          provider: this.ctx.model.provider,
+        });
+        for (const ref of missing) this.renderer.warn(`(could not read @${ref})`);
+        for (const note of notes) this.renderer.dim(`  ${note}`);
+        // Clipboard images from the composer ride along as image blocks.
+        const clips: ContentBlock[] = [];
+        for (const img of extras?.images ?? []) {
+          try {
+            clips.push({ type: 'image', mediaType: img.mediaType, data: readFileSync(img.path).toString('base64') });
+          } catch {
+            this.renderer.warn(`(could not read clipboard image ${img.path})`);
+          }
+        }
+        const withClips: string | ContentBlock[] =
+          clips.length === 0 ? input : typeof input === 'string' ? [{ type: 'text', text: input }, ...clips] : [...input, ...clips];
+        if (extras?.display) this.bridgeStore?.setUserDisplay(extras.display);
+        await this.agent.submit(withClips, this.ctx);
         return;
       }
       case 'local':
@@ -464,6 +490,9 @@ export class TerminalMode {
         return;
       case 'mode':
         this.handleMode(args);
+        return;
+      case 'effort':
+        this.handleEffort(args);
         return;
       case 'undo':
         this.handleUndo(args);
@@ -815,6 +844,38 @@ export class TerminalMode {
     this.renderer.info(`project root → ${target}`);
   }
 
+  // `/effort` — show or set how hard the model thinks (Claude Code's effort
+  // levels). Remembered per model in config so the choice survives restarts.
+  private handleEffort(args: string[]): void {
+    const { provider, model } = this.ctx.model;
+    if (args.length === 0) {
+      const setting = this.ctx.effort ?? 'auto';
+      const resolved = describeThinking(thinkingFor(provider, model, setting));
+      this.renderer.info(
+        `effort: ${setting} → ${resolved ?? 'thinking off'} for ${provider}/${model}`,
+      );
+      this.renderer.dim(`  /effort ${EFFORT_SETTINGS.join('|')}`);
+      return;
+    }
+    const setting = parseEffortSetting(args[0]);
+    if (setting === null) {
+      this.renderer.error(`usage: /effort ${EFFORT_SETTINGS.join('|')}`);
+      return;
+    }
+    this.ctx.effort = setting;
+    const resolved = describeThinking(thinkingFor(provider, model, setting));
+    this.bridgeStore?.setEffort(resolved);
+    try {
+      const store = new ConfigStore();
+      const cfg = store.load();
+      cfg.effort = { ...(cfg.effort ?? {}), [`${provider}/${model}`]: setting };
+      store.save(cfg);
+    } catch {
+      /* persistence failure is non-fatal — the setting still applies this session */
+    }
+    this.renderer.info(`effort → ${setting} (${resolved ?? 'thinking off'}) for ${provider}/${model}`);
+  }
+
   private handleModel(args: string[]): void {
     // Inside Bridge with no args → open the two-stage picker (provider first,
     // then that provider's models). Esc semantics inside the pickers handle
@@ -889,9 +950,11 @@ export class TerminalMode {
       const marker = isCurrent ? '←' : ' ';
       const label = m.label.length > LABEL_WIDTH ? m.label.slice(0, LABEL_WIDTH - 1) + '…' : m.label.padEnd(LABEL_WIDTH);
       const price = `$${m.inputPerM}/M in · $${m.outputPerM}/M out`;
+      const badges = modelBadges(m);
+      const badgeText = badges.length > 0 ? `· ${badges.join(' · ')} ` : '';
       const notes = m.notes ? `· ${m.notes}` : '';
       const currentTag = isCurrent ? ' ← current' : '';
-      this.renderer.info(`    ${marker} ${label}  ${price}  ${notes}${currentTag}`);
+      this.renderer.info(`    ${marker} ${label}  ${price}  ${badgeText}${notes}${currentTag}`);
     }
     this.renderer.info('');
     this.renderer.dim('Switch with:  /model <provider> <model>');

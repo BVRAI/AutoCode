@@ -68,7 +68,17 @@ const MAX_OUTPUT: Array<{ match: RegExp; tokens: number }> = [
 
 const DEFAULT_MAX_OUTPUT = 16_384;
 
-export function defaultMaxOutputTokens(model: string): number {
+// Above this, a runaway answer costs more than it is worth even when the model
+// allows it; the catalog value is honored up to here.
+const MAX_OUTPUT_CEILING = 64_000;
+
+export function defaultMaxOutputTokens(model: string, provider?: string): number {
+  // The catalog knows the real per-model limit; the family table is the
+  // fallback for bundled BYOK models.
+  if (provider) {
+    const known = findModel(provider, model);
+    if (known?.maxOutputTokens) return Math.min(known.maxOutputTokens, MAX_OUTPUT_CEILING);
+  }
   for (const m of MAX_OUTPUT) {
     if (m.match.test(model)) return m.tokens;
   }

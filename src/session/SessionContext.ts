@@ -1,3 +1,5 @@
+import type { EffortSetting } from '../llm/models.js';
+
 export interface ModelConfig {
   provider: string;
   model: string;
@@ -38,6 +40,10 @@ export interface SessionContext {
   // passes one (Automax: AUTOMAX_LOCALE). The agent replies in that language;
   // the CLI's own chrome stays English. Absent = English, prompt unchanged.
   locale?: string;
+  // How hard the model thinks this session (`/effort`, `--effort`,
+  // AUTOMAX_EFFORT, or the per-model default in config). Absent = 'auto',
+  // the provider's recommended default for the model. See llm/models.ts.
+  effort?: EffortSetting;
 }
 
 // Shift+Tab cycle order: default → autocode → planning → default.

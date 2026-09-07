@@ -10,7 +10,7 @@
 import React, { useState, useMemo } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { BR } from './theme.js';
-import { getKnownModels, modelCatalogSource, type ModelInfo } from '../../llm/models.js';
+import { getKnownModels, modelBadges, modelCatalogSource, type ModelInfo } from '../../llm/models.js';
 
 export interface ModelPickerProps {
   // The provider this picker is scoped to. Picked in stage 1.
@@ -111,6 +111,7 @@ export function ModelPicker({
                 <Text color={BR.inkDim}>
                   ${m.inputPerM}/M in · ${m.outputPerM}/M out
                 </Text>
+                {modelBadges(m).length > 0 && <Text color={BR.inkDim}>  · {modelBadges(m).join(' · ')}</Text>}
                 {m.notes && <Text color={BR.inkFaint}>  · {m.notes}</Text>}
               </Box>
             );

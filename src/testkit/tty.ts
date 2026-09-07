@@ -256,6 +256,12 @@ export class TtySession {
     await sleep(40);
   }
 
+  /** Paste as a terminal would: wrapped in bracketed-paste markers. */
+  async paste(text: string): Promise<void> {
+    this.write(`\x1b[200~${text}\x1b[201~`);
+    await sleep(60);
+  }
+
   async resize(cols: number, rows: number): Promise<void> {
     this.cols = cols;
     this.rows = rows;

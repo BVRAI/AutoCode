@@ -28,6 +28,8 @@ import type {
   ToolSchema,
 } from '../types.js';
 import { isProxyAuth, type AuthMode } from '../../auth/AuthResolver.js';
+import type { EffortLevel } from '../types.js';
+import { parseSseStream } from '../sse.js';
 
 const DEFAULT_BASE = 'https://generativelanguage.googleapis.com';
 const API_VERSION = 'v1beta';
@@ -54,31 +56,21 @@ export class GeminiProvider implements LlmProvider {
   }
 
   async *completeStream(req: CompletionRequest): AsyncIterable<StreamEvent> {
-    // Pragmatic shortcut: Gemini's :streamGenerateContent?alt=sse exists, but
-    // it adds a layer of format risk (proxy passthrough, SSE-vs-JSON-array
-    // negotiation, partial-chunk handling) that's not worth the marginal UX
-    // win of streaming text deltas in the TUI for now. Automax's own Gemini
-    // path uses non-streaming via /v1/google/.../generateContent and works
-    // reliably — so we do the same here: call complete(), then emit synthetic
-    // stream events (text_delta + tool_use_*) followed by message_stop so the
-    // AgentLoop's stream-consumer code works unchanged.
-    //
-    // If true streaming becomes worth chasing, swap this for an SSE-parsing
-    // path against `:streamGenerateContent?alt=sse`. The risk surface is
-    // entirely in the SSE chunk format, not in the request body.
-    const resp = await this.complete(req);
-    for (const block of resp.content) {
-      if (block.type === 'text' && block.text.length > 0) {
-        yield { type: 'text_delta', text: block.text };
-      } else if (block.type === 'thinking' && block.text.length > 0) {
-        yield { type: 'thinking_delta', text: block.text };
-      } else if (block.type === 'tool_use') {
-        yield { type: 'tool_use_start', id: block.id, name: block.name };
-        yield { type: 'tool_use_delta', argsJsonChunk: JSON.stringify(block.input ?? {}) };
-        yield { type: 'tool_use_stop' };
-      }
+    // :streamGenerateContent?alt=sse — each SSE chunk is shaped like the
+    // non-streaming response and carries the parts generated since the last
+    // chunk (thought text, visible text, whole function calls).
+    const { url, headers, body } = this.prepare(req, /*stream=*/ true);
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { ...headers, accept: 'text/event-stream' },
+      body: JSON.stringify(body),
+      signal: req.signal,
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`google ${res.status}: ${text.slice(0, 500)}`);
     }
-    yield { type: 'message_stop', response: resp };
+    yield* streamGemini(res, req.model);
   }
 
   // Shared request prep — encodes auth, builds the URL, and translates the
@@ -119,14 +111,17 @@ export class GeminiProvider implements LlmProvider {
       generationConfig: {
         temperature: req.temperature ?? 1.0,
         maxOutputTokens: req.maxTokens ?? 8192,
-        // Wired but never armed today: thinkingFor() returns undefined for
-        // google until the outbound thoughtSignature re-attach pass exists
-        // (enabling thoughts without echoing signatures breaks tool use).
+        // Gemini 3 takes a level, Gemini 2.5 a budget; thinkingFor() picks the
+        // mode per model (and keeps google disarmed until the outbound
+        // thoughtSignature echo exists — enabling thoughts without it breaks
+        // tool use).
         ...(req.thinking
           ? {
               thinkingConfig: {
                 includeThoughts: true,
-                thinkingBudget: req.thinking.budgetTokens,
+                ...(req.thinking.mode === 'effort'
+                  ? { thinkingLevel: geminiThinkingLevel(req.thinking.effort) }
+                  : { thinkingBudget: req.thinking.budgetTokens ?? 8192 }),
               },
             }
           : {}),
@@ -135,6 +130,13 @@ export class GeminiProvider implements LlmProvider {
 
     return { url, headers, body };
   }
+}
+
+/** Gemini 3 thinking levels; `max` and unset read as HIGH. */
+function geminiThinkingLevel(effort: EffortLevel | undefined): 'LOW' | 'MEDIUM' | 'HIGH' {
+  if (effort === 'low') return 'LOW';
+  if (effort === 'medium') return 'MEDIUM';
+  return 'HIGH';
 }
 
 // ── Translation helpers ────────────────────────────────────────────────────
@@ -164,14 +166,33 @@ function messagesToGeminiContents(messages: Message[]): GeminiContent[] {
     }
 
     const parts: GeminiPart[] = [];
+    // thoughtSignatures ride on the function-call or text part they arrived
+    // with; a signature captured on a thought block attaches to the next part.
+    let pendingSignature: string | undefined;
+    const takeSignature = (b: { opaque?: unknown }): string | undefined => {
+      const own = signatureOf(b.opaque);
+      if (own) return own;
+      const carried = pendingSignature;
+      pendingSignature = undefined;
+      return carried;
+    };
     for (const b of m.content) {
       switch (b.type) {
-        case 'text':
-          if (b.text.length > 0) parts.push({ text: b.text });
+        case 'text': {
+          if (b.text.length === 0) break;
+          const sig = takeSignature(b);
+          parts.push(sig ? { text: b.text, thoughtSignature: sig } : { text: b.text });
           break;
-        case 'tool_use':
-          parts.push({ functionCall: { name: b.name, args: b.input } });
+        }
+        case 'tool_use': {
+          const sig = takeSignature(b);
+          parts.push(
+            sig
+              ? { functionCall: { name: b.name, args: b.input }, thoughtSignature: sig }
+              : { functionCall: { name: b.name, args: b.input } },
+          );
           break;
+        }
         case 'tool_result': {
           const name = toolNameById.get(b.toolUseId) ?? b.toolUseId;
           // Gemini wants a structured `response` object. If the agent passed
@@ -183,15 +204,16 @@ function messagesToGeminiContents(messages: Message[]): GeminiContent[] {
           break;
         }
         case 'image':
+        case 'document':
           parts.push({ inlineData: { mimeType: b.mediaType, data: b.data } });
           break;
-        case 'thinking':
-          // Deferred: Gemini reasoning continuity requires re-attaching
-          // thoughtSignature onto the matching functionCall parts (not a
-          // standalone part), which needs a structural pairing pass. The
-          // provider never enables thinkingConfig today, so nothing arrives
-          // to echo — drop on outbound until thinking is actually enabled.
+        case 'thinking': {
+          // Thought text is never replayed; only its signature is, on the
+          // next function-call or text part (Gemini 2.5 puts it there).
+          const sig = signatureOf(b.opaque);
+          if (sig) pendingSignature = sig;
           break;
+        }
       }
     }
     if (parts.length > 0) out.push({ role, parts });
@@ -214,38 +236,118 @@ function toolsToGeminiTools(tools: ToolSchema[]): GeminiToolBlock[] {
   ];
 }
 
+function signatureOf(opaque: unknown): string | undefined {
+  if (!opaque || typeof opaque !== 'object') return undefined;
+  const s = (opaque as { thoughtSignature?: unknown }).thoughtSignature;
+  return typeof s === 'string' && s.length > 0 ? s : undefined;
+}
+
+type GeminiResponsePart = NonNullable<NonNullable<NonNullable<GeminiResponse['candidates']>[number]['content']>['parts']>[number];
+
+/**
+ * Folds response parts (whole or streamed) into content blocks. Consecutive
+ * thought text and consecutive visible text each merge into one block;
+ * every function call is its own block; a thoughtSignature stays on the block
+ * that carried it, so the outbound pass can put it back on the same part.
+ */
+class GeminiAccumulator {
+  private readonly out: ContentBlock[] = [];
+  private toolCallSeq = 0;
+
+  *push(part: GeminiResponsePart): Iterable<StreamEvent> {
+    // Check `thought` BEFORE text — thought parts also carry `text`, and
+    // reasoning must not leak into the visible reply.
+    if (part.thought === true) {
+      const text = typeof part.text === 'string' ? part.text : '';
+      const last = this.out[this.out.length - 1];
+      if (last && last.type === 'thinking') last.text += text;
+      else this.out.push({ type: 'thinking', text });
+      if (part.thoughtSignature) this.attachSignature(part.thoughtSignature);
+      if (text.length > 0) yield { type: 'thinking_delta', text };
+      return;
+    }
+    if (part.functionCall) {
+      const id = `gem-${++this.toolCallSeq}`;
+      const block: ContentBlock = {
+        type: 'tool_use',
+        id,
+        name: part.functionCall.name,
+        input: part.functionCall.args ?? {},
+        ...(part.thoughtSignature ? { opaque: { thoughtSignature: part.thoughtSignature } } : {}),
+      };
+      this.out.push(block);
+      yield { type: 'tool_use_start', id, name: part.functionCall.name };
+      yield { type: 'tool_use_delta', argsJsonChunk: JSON.stringify(part.functionCall.args ?? {}) };
+      yield { type: 'tool_use_stop' };
+      return;
+    }
+    if (typeof part.text === 'string' && part.text.length > 0) {
+      const last = this.out[this.out.length - 1];
+      if (last && last.type === 'text') last.text += part.text;
+      else this.out.push({ type: 'text', text: part.text });
+      if (part.thoughtSignature) this.attachSignature(part.thoughtSignature);
+      yield { type: 'text_delta', text: part.text };
+      return;
+    }
+    // A part carrying only a signature (end of a streamed answer).
+    if (part.thoughtSignature) this.attachSignature(part.thoughtSignature);
+  }
+
+  private attachSignature(sig: string): void {
+    const last = this.out[this.out.length - 1];
+    if (!last || last.type === 'tool_result' || last.type === 'image') return;
+    (last as { opaque?: unknown }).opaque = { thoughtSignature: sig };
+  }
+
+  blocks(): ContentBlock[] {
+    return this.out;
+  }
+}
+
 function fromGeminiResponse(r: GeminiResponse, requestedModel: string): CompletionResponse {
   const cand = r.candidates?.[0];
-  const content: ContentBlock[] = [];
-  let toolCallSeq = 0;
-  if (cand?.content?.parts) {
-    for (const part of cand.content.parts) {
-      // Check `thought` BEFORE text — thought parts also carry `text`, and
-      // reasoning must not leak into the visible reply.
-      if (part.thought === true) {
-        content.push({
-          type: 'thinking',
-          text: typeof part.text === 'string' ? part.text : '',
-          ...(part.thoughtSignature ? { opaque: { thoughtSignature: part.thoughtSignature } } : {}),
-        });
-      } else if (typeof part.text === 'string' && part.text.length > 0) {
-        content.push({ type: 'text', text: part.text });
-      } else if (part.functionCall) {
-        const id = `gem-${++toolCallSeq}`;
-        content.push({
-          type: 'tool_use',
-          id,
-          name: part.functionCall.name,
-          input: part.functionCall.args ?? {},
-        });
-      }
+  const acc = new GeminiAccumulator();
+  for (const part of cand?.content?.parts ?? []) {
+    for (const _ of acc.push(part)) {
+      /* events are not needed for the non-streaming path */
     }
   }
   return {
     model: r.modelVersion ?? requestedModel,
     stopReason: cand?.finishReason ? mapFinishReason(cand.finishReason) : 'end_turn',
-    content,
+    content: acc.blocks(),
     usage: mapUsage(r.usageMetadata),
+  };
+}
+
+export async function* streamGemini(res: Response, requestedModel: string): AsyncIterable<StreamEvent> {
+  const acc = new GeminiAccumulator();
+  let modelVersion: string | undefined;
+  let finish: string | undefined;
+  let usage: GeminiUsage | undefined;
+  for await (const evt of parseSseStream(res.body)) {
+    let chunk: GeminiResponse;
+    try {
+      chunk = JSON.parse(evt.data) as GeminiResponse;
+    } catch {
+      continue;
+    }
+    modelVersion = chunk.modelVersion ?? modelVersion;
+    if (chunk.usageMetadata) usage = chunk.usageMetadata;
+    const cand = chunk.candidates?.[0];
+    if (cand?.finishReason) finish = cand.finishReason;
+    for (const part of cand?.content?.parts ?? []) {
+      for (const ev of acc.push(part)) yield ev;
+    }
+  }
+  yield {
+    type: 'message_stop',
+    response: {
+      model: modelVersion ?? requestedModel,
+      stopReason: finish ? mapFinishReason(finish) : 'end_turn',
+      content: acc.blocks(),
+      usage: mapUsage(usage),
+    },
   };
 }
 
@@ -292,7 +394,7 @@ interface GeminiRequestBody {
   generationConfig?: {
     temperature?: number;
     maxOutputTokens?: number;
-    thinkingConfig?: { includeThoughts?: boolean; thinkingBudget?: number };
+    thinkingConfig?: { includeThoughts?: boolean; thinkingBudget?: number; thinkingLevel?: 'LOW' | 'MEDIUM' | 'HIGH' };
   };
 }
 
@@ -302,9 +404,9 @@ interface GeminiContent {
 }
 
 type GeminiPart =
-  | { text: string }
+  | { text: string; thoughtSignature?: string }
   | { inlineData: { mimeType: string; data: string } }
-  | { functionCall: { name: string; args?: Record<string, unknown> } }
+  | { functionCall: { name: string; args?: Record<string, unknown> }; thoughtSignature?: string }
   | { functionResponse: { name: string; response: Record<string, unknown> } };
 
 interface GeminiToolBlock {

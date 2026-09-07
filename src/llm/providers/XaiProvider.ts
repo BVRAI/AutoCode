@@ -28,7 +28,7 @@ export class XaiProvider implements LlmProvider {
       headers,
       // grok models return reasoning_content; echo it back so multi-step tool
       // chains keep the model's train of thought (xAI accepts the echo).
-      body: JSON.stringify(buildBody(req, { reasoningEcho: 'reasoning_content' })),
+      body: JSON.stringify(buildBody(req, { reasoningEcho: 'reasoning_content', effortStyle: 'xai' })),
       signal: req.signal,
     });
     if (!res.ok) {
@@ -55,7 +55,7 @@ export class XaiProvider implements LlmProvider {
       method: 'POST',
       headers,
       body: JSON.stringify({
-        ...buildBody(req, { reasoningEcho: 'reasoning_content' }),
+        ...buildBody(req, { reasoningEcho: 'reasoning_content', effortStyle: 'xai' }),
         stream: true,
         stream_options: { include_usage: true },
       }),

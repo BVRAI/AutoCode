@@ -20,6 +20,8 @@ import { parseSseStream } from '../sse.js';
 //                           across tool calls (plain `reasoning` string fallback).
 //  - 'none'               — omit entirely. The safe default: DeepSeek-style APIs
 //                           return 400 if reasoning_content appears in the input.
+import type { EffortLevel } from '../types.js';
+
 export type ReasoningEcho = 'none' | 'reasoning_content' | 'reasoning_details';
 
 export interface OpenAiToolCall {
@@ -59,9 +61,15 @@ export interface OpenAiChatBody {
   max_tokens?: number;
   max_completion_tokens?: number;
   temperature?: number;
-  // Reasoning depth for models that accept it (o-series, gpt-5 family).
+  // Reasoning depth for models that accept it (OpenAI o-series and gpt-5
+  // family; xAI accepts low|high).
   reasoning_effort?: 'low' | 'medium' | 'high';
+  // OpenRouter's unified reasoning param, normalized per upstream.
+  reasoning?: { effort: 'low' | 'medium' | 'high' };
 }
+
+/** Which dialect of the reasoning knob a provider speaks. */
+export type EffortStyle = 'openai' | 'xai' | 'openrouter';
 
 export interface OpenAiChatResponse {
   id: string;
@@ -90,9 +98,10 @@ export interface OpenAiChatResponse {
 
 export function buildBody(
   req: CompletionRequest,
-  opts?: { reasoningEcho?: ReasoningEcho },
+  opts?: { reasoningEcho?: ReasoningEcho; effortStyle?: EffortStyle },
 ): OpenAiChatBody {
   const reasoningEcho = opts?.reasoningEcho ?? 'none';
+  const effortStyle = opts?.effortStyle ?? 'openai';
   // No cache-breakpoint support here — fold any volatile suffix onto the end
   // of the system message. OpenAI's automatic prefix caching still benefits
   // from the stable content coming first.
@@ -118,11 +127,18 @@ export function buildBody(
     body.max_tokens = req.maxTokens ?? 8192;
     body.temperature = req.temperature ?? 1.0;
   }
-  // Arm reasoning when requested, for the model families that accept the
-  // param (o-series, gpt-5). Others (grok, llama routes) never see it —
-  // the catalog doesn't mark them supportsThinking, so req.thinking is unset.
-  if (req.thinking && (isOpenAiReasoningModel(req.model) || /^(openai\/)?gpt-5/.test(req.model))) {
-    body.reasoning_effort = 'medium';
+  // Arm reasoning when requested. thinkingFor() only sets req.thinking for
+  // models the catalog marks supportsThinking; the OpenAI dialect keeps a
+  // name check too, because a BYOK list can flag models loosely.
+  const level = effortLevelOf(req.thinking);
+  if (level) {
+    if (effortStyle === 'openrouter') {
+      body.reasoning = { effort: clampEffort(level) };
+    } else if (effortStyle === 'xai') {
+      body.reasoning_effort = level === 'low' ? 'low' : 'high';
+    } else if (isOpenAiReasoningModel(req.model) || /^(openai\/)?gpt-5/.test(req.model)) {
+      body.reasoning_effort = clampEffort(level);
+    }
   }
   if (req.tools.length > 0) {
     body.tools = req.tools.map((t) => ({
@@ -136,6 +152,18 @@ export function buildBody(
     body.tool_choice = 'auto';
   }
   return body;
+}
+
+/** The requested level, or null when thinking is off. A legacy budget request reads as medium. */
+export function effortLevelOf(t: CompletionRequest['thinking']): EffortLevel | null {
+  if (!t) return null;
+  if (t.mode === 'effort') return t.effort ?? 'medium';
+  return 'medium';
+}
+
+/** OpenAI-style APIs know low|medium|high; `max` is clamped to high. */
+export function clampEffort(level: EffortLevel): 'low' | 'medium' | 'high' {
+  return level === 'max' ? 'high' : level;
 }
 
 // True for OpenAI's reasoning-family models (o1, o1-mini, o1-preview, o3,

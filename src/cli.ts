@@ -21,7 +21,8 @@ import { ConfigStore } from './auth/ConfigStore.js';
 import { dataDir, projectRootDefault, sessionsDir } from './util/paths.js';
 import { loadDotEnv } from './util/dotenv.js';
 import { loadCatalogForStartup, refreshCatalogInBackground } from './llm/CatalogClient.js';
-import { setProxyCatalog, findModel, getKnownModels } from './llm/models.js';
+import { setProxyCatalog, findModel, getKnownModels, parseEffortSetting, type EffortSetting } from './llm/models.js';
+import type { AutocodeConfig } from './auth/ConfigStore.js';
 import { setProxyRates } from './util/pricing.js';
 import { shouldRunFirstRunWizard, BYOK_PROVIDERS, BVRAI_SIGNUP_URL } from './auth/firstRun.js';
 import { initialize as initSecretStore } from './auth/SecretStore.js';
@@ -46,6 +47,7 @@ program
   .option('--model <name>', 'model id; default: last used or per-provider default')
   .option('--plan-mode', 'start in planning mode (read-only — agent plans, makes no changes)', false)
   .option('--mode <name>', 'start in a specific workflow mode: planning | default | autocode | admin (overrides --plan-mode)')
+  .option('--effort <level>', 'how hard the model thinks: low | medium | high | max | off | auto (default: remembered per model, else auto)')
   .option('-p, --print <prompt>', 'run a single task non-interactively and exit')
   .option('--resume <sessionId>', 'resume a specific prior session')
   .option('-c, --continue', 'resume the most recent prior session', false)
@@ -61,6 +63,7 @@ program
       model?: string;
       planMode?: boolean;
       mode?: string;
+      effort?: string;
       print?: string;
       resume?: string;
       continue?: boolean;
@@ -233,6 +236,7 @@ program
       // Automax passes its UI language so the agent answers in it (see
       // PromptBuilder.userLanguageLine). Standalone runs leave it unset.
       locale: process.env.AUTOMAX_LOCALE?.trim() || undefined,
+      effort: resolveEffortSetting(opts.effort, startupCfg, provider, model),
     };
 
     const renderer = new ConsoleRenderer();
@@ -433,6 +437,28 @@ program.parseAsync(process.argv).catch((err) => {
   process.stderr.write(`fatal: ${err instanceof Error ? err.message : String(err)}\n`);
   process.exit(1);
 });
+
+// Thinking effort precedence: --effort > AUTOMAX_EFFORT (a host's default) >
+// the setting `/effort` remembered for this model > the config default >
+// unset ('auto' — the provider's recommendation for the model).
+function resolveEffortSetting(
+  flag: string | undefined,
+  cfg: AutocodeConfig,
+  provider: string,
+  model: string,
+): EffortSetting | undefined {
+  if (typeof flag === 'string' && parseEffortSetting(flag) === null) {
+    process.stderr.write(`unknown --effort value: ${flag} (expected low | medium | high | max | off | auto)\n`);
+    process.exit(2);
+  }
+  return (
+    parseEffortSetting(flag) ??
+    parseEffortSetting(process.env.AUTOMAX_EFFORT) ??
+    parseEffortSetting(cfg.effort?.[`${provider}/${model}`]) ??
+    parseEffortSetting(cfg.defaultEffort) ??
+    undefined
+  );
+}
 
 function defaultModelFor(provider: string): string {
   // Prefer the catalog when available so V6 users get a default that

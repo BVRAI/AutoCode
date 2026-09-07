@@ -21,6 +21,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   composer draft survives), instead of leaving stale rows behind.
 
 ### Added
+- Thinking effort: `/effort low|medium|high|max|off|auto` (also `--effort`,
+  `AUTOMAX_EFFORT`, remembered per model in config). Resolved per provider:
+  Anthropic adaptive thinking + `output_config.effort` on Opus 4.7+/Sonnet 5/Opus 5
+  (budgets on older models), OpenAI `reasoning.effort` with summaries, Gemini 3
+  `thinkingLevel` / Gemini 2.5 `thinkingBudget`, xAI and OpenRouter effort. The
+  status line shows the level while the model thinks.
+- OpenAI now uses the Responses API (stateless, encrypted reasoning items
+  replayed across tool calls, reasoning summaries streamed). Set
+  `AUTOCODE_OPENAI_CHAT_COMPLETIONS=1` to fall back to Chat Completions.
+- Gemini streams for real (`streamGenerateContent`) and replays thought
+  signatures on the parts they arrived with, so thinking is on for Gemini too.
+- Attachments: `@path` now inlines text files, lists directories, attaches PDFs
+  as documents (Anthropic, OpenAI, Gemini) and images as before, with size caps.
+- Composer: `@` opens a fuzzy file picker (Tab/Enter completes); long pastes
+  collapse to `[Pasted text #1 +N lines]` and expand on submit; `\` + Enter adds
+  a line; Ctrl+V attaches a clipboard image as `[Image #1]`.
+- `/model` shows context size, thinking and vision badges from the catalog, and
+  the catalog's `max_output_tokens` sets the output cap.
 - `AUTOMAX_EVENT_FILE=<path>`: with `--automax`, the `<<AMX>>` events go to that
   file instead of stdout, so a host's terminal never shares the screen stream with
   machine events.

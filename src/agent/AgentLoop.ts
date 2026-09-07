@@ -615,11 +615,11 @@ export class AgentLoop {
             tools: this.deps.registry.schemas(),
             // Providers default to 8192 output tokens — too small for large
             // single-file writes. Deterministic sampling unless configured.
-            maxTokens: defaultMaxOutputTokens(ctx.model.model),
+            maxTokens: defaultMaxOutputTokens(ctx.model.model, ctx.model.provider),
             temperature: ctx.sampling?.temperature ?? 0,
             // Extended thinking, when the model supports the request param
-            // (kill switch: AUTOCODE_NO_THINKING=1).
-            thinking: thinkingFor(ctx.model.provider, ctx.model.model),
+            // (`/effort`; kill switch: AUTOCODE_NO_THINKING=1).
+            thinking: thinkingFor(ctx.model.provider, ctx.model.model, ctx.effort),
             // Server-side context editing (Anthropic beta): trigger at 50%
             // of the window — BELOW the client-side mask tier (60%) — so the
             // cache-preserving server path does the clearing and the
