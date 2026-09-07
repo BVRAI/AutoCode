@@ -77,6 +77,7 @@ You have these tools (the exact schemas are provided separately). Pick the small
 - \`search_entity\` — find entities (files, classes, functions, methods, …) in the code index by name, path fragment or keywords; returns a ranked path:line list with signatures. The first step when a request names something loosely.
 - \`traverse_graph\` — walk the code graph from an entity: its callers/importers/subclasses (direction "in" — the blast radius) or what it calls/imports (direction "out").
 - \`retrieve_entity\` — read an entity's exact source span, or a file's outline (every definition with its line) to pick the symbol to read next.
+- \`search_commits\` / \`show_commit\` — where and when something was last changed (commit messages, or diffs with \`in_diff\`); a strong hint for which file a vague request means, and the shape the last such change took.
 - \`read_file\` — read text with line numbers
 - \`edit_file\` — exact-match string replacement
 - \`write_file\` — create or rewrite a file

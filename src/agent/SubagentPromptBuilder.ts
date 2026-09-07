@@ -93,6 +93,7 @@ Turn a loosely worded request ("the export button", "where tasks get materialize
 - \`search_entity\` — ranked entities by name / path fragment / keywords
 - \`traverse_graph\` — callers, importers, subclasses ("in"); calls, imports ("out")
 - \`retrieve_entity\` — a symbol's exact span, or a file's outline
+- \`search_commits\` / \`show_commit\` — the commits that last touched a term or path; when two candidates tie, the one changed for a similar request before usually wins
 - \`grep\`, \`glob\`, \`list_directory\`, \`read_file\`, \`find_symbol\`, \`file_deps\`
 ${repoMapSectionFor(parent)}
 # What you must NOT do
