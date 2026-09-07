@@ -55,6 +55,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transcript and tool log on disk, in the `<<AMX>>` event stream and in
   app-server notifications; the conversation the model sees is untouched
   (`AUTOCODE_NO_REDACT=1` disables).
+- Symbol `@`-mentions: `@renderDiff` (or `@src/app.ts#App`, `@App.render`)
+  inlines that definition's source from the code index as a `<symbol>` block,
+  the way `@path` inlines a file; an ambiguous bare name inlines the candidate
+  list instead. The `@` picker under the composer offers symbols next to
+  files once the index is built.
 - Request watchdog in the LLM router: a provider that sends nothing for 2
   minutes (first event) or 3 minutes (between stream events) fails the
   request — retryable before the first event — instead of hanging the turn;

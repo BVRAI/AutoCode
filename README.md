@@ -102,8 +102,9 @@ live in `src/server/protocol.ts`; Automax's C# client is `AutoCode.Engine/Backen
 `/help` `/status` `/cost` `/diff` `/model` `/effort` `/mode` `/undo` `/trash` `/restore` `/clear`
 `/compact` `/commit [hint]` `/init` `/hooks` `/memory` `/mcp` `/plugins` `/keys` `/auth` `/login`
 `/proxy` `/cwd` `/ui` `/spinner` `/computer-use` `/refresh` `/update` `/reflect` `/stop` `/exit`,
-plus `/<skill-name> …` for any installed skill. `@path` attaches a file, folder, image or PDF;
-`!` runs a shell command; `Ctrl+O` expands the transcript, `Ctrl+T` shows the todo tray.
+plus `/<skill-name> …` for any installed skill. `@path` attaches a file, folder, image or PDF and
+`@Symbol` (or `@path#name`) inlines a definition from the code index; `!` runs a shell command;
+`Ctrl+O` expands the transcript, `Ctrl+T` shows the todo tray.
 
 ## Tools
 
@@ -172,7 +173,9 @@ node scripts/bundle.mjs --out ../bundle                # self-contained harness 
 runs without an API call; the e2e scenarios in `test/e2e/scenarios/` use it. Useful switches:
 `AUTOCODE_TRACE_LOG=<file>` (timing trace), `AUTOCODE_NO_INDEX=1`, `AUTOCODE_NO_REVIEW=1`,
 `AUTOCODE_NO_CHECK_STAGES=1`, `AUTOCODE_REVIEW=auto|off`, `AUTOCODE_AUTO_JUDGE=on|off`,
-`AUTOCODE_NO_SANDBOX=1`, `AUTOCODE_TTY_EMULATE=100x30`.
+`AUTOCODE_NO_SANDBOX=1`, `AUTOCODE_NO_REDACT=1`, `AUTOCODE_TTY_EMULATE=100x30`, and the request
+watchdog ceilings `AUTOCODE_LLM_FIRST_EVENT_MS` (120000), `AUTOCODE_LLM_IDLE_MS` (180000),
+`AUTOCODE_LLM_COMPLETE_MS` (600000).
 
 Automax passes `AUTOMAX_THEME`, `AUTOMAX_LOCALE`, `AUTOMAX_EFFORT`, `AUTOMAX_PROVIDER`,
 `AUTOMAX_MODEL`, `AUTOMAX_EVENT_FILE` and the proxy token when it launches the engine.

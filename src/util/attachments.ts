@@ -4,6 +4,8 @@
 //   @src/              directory → a one-level listing
 //   @shot.png          image → an image block (png/jpg/gif/webp)
 //   @spec.pdf          PDF → a document block on providers that take one
+//   @renderDiff        a definition the code index knows → its source in a
+//                      <symbol> block (`@path#name` pins one of several)
 //
 // The mention itself stays in the prompt text (it is useful context: the
 // model sees which file the user pointed at). Caps keep a stray mention of a
@@ -13,6 +15,9 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, relative, resolve } from 'node:path';
 import type { ContentBlock, DocumentBlock, ImageBlock } from '../llm/types.js';
+import type { CodeIndex } from '../index/CodeIndex.js';
+import { peekIndex } from '../index/IndexManager.js';
+import { resolveSymbolMention } from './symbolMentions.js';
 
 const IMAGE_MEDIA: Record<string, string> = {
   '.png': 'image/png',
@@ -55,7 +60,7 @@ export function findMentions(text: string): string[] {
   return out;
 }
 
-export function buildAgentInput(text: string, projectRoot: string, opts: { provider?: string } = {}): AttachmentResult {
+export function buildAgentInput(text: string, projectRoot: string, opts: { provider?: string; index?: CodeIndex } = {}): AttachmentResult {
   const missing: string[] = [];
   const notes: string[] = [];
   const inlined: string[] = [];
@@ -69,7 +74,15 @@ export function buildAgentInput(text: string, projectRoot: string, opts: { provi
     try {
       st = statSync(abs);
     } catch {
-      missing.push(ref);
+      // Not a path: a symbol the code index knows ("@render", "@src/app.ts#App")?
+      const index = opts.index ?? peekIndex(projectRoot);
+      const sym = index ? resolveSymbolMention(index, ref) : null;
+      if (sym) {
+        inlined.push(sym.block);
+        notes.push(sym.note);
+      } else {
+        missing.push(ref);
+      }
       continue;
     }
     if (st.isDirectory()) {

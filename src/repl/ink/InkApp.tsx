@@ -17,6 +17,8 @@ import {
   type SubmitExtras,
 } from './composerText.js';
 import { fuzzyRankPaths, listProjectFiles } from '../../util/projectFiles.js';
+import { mentionEntries, rankSymbols, type MentionEntry } from '../../util/symbolMentions.js';
+import { peekIndex } from '../../index/IndexManager.js';
 import { readClipboardImage } from '../../util/clipboard.js';
 import { Rail, RAIL_COMPACT_WIDTH, RAIL_WIDTH } from './Rail.js';
 import { Main } from './Main.js';
@@ -204,7 +206,22 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
       setProjectFiles([]);
     }
   }, [mentionOpen, props.projectRoot]);
-  const mentionMatches = mentionOpen ? fuzzyRankPaths(projectFiles, mention!.query, 10) : [];
+  // Files from the project walk plus symbols from the code index (when it
+  // has been built — the picker never waits for it).
+  const mentionMatches: MentionEntry[] = mentionOpen
+    ? mentionEntries(
+        fuzzyRankPaths(projectFiles, mention!.query, 8),
+        (() => {
+          const index = peekIndex(props.projectRoot);
+          if (!index) return [];
+          try {
+            return rankSymbols(index, mention!.query, 5);
+          } catch {
+            return [];
+          }
+        })(),
+      )
+    : [];
   useEffect(() => {
     if (mentionIdx >= mentionMatches.length) setMentionIdx(Math.max(0, mentionMatches.length - 1));
   }, [mentionMatches.length, mentionIdx]);
@@ -345,7 +362,7 @@ export function InkApp(props: InkAppProps): React.JSX.Element {
       }
       if ((key.tab || key.return) && mentionMatches.length > 0) {
         const picked = mentionMatches[Math.min(mentionIdx, mentionMatches.length - 1)]!;
-        const r = completeMention(input, cursor, picked);
+        const r = completeMention(input, cursor, picked.insert);
         setInput(r.text);
         setCursor(r.cursor);
         setMentionIdx(0);
