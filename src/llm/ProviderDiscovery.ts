@@ -355,7 +355,7 @@ export function toModelInfos(
     const notes = [
       exact ? meta.notes : undefined,
       m.aliasOf && !(exact && meta.notes?.includes('alias of')) ? `alias of ${m.aliasOf}` : undefined,
-      priceUnknown ? `price unknown · capped at $${rate.inputPerM}/$${rate.outputPerM}` : undefined,
+      priceUnknown ? `billed as $${rate.inputPerM}/$${rate.outputPerM} for the cost cap` : undefined,
     ]
       .filter((x): x is string => Boolean(x))
       .join(' · ');

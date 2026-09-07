@@ -77,11 +77,14 @@ export function ProviderPicker({ currentProvider, onPick, onCancel }: ProviderPi
       marginX={2}
     >
       <Box>
-        <Text color={BR.teal} bold>Select a provider</Text>
-        <Text color={BR.inkFaint}>
-          {`  ${detail} · ${rows.length} providers · ↑↓ pick · enter confirm · esc cancel`}
+        <Box flexShrink={0}>
+          <Text color={BR.teal} bold>Select a provider</Text>
+        </Box>
+        <Text color={BR.inkFaint} wrap="truncate-end">
+          {`  ${rows.length} providers · ↑↓ pick · enter confirm · esc cancel`}
         </Text>
       </Box>
+      <Text color={BR.inkFaint} wrap="truncate-end">{detail}</Text>
       <Box flexDirection="column" marginTop={1}>
         {rows.map((r, i) => {
           const selected = i === selectedIdx;

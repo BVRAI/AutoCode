@@ -154,7 +154,7 @@ describe('toModelInfos', () => {
     const noOracle = toModelInfos('openai', [{ id: 'gpt-9-nova' }]);
     const cap = capRate('openai');
     expect(noOracle.infos[0]).toMatchObject({ priceUnknown: true, inputPerM: cap.inputPerM, outputPerM: cap.outputPerM });
-    expect(noOracle.infos[0]!.notes).toContain('price unknown');
+    expect(noOracle.infos[0]!.notes).toBe(`billed as $${cap.inputPerM}/$${cap.outputPerM} for the cost cap`);
     expect(noOracle.unpriced).toEqual(['gpt-9-nova']);
   });
 

@@ -101,11 +101,14 @@ export function ModelPicker({
       marginX={2}
     >
       <Box>
-        <Text color={BR.teal} bold>{provider.toUpperCase()} models</Text>
-        <Text color={BR.inkFaint}>
-          {`  ${detail} · ${models.length} · ↑↓ pick · enter confirm · esc back`}
+        <Box flexShrink={0}>
+          <Text color={BR.teal} bold>{provider.toUpperCase()} models</Text>
+        </Box>
+        <Text color={BR.inkFaint} wrap="truncate-end">
+          {`  ${models.length} · ↑↓ pick · pgup/pgdn page · enter confirm · esc back`}
         </Text>
       </Box>
+      <Text color={BR.inkFaint} wrap="truncate-end">{detail}</Text>
       {models.length === 0 ? (
         <Box marginTop={1}>
           <Text color={BR.inkFaint}>(no models available for {provider})</Text>
@@ -130,9 +133,11 @@ export function ModelPicker({
                   </Text>
                   {isCurrent && <Text color={BR.add}>  ← current</Text>}
                 </Box>
-                <Text color={BR.inkDim}>{price}</Text>
-                {modelBadges(m).length > 0 && <Text color={BR.inkDim}>  · {modelBadges(m).join(' · ')}</Text>}
-                {m.notes && <Text color={BR.inkFaint}>  · {m.notes}</Text>}
+                <Box flexShrink={0}>
+                  <Text color={BR.inkDim}>{price}</Text>
+                  {modelBadges(m).length > 0 && <Text color={BR.inkDim}>  · {modelBadges(m).join(' · ')}</Text>}
+                </Box>
+                {m.notes && <Text color={BR.inkFaint} wrap="truncate-end">  · {m.notes}</Text>}
               </Box>
             );
           })}
