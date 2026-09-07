@@ -20,6 +20,20 @@ import { getKnownModels, modelBadges, modelCatalogDetail, type ModelInfo } from 
 
 const WINDOW = 14;
 
+/** Printable characters of an input chunk (Ink hands over whatever arrived in one read). */
+function printablePart(chunk: string): string {
+  let out = '';
+  for (const ch of chunk) {
+    const code = ch.charCodeAt(0);
+    if (code >= 32 && code !== 127) out += ch;
+  }
+  return out;
+}
+
+function fmt(n: number): string {
+  return String(Number(n.toFixed(4)));
+}
+
 export interface ModelPickerProps {
   // The provider this picker is scoped to. Picked in stage 1.
   provider: string;
@@ -102,8 +116,10 @@ export function ModelPicker({
       setSelectedIdx(0);
       return;
     }
-    if (input.length === 1 && input >= ' ' && !key.ctrl && !key.meta && !key.tab) {
-      setQuery((q) => q + input);
+    if (key.ctrl || key.meta || key.tab) return;
+    const printable = printablePart(input);
+    if (printable.length > 0) {
+      setQuery((q) => q + printable);
       setSelectedIdx(0);
     }
   });
@@ -151,11 +167,12 @@ export function ModelPicker({
               m.provider === currentProvider && currentModel.startsWith(m.model);
             const marker = selected ? '▸' : ' ';
             const labelColor = selected ? BR.teal : isCurrent ? BR.add : BR.ink;
-            const price = m.priceUnknown ? 'price unknown' : `$${m.inputPerM}/M in · $${m.outputPerM}/M out`;
+            const price = m.priceUnknown ? 'price unknown' : `$${fmt(m.inputPerM)}/M in · $${fmt(m.outputPerM)}/M out`;
+            const badges = modelBadges(m);
             return (
               <Box key={`m-${m.provider}-${m.model}`}>
                 <Text color={selected ? BR.teal : BR.inkFaint}>{marker} </Text>
-                <Box width={32} flexShrink={0}>
+                <Box width={32} flexShrink={0} marginRight={1}>
                   <Text color={labelColor} bold={selected} wrap="truncate-end">
                     {m.label}
                   </Text>
@@ -163,8 +180,8 @@ export function ModelPicker({
                 </Box>
                 <Box flexShrink={0}>
                   <Text color={BR.inkDim}>{price}</Text>
-                  {modelBadges(m).length > 0 && <Text color={BR.inkDim}>  · {modelBadges(m).join(' · ')}</Text>}
                 </Box>
+                {badges.length > 0 && <Text color={BR.inkDim} wrap="truncate-end">  · {badges.join(' · ')}</Text>}
                 {m.notes && <Text color={BR.inkFaint} wrap="truncate-end">  · {m.notes}</Text>}
               </Box>
             );

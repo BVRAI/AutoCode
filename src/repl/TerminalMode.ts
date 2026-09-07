@@ -1152,7 +1152,8 @@ export class TerminalMode {
       const isCurrent = `${m.provider}/${m.model}` === currentKey;
       const marker = isCurrent ? '←' : ' ';
       const label = m.label.length > LABEL_WIDTH ? m.label.slice(0, LABEL_WIDTH - 1) + '…' : m.label.padEnd(LABEL_WIDTH);
-      const price = m.priceUnknown ? 'price unknown' : `$${m.inputPerM}/M in · $${m.outputPerM}/M out`;
+      const fmt = (n: number): string => String(Number(n.toFixed(4)));
+      const price = m.priceUnknown ? 'price unknown' : `$${fmt(m.inputPerM)}/M in · $${fmt(m.outputPerM)}/M out`;
       const badges = modelBadges(m);
       const badgeText = badges.length > 0 ? `· ${badges.join(' · ')} ` : '';
       const notes = m.notes ? `· ${m.notes}` : '';

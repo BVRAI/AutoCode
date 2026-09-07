@@ -519,8 +519,8 @@ function xaiPrice(v: unknown): number | undefined {
   const n = typeof v === 'number' ? v : typeof v === 'string' ? Number.parseFloat(v) : Number.NaN;
   return Number.isFinite(n) && n >= 0 ? n / 10_000 : undefined;
 }
-/** OpenRouter prices are USD per token as strings → USD per million. */
+/** OpenRouter prices are USD per token as strings → USD per million, rounded so 0.0000001 × 1e6 reads 0.1, not 0.0999…. */
 function perToken(v: unknown): number | undefined {
   const n = typeof v === 'string' ? Number.parseFloat(v) : typeof v === 'number' ? v : Number.NaN;
-  return Number.isFinite(n) && n >= 0 ? n * 1_000_000 : undefined;
+  return Number.isFinite(n) && n >= 0 ? Math.round(n * 1_000_000 * 1_000_000) / 1_000_000 : undefined;
 }
