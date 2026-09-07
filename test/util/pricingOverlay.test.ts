@@ -80,9 +80,9 @@ describe('rateFor with proxy overlay', () => {
   it('setProxyRates(null) clears the overlay', () => {
     setProxyRates(sampleProxyCatalog);
     setProxyRates(null);
-    // After clearing, bundled rate for claude-opus-4-7 (15) should win.
+    // After clearing, bundled rate for claude-opus-4-7 ($5) should win.
     const r = rateFor('anthropic', 'claude-opus-4-7-20260525');
-    expect(r?.inputPerM).toBe(15);
+    expect(r?.inputPerM).toBe(5);
   });
 
   it('estimateCost uses overlay prices end-to-end', () => {

@@ -11,7 +11,7 @@
 import React, { useMemo, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { BR } from './theme.js';
-import { getKnownModels, modelCatalogSource } from '../../llm/models.js';
+import { getKnownModels, modelCatalogDetail } from '../../llm/models.js';
 
 export interface ProviderPickerProps {
   // Highlight the row matching the currently-active provider.
@@ -37,7 +37,7 @@ export function ProviderPicker({ currentProvider, onPick, onCancel }: ProviderPi
     }
     return order.map((name) => ({ name, modelCount: counts.get(name) ?? 0 }));
   }, []);
-  const source = useMemo(() => modelCatalogSource(), []);
+  const detail = useMemo(() => modelCatalogDetail(), []);
 
   // Pre-select the row matching the current provider, else row 0.
   const initialIdx = useMemo(() => {
@@ -79,9 +79,7 @@ export function ProviderPicker({ currentProvider, onPick, onCancel }: ProviderPi
       <Box>
         <Text color={BR.teal} bold>Select a provider</Text>
         <Text color={BR.inkFaint}>
-          {source === 'proxy'
-            ? `  from Automax catalog · ${rows.length} providers · ↑↓ pick · enter confirm · esc cancel`
-            : `  ${rows.length} providers · ↑↓ pick · enter confirm · esc cancel`}
+          {`  ${detail} · ${rows.length} providers · ↑↓ pick · enter confirm · esc cancel`}
         </Text>
       </Box>
       <Box flexDirection="column" marginTop={1}>

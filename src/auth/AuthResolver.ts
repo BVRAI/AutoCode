@@ -90,6 +90,15 @@ function envVarFor(provider: string): string | undefined {
   }
 }
 
+/** The user's own key for a provider — env var, then the secret store — ignoring the proxy paths. */
+export function byokKeyFor(provider: string): string | null {
+  const envKey = envVarFor(provider);
+  const fromEnv = envKey ? process.env[envKey] : undefined;
+  if (fromEnv && fromEnv.length > 0) return fromEnv;
+  const stored = getSecret(`byok-${provider}` as 'byok-anthropic');
+  return stored && stored.length > 0 ? stored : null;
+}
+
 // Exported for `/login` and other callers that need the same proxy-base
 // derivation without instantiating an AuthResolver. Returns the root proxy
 // URL (no `/v1/<provider>` suffix) since callers like `/login` hit

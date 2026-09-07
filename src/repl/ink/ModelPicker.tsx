@@ -6,11 +6,17 @@
 // overlay to {kind:'model-provider'}) rather than closing the whole flow,
 // so the user can browse providers without losing the picker. Closing
 // is one more Esc away.
+//
+// Live provider lists run to dozens of rows (OpenAI publishes ~50 chat
+// models), so the list is a window of WINDOW rows around the selection with
+// "… N more" markers; PgUp/PgDn jump a window at a time.
 
 import React, { useState, useMemo } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { BR } from './theme.js';
-import { getKnownModels, modelBadges, modelCatalogSource, type ModelInfo } from '../../llm/models.js';
+import { getKnownModels, modelBadges, modelCatalogDetail, type ModelInfo } from '../../llm/models.js';
+
+const WINDOW = 14;
 
 export interface ModelPickerProps {
   // The provider this picker is scoped to. Picked in stage 1.
@@ -36,7 +42,7 @@ export function ModelPicker({
     () => getKnownModels().filter((m) => m.provider.toLowerCase() === provider.toLowerCase()),
     [provider],
   );
-  const source = useMemo(() => modelCatalogSource(), []);
+  const detail = useMemo(() => modelCatalogDetail(), []);
 
   // Pre-select the active model if it matches one in this provider's list;
   // else the first row.
@@ -49,6 +55,7 @@ export function ModelPicker({
   }, [models, currentProvider, currentModel]);
 
   const [selectedIdx, setSelectedIdx] = useState<number>(initialIdx);
+  const count = Math.max(1, models.length);
 
   useInput((_input, key) => {
     if (key.escape) {
@@ -61,14 +68,28 @@ export function ModelPicker({
       return;
     }
     if (key.upArrow) {
-      setSelectedIdx((i) => (i - 1 + Math.max(1, models.length)) % Math.max(1, models.length));
+      setSelectedIdx((i) => (i - 1 + count) % count);
       return;
     }
     if (key.downArrow) {
-      setSelectedIdx((i) => (i + 1) % Math.max(1, models.length));
+      setSelectedIdx((i) => (i + 1) % count);
+      return;
+    }
+    if (key.pageUp) {
+      setSelectedIdx((i) => Math.max(0, i - WINDOW));
+      return;
+    }
+    if (key.pageDown) {
+      setSelectedIdx((i) => Math.min(count - 1, i + WINDOW));
       return;
     }
   });
+
+  // Window of rows around the selection.
+  const start = models.length <= WINDOW ? 0 : Math.min(Math.max(0, selectedIdx - Math.floor(WINDOW / 2)), models.length - WINDOW);
+  const visible = models.slice(start, start + WINDOW);
+  const above = start;
+  const below = Math.max(0, models.length - (start + visible.length));
 
   return (
     <Box
@@ -82,9 +103,7 @@ export function ModelPicker({
       <Box>
         <Text color={BR.teal} bold>{provider.toUpperCase()} models</Text>
         <Text color={BR.inkFaint}>
-          {source === 'proxy'
-            ? `  from Automax catalog · ${models.length} · ↑↓ pick · enter confirm · esc back`
-            : `  ${models.length} · ↑↓ pick · enter confirm · esc back`}
+          {`  ${detail} · ${models.length} · ↑↓ pick · enter confirm · esc back`}
         </Text>
       </Box>
       {models.length === 0 ? (
@@ -93,12 +112,15 @@ export function ModelPicker({
         </Box>
       ) : (
         <Box flexDirection="column" marginTop={1}>
-          {models.map((m, i) => {
+          {above > 0 && <Text color={BR.inkFaint}>  … {above} more above</Text>}
+          {visible.map((m, offset) => {
+            const i = start + offset;
             const selected = i === selectedIdx;
             const isCurrent =
               m.provider === currentProvider && currentModel.startsWith(m.model);
             const marker = selected ? '▸' : ' ';
             const labelColor = selected ? BR.teal : isCurrent ? BR.add : BR.ink;
+            const price = m.priceUnknown ? 'price unknown' : `$${m.inputPerM}/M in · $${m.outputPerM}/M out`;
             return (
               <Box key={`m-${m.provider}-${m.model}`}>
                 <Text color={selected ? BR.teal : BR.inkFaint}>{marker} </Text>
@@ -108,14 +130,13 @@ export function ModelPicker({
                   </Text>
                   {isCurrent && <Text color={BR.add}>  ← current</Text>}
                 </Box>
-                <Text color={BR.inkDim}>
-                  ${m.inputPerM}/M in · ${m.outputPerM}/M out
-                </Text>
+                <Text color={BR.inkDim}>{price}</Text>
                 {modelBadges(m).length > 0 && <Text color={BR.inkDim}>  · {modelBadges(m).join(' · ')}</Text>}
                 {m.notes && <Text color={BR.inkFaint}>  · {m.notes}</Text>}
               </Box>
             );
           })}
+          {below > 0 && <Text color={BR.inkFaint}>  … {below} more below</Text>}
         </Box>
       )}
     </Box>

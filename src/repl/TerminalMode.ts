@@ -38,10 +38,13 @@ import {
   describeThinking,
   getKnownModels,
   modelBadges,
+  modelCatalogDetail,
   modelCatalogSource,
   parseEffortSetting,
   thinkingFor,
 } from '../llm/models.js';
+import { discoverModels, discoveryState } from '../llm/ProviderDiscovery.js';
+import { byokKeyFor } from '../auth/AuthResolver.js';
 import { cwdStatus, resolveCwdTarget } from './cwd.js';
 import { resolveThemeName } from './ink/theme.js';
 
@@ -517,7 +520,7 @@ export class TerminalMode {
         this.handleCwd(args);
         return;
       case 'model':
-        this.handleModel(args);
+        await this.handleModel(args);
         return;
       case 'stop':
         this.agent.stop();
@@ -1056,20 +1059,22 @@ export class TerminalMode {
     this.renderer.info(`effort → ${setting} (${resolved ?? 'thinking off'}) for ${provider}/${model}`);
   }
 
-  private handleModel(args: string[]): void {
-    // Inside Bridge with no args → open the two-stage picker (provider first,
-    // then that provider's models). Esc semantics inside the pickers handle
-    // the "back to providers" transition.
-    if (args.length === 0 && this.bridgeStore !== null) {
-      this.bridgeStore.setOverlay({ kind: 'model-provider' });
-      return;
-    }
-    // Plain mode (V6 / AUTOCODE_AUTOMAX / non-TTY) with no args → there's no
-    // Ink overlay to mount, so print the full catalog instead. Without this
-    // the user only saw the *current* model and had no way to discover the
-    // available names — and inside V6 specifically, the live proxy catalog
-    // we fetch at startup was invisible.
-    if (args.length === 0) {
+  private async handleModel(args: string[]): Promise<void> {
+    const refresh = args.length === 1 && args[0]!.toLowerCase() === 'refresh';
+    if (args.length === 0 || refresh) {
+      await this.refreshModelLists(refresh);
+      // Inside Bridge → open the two-stage picker (provider first, then that
+      // provider's models). Esc semantics inside the pickers handle the
+      // "back to providers" transition.
+      if (this.bridgeStore !== null) {
+        this.bridgeStore.setOverlay({ kind: 'model-provider' });
+        return;
+      }
+      // Plain mode (V6 / AUTOCODE_AUTOMAX / non-TTY) → there's no Ink overlay
+      // to mount, so print the full catalog instead. Without this the user
+      // only saw the *current* model and had no way to discover the available
+      // names — and inside V6 specifically, the live proxy catalog we fetch
+      // at startup was invisible.
       this.printModelList();
       return;
     }
@@ -1095,12 +1100,30 @@ export class TerminalMode {
     this.renderer.info(`model → ${this.ctx.model.provider} / ${this.ctx.model.model}`);
   }
 
+  // Sessions without an Automax catalog list what the providers publish
+  // (llm/ProviderDiscovery.ts). Startup begins that in the background; here
+  // we wait for it — or redo it on `/model refresh` — so the picker opens on
+  // the live rows. Sessions on the proxy catalog have nothing to fetch.
+  private async refreshModelLists(force: boolean): Promise<void> {
+    if (modelCatalogSource() === 'proxy' || process.env.AUTOCODE_NO_DISCOVERY) return;
+    if (!force && discoveryState() === 'done') return;
+    this.renderer.dim(force ? '(refreshing provider model lists…)' : '(checking provider model lists…)');
+    try {
+      const report = await discoverModels({ keyFor: byokKeyFor, force });
+      const live = report.providers.filter((p) => p.source === 'fresh' || p.source === 'cache');
+      const failed = report.providers.filter((p) => p.source === 'failed');
+      if (live.length > 0) this.renderer.dim(`(live model lists: ${live.map((p) => `${p.provider} ${p.count}`).join(' · ')})`);
+      if (failed.length > 0) this.renderer.dim(`(could not fetch ${failed.map((p) => p.provider).join(', ')} — bundled rows shown)`);
+    } catch (e) {
+      this.renderer.dim(`(model discovery failed: ${e instanceof Error ? e.message : String(e)})`);
+    }
+  }
+
   // Plain-text equivalent of the Ink ModelPicker overlay. Same data source
   // (getKnownModels), same grouping, same current-model highlight rule —
   // just rendered through the renderer instead of as a React tree.
   private printModelList(): void {
     const models = getKnownModels();
-    const source = modelCatalogSource();
     const currentProvider = this.ctx.model.provider;
     const currentModel = this.ctx.model.model;
     // Longest-prefix-match for the current row, matching findModel's rule
@@ -1114,7 +1137,7 @@ export class TerminalMode {
         bestLen = m.model.length;
       }
     }
-    const sourceTag = source === 'proxy' ? `from Automax catalog · ${models.length} models` : `bundled · ${models.length} models`;
+    const sourceTag = `${modelCatalogDetail()} · ${models.length} models`;
     this.renderer.info(`Current: ${currentProvider} / ${currentModel}`);
     this.renderer.info('');
     this.renderer.info(`Available models (${sourceTag}):`);
@@ -1129,7 +1152,7 @@ export class TerminalMode {
       const isCurrent = `${m.provider}/${m.model}` === currentKey;
       const marker = isCurrent ? '←' : ' ';
       const label = m.label.length > LABEL_WIDTH ? m.label.slice(0, LABEL_WIDTH - 1) + '…' : m.label.padEnd(LABEL_WIDTH);
-      const price = `$${m.inputPerM}/M in · $${m.outputPerM}/M out`;
+      const price = m.priceUnknown ? 'price unknown' : `$${m.inputPerM}/M in · $${m.outputPerM}/M out`;
       const badges = modelBadges(m);
       const badgeText = badges.length > 0 ? `· ${badges.join(' · ')} ` : '';
       const notes = m.notes ? `· ${m.notes}` : '';

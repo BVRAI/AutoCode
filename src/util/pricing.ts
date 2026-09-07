@@ -22,7 +22,14 @@ export interface ModelRate {
 // the same source, no duplication.
 export const RATES: Record<string, Record<string, ModelRate>> = {
   anthropic: {
-    'claude-opus-4-7': { inputPerM: 15, outputPerM: 75, cacheReadPerM: 1.5, cacheWritePerM: 18.75 },
+    // The 5-generation and Opus 4.8 (prices as the Automax catalog reported
+    // them on 2026-09-07; Opus has been $5 / $25 since 4.5).
+    'claude-fable-5-1': { inputPerM: 10, outputPerM: 50, cacheReadPerM: 0.25, cacheWritePerM: 12.5 },
+    'claude-fable-5': { inputPerM: 10, outputPerM: 50, cacheReadPerM: 1, cacheWritePerM: 12.5 },
+    'claude-opus-5': { inputPerM: 5, outputPerM: 25, cacheReadPerM: 0.5, cacheWritePerM: 6.25 },
+    'claude-sonnet-5': { inputPerM: 2, outputPerM: 10, cacheReadPerM: 0.2, cacheWritePerM: 2.5 },
+    'claude-opus-4-8': { inputPerM: 5, outputPerM: 25, cacheReadPerM: 0.5, cacheWritePerM: 6.25 },
+    'claude-opus-4-7': { inputPerM: 5, outputPerM: 25, cacheReadPerM: 0.5, cacheWritePerM: 6.25 },
     'claude-sonnet-4-6': { inputPerM: 3, outputPerM: 15, cacheReadPerM: 0.3, cacheWritePerM: 3.75 },
     'claude-haiku-4-5': { inputPerM: 1, outputPerM: 5, cacheReadPerM: 0.1, cacheWritePerM: 1.25 },
     'claude-opus-4': { inputPerM: 15, outputPerM: 75, cacheReadPerM: 1.5, cacheWritePerM: 18.75 },
@@ -30,15 +37,36 @@ export const RATES: Record<string, Record<string, ModelRate>> = {
     'claude-haiku-4': { inputPerM: 1, outputPerM: 5 },
   },
   xai: {
-    'grok-code-fast-1': { inputPerM: 0.2, outputPerM: 1.5, cacheReadPerM: 0.02 },
+    // As xAI's /v1/language-models reported on 2026-09-07 (that list prices
+    // in 1/10,000 USD per million tokens). grok-code-fast-1 is now an alias
+    // of grok-build-0.1 and bills at its rate; grok-4 and grok-4-fast are no
+    // longer listed (rows kept for old configs).
+    'grok-build': { inputPerM: 1, outputPerM: 2, cacheReadPerM: 0.2 },
+    'grok-code-fast-1': { inputPerM: 1, outputPerM: 2, cacheReadPerM: 0.2 },
+    'grok-4.6': { inputPerM: 2, outputPerM: 6, cacheReadPerM: 0.5 },
+    'grok-4.5': { inputPerM: 2, outputPerM: 6, cacheReadPerM: 0.3 },
+    'grok-4.3': { inputPerM: 1.25, outputPerM: 2.5, cacheReadPerM: 0.2 },
+    'grok-4.20': { inputPerM: 1.25, outputPerM: 2.5, cacheReadPerM: 0.2 },
     'grok-4-fast': { inputPerM: 0.5, outputPerM: 2.0 },
-    'grok-4': { inputPerM: 3.0, outputPerM: 15.0 },
+    'grok-4': { inputPerM: 1.25, outputPerM: 2.5, cacheReadPerM: 0.3125 },
   },
   openai: {
     // platform.openai.com/docs/pricing (GPT-5 family: $1.25 / $10, cached input
     // $0.125; o3 and gpt-4.1 after the 2025 price cuts). The old $5 / $20 rows
     // overstated a gpt-5.1 turn ~4× and tripped cost caps that real spend never reached.
+    // gpt-6-astra: OpenRouter's listing on 2026-09-07 (the Automax catalog
+    // carries no price for it yet).
+    'gpt-6-astra': { inputPerM: 10, outputPerM: 50, cacheReadPerM: 1 },
+    'gpt-5.6-sol': { inputPerM: 4, outputPerM: 20, cacheReadPerM: 0.4 },
+    'gpt-5.6-terra': { inputPerM: 2, outputPerM: 12, cacheReadPerM: 0.2 },
+    'gpt-5.6-luna': { inputPerM: 0.2, outputPerM: 1.2, cacheReadPerM: 0.02 },
+    'gpt-5.5': { inputPerM: 5, outputPerM: 30, cacheReadPerM: 0.5 },
+    'gpt-5.4-mini': { inputPerM: 0.75, outputPerM: 4.5, cacheReadPerM: 0.075 },
+    'gpt-5.4-nano': { inputPerM: 0.2, outputPerM: 1.25, cacheReadPerM: 0.02 },
+    'gpt-5.4': { inputPerM: 2.5, outputPerM: 15, cacheReadPerM: 0.25 },
+    'gpt-5.2': { inputPerM: 1.75, outputPerM: 14, cacheReadPerM: 0.175 },
     'gpt-5.1': { inputPerM: 1.25, outputPerM: 10, cacheReadPerM: 0.125 },
+    'gpt-5-nano': { inputPerM: 0.05, outputPerM: 0.4, cacheReadPerM: 0.005 },
     'gpt-5': { inputPerM: 1.25, outputPerM: 10, cacheReadPerM: 0.125 },
     'gpt-5-mini': { inputPerM: 0.25, outputPerM: 2, cacheReadPerM: 0.025 },
     'gpt-4.1': { inputPerM: 2, outputPerM: 8, cacheReadPerM: 0.5 },
@@ -104,30 +132,43 @@ export function setProxyRates(catalog: ProxyRatesCatalog | null): void {
   proxyRateOverlay = overlay;
 }
 
-export function rateFor(provider: string, model: string): ModelRate | null {
-  // Proxy overlay wins. Use the same longest-prefix-match rule as the
-  // bundled table so date-suffixed ids still resolve.
-  const overlayRates = proxyRateOverlay?.[provider];
-  if (overlayRates) {
-    let best: { key: string; rate: ModelRate } | null = null;
-    for (const [key, rate] of Object.entries(overlayRates)) {
-      if (model.startsWith(key) && (!best || key.length > best.key.length)) {
-        best = { key, rate };
-      }
-    }
-    if (best) return best.rate;
-  }
-  const providerRates = RATES[provider];
-  if (!providerRates) return null;
-  // Longest matching prefix wins so e.g. "claude-opus-4-7-20251001" picks the
-  // 4-7 row, not the bare "claude-opus-4" row.
+// Overlay populated by llm/ProviderDiscovery.ts with the prices the providers
+// publish for the models they list (BYOK sessions). Consulted after the proxy
+// overlay and before the bundled table.
+const discoveredRateOverlay: Record<string, Record<string, ModelRate>> = {};
+
+export function setDiscoveredRates(provider: string, rates: Record<string, ModelRate> | null): void {
+  if (rates === null) delete discoveredRateOverlay[provider];
+  else discoveredRateOverlay[provider] = rates;
+}
+
+// Longest matching prefix wins so e.g. "claude-opus-4-7-20251001" picks the
+// 4-7 row, not the bare "claude-opus-4" row. `strict` also requires the id to
+// continue at a family boundary ("-" or ":") after the key, so "gpt-5.3-codex"
+// does not pass as "gpt-5".
+function bestPrefix(table: Record<string, ModelRate> | undefined, model: string, strict = false): ModelRate | null {
+  if (!table) return null;
   let best: { key: string; rate: ModelRate } | null = null;
-  for (const [key, rate] of Object.entries(providerRates)) {
-    if (model.startsWith(key) && (!best || key.length > best.key.length)) {
-      best = { key, rate };
-    }
+  for (const [key, rate] of Object.entries(table)) {
+    if (!model.startsWith(key)) continue;
+    if (strict && model.length > key.length && model[key.length] !== '-' && model[key.length] !== ':') continue;
+    if (!best || key.length > best.key.length) best = { key, rate };
   }
   return best ? best.rate : null;
+}
+
+export function rateFor(provider: string, model: string): ModelRate | null {
+  // Proxy overlay wins, then the providers' own lists, then the bundled table.
+  return (
+    bestPrefix(proxyRateOverlay?.[provider], model) ??
+    bestPrefix(discoveredRateOverlay[provider], model) ??
+    bestPrefix(RATES[provider], model)
+  );
+}
+
+/** The bundled table alone (no overlays); `strict` applies the family-boundary rule. */
+export function bundledRateFor(provider: string, model: string, strict = false): ModelRate | null {
+  return bestPrefix(RATES[provider], model, strict);
 }
 
 export function estimateCost(

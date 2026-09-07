@@ -16,7 +16,7 @@ import { newSessionId, type SessionContext } from './session/SessionContext.js';
 import { TranscriptStore, type SessionState } from './session/TranscriptStore.js';
 import { CheckpointStore } from './session/CheckpointStore.js';
 import { findLatestSession, loadSessionMeta } from './session/SessionResume.js';
-import { AuthResolver } from './auth/AuthResolver.js';
+import { AuthResolver, byokKeyFor } from './auth/AuthResolver.js';
 import { ConfigStore } from './auth/ConfigStore.js';
 import { dataDir, projectRootDefault, sessionsDir } from './util/paths.js';
 import { indexEnabled, startIndex } from './index/IndexManager.js';
@@ -24,7 +24,8 @@ import { createWorktree } from './agent/GitWorkflow.js';
 import { isTrusted, markTrusted, trustPrompt, trustSensitiveContent } from './agent/Trust.js';
 import { loadDotEnv } from './util/dotenv.js';
 import { loadCatalogForStartup, refreshCatalogInBackground } from './llm/CatalogClient.js';
-import { setProxyCatalog, parseEffortSetting, defaultModelFor, type EffortSetting } from './llm/models.js';
+import { setProxyCatalog, parseEffortSetting, defaultModelFor, modelCatalogSource, type EffortSetting } from './llm/models.js';
+import { discoverModels } from './llm/ProviderDiscovery.js';
 import type { AutocodeConfig } from './auth/ConfigStore.js';
 import { setProxyRates } from './util/pricing.js';
 import { shouldRunFirstRunWizard, BYOK_PROVIDERS, BVRAI_SIGNUP_URL } from './auth/firstRun.js';
@@ -134,7 +135,7 @@ program
       const fetchOpts = { baseUrl, token: proxyToken };
       const result = await loadCatalogForStartup(fetchOpts);
       if (result.catalog) {
-        setProxyCatalog(result.catalog);
+        setProxyCatalog(result.catalog, { source: result.source === 'cache' ? 'cache' : 'fresh', ageMs: result.ageMs });
         setProxyRates(result.catalog);
         if (result.refreshInBackground) {
           // Cache was fresh-ish; refresh asynchronously so the next launch is
@@ -441,6 +442,17 @@ program
           ),
           new StubAgent(renderer, store))
         : new LiveAgent(renderer, store, { checkpoints, prompter, emitter, mode: initialMode });
+
+    // Without an Automax catalog the picker would run on the bundled list,
+    // which drifts within weeks of a release. Ask the providers themselves
+    // (the user's own keys) in the background; /model waits for this run if
+    // it is still going. Cached a day under the data dir; /model refresh
+    // refetches; AUTOCODE_NO_DISCOVERY=1 turns it off.
+    if (!headless && !fakeLlm && modelCatalogSource() === 'bundled' && !process.env.AUTOCODE_NO_DISCOVERY) {
+      discoverModels({ keyFor: byokKeyFor }).catch(() => {
+        /* the picker falls back to the bundled rows */
+      });
+    }
 
     // Initialize MCP servers if any are configured. Fail soft.
     if (agent instanceof LiveAgent) {

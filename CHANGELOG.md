@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- `/model` in a session without an Automax catalog (your own keys) now lists what the
+  providers publish — Anthropic, OpenAI, xAI and Google model lists, OpenRouter's public
+  list — instead of the bundled table, fetched in the background at startup and cached a day
+  under the data directory (`/model refresh` refetches, `AUTOCODE_NO_DISCOVERY=1` turns it
+  off). Prices follow the provider when it publishes them, then the bundled table, then
+  OpenRouter's listing of the same model; a model no source prices is marked "price unknown"
+  and billed at the provider's dearest known rate so cost caps still apply. Long lists are
+  windowed in the picker (PgUp/PgDn). The bundled rows caught up too: Claude Fable 5.1/5,
+  Opus 5, Sonnet 5, Opus 4.8; GPT-6 Astra, GPT-5.6 Sol/Terra/Luna, GPT-5.5, GPT-5.4 (mini,
+  nano), GPT-5.2; Grok 4.6/4.5/4.3/4.20 and Grok Build 0.1 — `grok-code-fast-1` is now an
+  alias of `grok-build-0.1` and bills at $1/$2 per million.
 - The inline console now follows Claude Code's transcript grammar: `⏺ Label(arg)`
   tool rows with collapsed `⎿` results ("Read 120 lines (ctrl+o to expand)",
   grouped "Read 3 files", Bash output folded after three lines, "Updated path

@@ -20,8 +20,8 @@ describe('rateFor', () => {
   it('picks the longest matching prefix', () => {
     // "claude-opus-4-7" should win over "claude-opus-4" for an opus-4-7 model.
     const r = rateFor('anthropic', 'claude-opus-4-7');
-    expect(r?.inputPerM).toBe(15);
-    expect(r?.cacheReadPerM).toBe(1.5);
+    expect(r?.inputPerM).toBe(5);
+    expect(r?.cacheReadPerM).toBe(0.5);
   });
 });
 
@@ -32,8 +32,8 @@ describe('estimateCost', () => {
       'xai',
       'grok-code-fast-1',
     );
-    // grok-code-fast-1: $0.20/M in + $1.50/M out → $1.70
-    expect(cost).toBeCloseTo(1.7, 3);
+    // grok-code-fast-1 (alias of grok-build-0.1): $1/M in + $2/M out → $3
+    expect(cost).toBeCloseTo(3, 3);
   });
 
   it('adds cache read cost when applicable', () => {
@@ -46,8 +46,8 @@ describe('estimateCost', () => {
       'anthropic',
       'claude-opus-4-7',
     );
-    // $15/M fresh + $1.5/M cache read = $16.5
-    expect(cost).toBeCloseTo(16.5, 2);
+    // $5/M fresh + $0.5/M cache read = $5.5
+    expect(cost).toBeCloseTo(5.5, 2);
   });
 
   it('returns zero cost when pricing is unknown', () => {

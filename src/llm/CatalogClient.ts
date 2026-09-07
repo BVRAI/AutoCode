@@ -162,6 +162,8 @@ export interface LoadResult {
   // True when the caller should kick a background refresh (cache was served
   // but is older than FRESH_TTL_MS, or about to expire).
   refreshInBackground: boolean;
+  // Age of the cache file when `source` is 'cache'.
+  ageMs?: number;
 }
 
 // Startup helper. Three paths:
@@ -172,7 +174,7 @@ export interface LoadResult {
 export async function loadCatalogForStartup(opts: FetchOptions): Promise<LoadResult> {
   const cached = readCachedCatalog();
   if (cached && cached.ageMs < FRESH_TTL_MS) {
-    return { catalog: cached.catalog, source: 'cache', refreshInBackground: true };
+    return { catalog: cached.catalog, source: 'cache', refreshInBackground: true, ageMs: cached.ageMs };
   }
   const fresh = await fetchProxyCatalog(opts);
   if (fresh) {
@@ -180,7 +182,7 @@ export async function loadCatalogForStartup(opts: FetchOptions): Promise<LoadRes
     return { catalog: fresh, source: 'fresh', refreshInBackground: false };
   }
   if (cached) {
-    return { catalog: cached.catalog, source: 'cache', refreshInBackground: false };
+    return { catalog: cached.catalog, source: 'cache', refreshInBackground: false, ageMs: cached.ageMs };
   }
   return { catalog: null, source: 'none', refreshInBackground: false };
 }

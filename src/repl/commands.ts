@@ -22,7 +22,7 @@ export const COMMAND_DEFS: ReadonlyArray<CommandDef> = [
   { name: 'status',   signature: '/status',                                   summary: 'Show session info',                                         args: 'none' },
   { name: 'proxy',    signature: '/proxy',                                    summary: 'Check the BVRAI proxy connection',                           args: 'none' },
   { name: 'cwd',      signature: '/cwd [path]',                               summary: 'Show or change the project root',                           args: 'optional' },
-  { name: 'model',    signature: '/model [provider model]',                   summary: 'Pick a model (no args = picker)',                           args: 'optional' },
+  { name: 'model',    signature: '/model [provider model | refresh]',         summary: 'Pick a model (no args = picker; refresh = refetch provider lists)', args: 'optional' },
   { name: 'init',     signature: '/init',                                     summary: 'Scaffold an AUTOCODE.md for this project',                  args: 'none' },
   { name: 'clear',    signature: '/clear',                                    summary: 'Reset conversation history',                                args: 'none' },
   { name: 'compact',  signature: '/compact',                                  summary: 'Summarize older turns',                                     args: 'none' },

@@ -41,6 +41,16 @@ export interface ModelInfo {
   maxOutputTokens?: number;
   /** Supports tool calling (catalog `tools`); undefined = assume yes. */
   supportsTools?: boolean;
+  /** No source knows this model's price; the rate in use is a conservative cap (see ProviderDiscovery). */
+  priceUnknown?: boolean;
+  /** The provider serves this id as an alias of another model. */
+  aliasOf?: string;
+}
+
+export interface ModelMeta {
+  label: string;
+  notes?: string;
+  thinking?: boolean;
 }
 
 export type ModelCatalogSource = 'bundled' | 'proxy';
@@ -48,9 +58,14 @@ export type ModelCatalogSource = 'bundled' | 'proxy';
 // Friendly labels + tags per model. Keys must match a model prefix in
 // RATES (or a catalog id). Missing entries fall back to the raw model id
 // as the label.
-const EXTRA_METADATA: Record<string, { label: string; notes?: string; thinking?: boolean }> = {
-  // anthropic — the Claude 4 family accepts the extended-thinking param.
-  'claude-opus-4-7':  { label: 'Claude Opus 4.7',   notes: 'frontier · highest quality', thinking: true },
+const EXTRA_METADATA: Record<string, ModelMeta> = {
+  // anthropic — the Claude 4 and 5 families accept the extended-thinking param.
+  'claude-fable-5-1': { label: 'Claude Fable 5.1',  notes: 'frontier · Mythos-class', thinking: true },
+  'claude-fable-5':   { label: 'Claude Fable 5',    notes: 'frontier', thinking: true },
+  'claude-opus-5':    { label: 'Claude Opus 5',     notes: 'frontier · highest quality', thinking: true },
+  'claude-sonnet-5':  { label: 'Claude Sonnet 5',   notes: 'balanced · great for code', thinking: true },
+  'claude-opus-4-8':  { label: 'Claude Opus 4.8',   notes: 'prior frontier', thinking: true },
+  'claude-opus-4-7':  { label: 'Claude Opus 4.7',   notes: 'prior frontier', thinking: true },
   'claude-sonnet-4-6': { label: 'Claude Sonnet 4.6', notes: 'balanced default · great for code', thinking: true },
   'claude-haiku-4-5': { label: 'Claude Haiku 4.5',  notes: 'cheap & fast', thinking: true },
   'claude-opus-4':    { label: 'Claude Opus 4',     notes: 'prior frontier', thinking: true },
@@ -59,13 +74,29 @@ const EXTRA_METADATA: Record<string, { label: string; notes?: string; thinking?:
 
   // xai — grok reasoning models reason unconditionally; there is no request
   // param to arm (they return reasoning_content on their own).
-  'grok-code-fast-1': { label: 'Grok Code Fast 1',  notes: 'budget tier · coding-tuned (current default)' },
+  'grok-build':       { label: 'Grok Build',        notes: 'coding-tuned' },
+  'grok-code-fast-1': { label: 'Grok Code Fast 1',  notes: 'alias of grok-build-0.1 (current default)' },
+  'grok-4.6':         { label: 'Grok 4.6',          notes: 'frontier' },
+  'grok-4.5':         { label: 'Grok 4.5',          notes: 'frontier' },
+  'grok-4.3':         { label: 'Grok 4.3',          notes: 'mid-tier' },
+  'grok-4.20':        { label: 'Grok 4.20',         notes: 'mid-tier' },
   'grok-4-fast':      { label: 'Grok 4 Fast',       notes: 'mid-tier' },
-  'grok-4':           { label: 'Grok 4',            notes: 'frontier' },
+  'grok-4':           { label: 'Grok 4',            notes: 'prior frontier' },
 
   // openai — o-series and the gpt-5 family accept reasoning_effort.
-  'gpt-5.1':  { label: 'GPT-5.1',  notes: 'frontier', thinking: true },
-  'gpt-5':    { label: 'GPT-5',    notes: 'frontier', thinking: true },
+  'gpt-6-astra':   { label: 'GPT-6 Astra',   notes: 'frontier · highest quality', thinking: true },
+  'gpt-5.6-sol':   { label: 'GPT-5.6 Sol',   notes: 'frontier', thinking: true },
+  'gpt-5.6-terra': { label: 'GPT-5.6 Terra', notes: 'balanced', thinking: true },
+  'gpt-5.6-luna':  { label: 'GPT-5.6 Luna',  notes: 'cheap & fast', thinking: true },
+  'gpt-5.5':       { label: 'GPT-5.5',       notes: 'prior frontier', thinking: true },
+  'gpt-5.4-mini':  { label: 'GPT-5.4 mini',  notes: 'mid-tier', thinking: true },
+  'gpt-5.4-nano':  { label: 'GPT-5.4 nano',  notes: 'cheap & fast', thinking: true },
+  'gpt-5.4':       { label: 'GPT-5.4',       notes: 'prior frontier', thinking: true },
+  'gpt-5.2':       { label: 'GPT-5.2',       notes: 'prior', thinking: true },
+  'gpt-5.1':  { label: 'GPT-5.1',  notes: 'prior', thinking: true },
+  'gpt-5-mini': { label: 'GPT-5 mini', notes: 'cheap', thinking: true },
+  'gpt-5-nano': { label: 'GPT-5 nano', notes: 'cheapest', thinking: true },
+  'gpt-5':    { label: 'GPT-5',    notes: 'prior', thinking: true },
   'gpt-4.1':  { label: 'GPT-4.1',  notes: 'mid-tier' },
   'o3':       { label: 'o3',       notes: 'reasoning · slow & expensive', thinking: true },
   'o4-mini':  { label: 'o4-mini',  notes: 'reasoning · cheaper', thinking: true },
@@ -102,27 +133,38 @@ export const KNOWN_MODELS_FALLBACK: ModelInfo[] = (() => {
 // Automax. When non-null, getKnownModels() returns this list instead of
 // the fallback.
 let proxyOverlay: ModelInfo[] | null = null;
+// Where the overlay came from, for the picker's header ("Automax catalog ·
+// cached 5h ago").
+let proxyDetail: string | null = null;
+// Per-provider lists discovered straight from the providers (BYOK sessions,
+// see llm/ProviderDiscovery.ts). Layered over the bundled fallback when no
+// proxy catalog is active.
+const discoveredOverlay = new Map<string, ModelInfo[]>();
 
-// Longest-prefix match against EXTRA_METADATA so e.g. catalog id
-// "claude-opus-4-7-20251001" still picks up the "claude-opus-4-7" label.
-function labelFor(modelId: string): { label: string; notes?: string } {
-  let best: { key: string; meta: { label: string; notes?: string } } | null = null;
+// Longest-prefix match against EXTRA_METADATA at a family boundary, so catalog
+// id "claude-opus-4-7-20251001" picks up the "claude-opus-4-7" label while
+// "gpt-5.3-codex" does not pass as "gpt-5". `key` is the matched entry (equal
+// to the id on an exact match).
+export function labelFor(modelId: string): ModelMeta & { key?: string } {
+  let best: { key: string; meta: ModelMeta } | null = null;
   for (const [key, meta] of Object.entries(EXTRA_METADATA)) {
-    if (modelId.startsWith(key) && (!best || key.length > best.key.length)) {
-      best = { key, meta };
-    }
+    if (!modelId.startsWith(key)) continue;
+    if (modelId.length > key.length && modelId[key.length] !== '-' && modelId[key.length] !== ':') continue;
+    if (!best || key.length > best.key.length) best = { key, meta };
   }
-  return best ? best.meta : { label: modelId };
+  return best ? { ...best.meta, key: best.key } : { label: modelId };
 }
 
 // Called by cli.ts at startup. Pass null to clear the overlay (back to
 // fallback). Entries with status "deprecated" or "model_not_verified" are
 // dropped so the picker only shows usable models.
-export function setProxyCatalog(catalog: FullCatalog | null): void {
+export function setProxyCatalog(catalog: FullCatalog | null, opts: { source?: 'fresh' | 'cache'; ageMs?: number } = {}): void {
   if (catalog === null) {
     proxyOverlay = null;
+    proxyDetail = null;
     return;
   }
+  proxyDetail = opts.source === 'cache' ? `Automax catalog · cached ${formatAge(opts.ageMs ?? 0)} ago` : 'Automax catalog';
   const out: ModelInfo[] = [];
   for (const [provider, providerCatalog] of Object.entries(catalog.providers)) {
     for (const entry of providerCatalog.models) {
@@ -159,8 +201,55 @@ export function modelCatalogSource(): ModelCatalogSource {
   return proxyOverlay ? 'proxy' : 'bundled';
 }
 
+/** One line for pickers: where the list comes from and how fresh it is. */
+export function modelCatalogDetail(): string {
+  if (proxyOverlay) return proxyDetail ?? 'Automax catalog';
+  const live = [...discoveredOverlay.keys()];
+  if (live.length === 0) return 'bundled list';
+  const bundledProviders = new Set(KNOWN_MODELS_FALLBACK.map((m) => m.provider));
+  const allLive = [...bundledProviders].every((p) => discoveredOverlay.has(p));
+  return allLive ? 'live provider lists' : `live from ${live.join(', ')} · bundled for the rest`;
+}
+
+/** Install a provider's live model list; it replaces that provider's bundled rows (null removes it). */
+export function setDiscoveredModels(provider: string, models: ModelInfo[] | null): void {
+  if (models === null || models.length === 0) discoveredOverlay.delete(provider);
+  else discoveredOverlay.set(provider, models);
+}
+
+export function discoveredProviders(): string[] {
+  return [...discoveredOverlay.keys()];
+}
+
 export function getKnownModels(): ModelInfo[] {
-  return proxyOverlay ?? KNOWN_MODELS_FALLBACK;
+  if (proxyOverlay) return proxyOverlay;
+  if (discoveredOverlay.size === 0) return KNOWN_MODELS_FALLBACK;
+  // Bundled provider order, each provider's rows swapped for its live list
+  // when there is one; providers only the live side knows come last.
+  const out: ModelInfo[] = [];
+  const placed = new Set<string>();
+  for (const m of KNOWN_MODELS_FALLBACK) {
+    const live = discoveredOverlay.get(m.provider);
+    if (!live) {
+      out.push(m);
+      continue;
+    }
+    if (!placed.has(m.provider)) {
+      placed.add(m.provider);
+      out.push(...live);
+    }
+  }
+  for (const [provider, live] of discoveredOverlay) {
+    if (!placed.has(provider)) out.push(...live);
+  }
+  return out;
+}
+
+function formatAge(ms: number): string {
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 60) return `${Math.max(1, minutes)} min`;
+  const hours = Math.round(minutes / 60);
+  return hours < 48 ? `${hours} h` : `${Math.round(hours / 24)} d`;
 }
 
 export function getKnownProviders(): string[] {

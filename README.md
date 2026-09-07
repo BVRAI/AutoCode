@@ -51,6 +51,14 @@ Two modes, auto-detected:
   engine), traffic goes through the BVRAI proxy and no keys are needed. `AUTOMAX_PROXY_URL`
   overrides the proxy for self-hosted forks.
 
+With your own keys, `/model` lists what each provider currently publishes (the Anthropic,
+OpenAI, xAI and Google model lists, OpenRouter's public list) rather than a bundled table. The
+lists are fetched in the background at startup and cached for a day under the data directory;
+`/model refresh` refetches them and `AUTOCODE_NO_DISCOVERY=1` turns discovery off. Prices come
+from the provider when it publishes them (xAI, OpenRouter), else the bundled table, else
+OpenRouter's listing of the same model; a model no source prices shows as "price unknown" and
+is billed at the provider's dearest known rate so cost caps still apply.
+
 ## Providers and defaults
 
 | `--provider` | Default model | Key |
