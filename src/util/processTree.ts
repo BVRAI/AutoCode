@@ -16,6 +16,10 @@ export function spawnOptionsForTree(): { detached: boolean } {
 export function killTree(child: ChildProcess): void {
   const pid = child.pid;
   if (!pid) return;
+  // A child that already exited must not be killed by pid: Windows reuses
+  // pids within seconds, and `taskkill /T` on a stale one takes down whatever
+  // unrelated process (another harness, a test runner) inherited the number.
+  if (child.exitCode !== null || child.signalCode !== null) return;
   if (process.platform === 'win32') {
     execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, timeout: 5_000 }, () => {
       // taskkill may already have finished the job or the process may be gone; either way, belt and braces.
