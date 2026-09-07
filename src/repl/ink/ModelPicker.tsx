@@ -74,12 +74,17 @@ export function ModelPicker({
     return models.filter((m) => `${m.model} ${m.label}`.toLowerCase().includes(q));
   }, [models, query]);
 
+  // "grok-4.6" is not the "grok-4" row: a row matches the active model when
+  // the ids are equal or the active id continues past the row's id at a
+  // family boundary (a date-suffixed catalog id such as claude-opus-4-7-20251001).
+  const matchesCurrent = (m: ModelInfo): boolean =>
+    m.provider === currentProvider && (currentModel === m.model || currentModel.startsWith(`${m.model}-`));
+
   // Pre-select the active model if it matches one in this provider's list;
   // else the first row.
   const initialIdx = useMemo(() => {
     for (let i = 0; i < models.length; i++) {
-      const m = models[i]!;
-      if (m.provider === currentProvider && currentModel.startsWith(m.model)) return i;
+      if (matchesCurrent(models[i]!)) return i;
     }
     return 0;
   }, [models, currentProvider, currentModel]);
@@ -175,8 +180,7 @@ export function ModelPicker({
           {visible.map((m, offset) => {
             const i = start + offset;
             const selected = i === selectedIdx;
-            const isCurrent =
-              m.provider === currentProvider && currentModel.startsWith(m.model);
+            const isCurrent = matchesCurrent(m);
             const isDefault = m.provider === defaultProvider && m.model === defaultModel;
             const marker = selected ? '▸' : ' ';
             const labelColor = selected ? t.teal : isCurrent ? t.add : t.ink;
