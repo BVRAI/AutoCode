@@ -16,6 +16,8 @@
     { "waitFor": "/Second turn done/", "timeoutMs": 60000 },
     { "waitFor": "/mode on\\s+·\\s+\\? for shortcuts/", "timeoutMs": 30000 },
     { "waitIdle": 800 },
+    { "waitFor": "/mode on\\s+·\\s+\\? for shortcuts/", "timeoutMs": 30000 },
+    { "waitIdle": 800 },
     { "snapshot": "after-implement" }
   ]
 }
