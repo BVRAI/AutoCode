@@ -40,9 +40,10 @@ describe('XaiProvider and the reasoning_effort parameter', () => {
   });
 
   it('retries once without the parameter and remembers the model for the session', async () => {
+    // A fresh Response per call: a body can only be read once.
     fetchSpy
       .mockResolvedValueOnce(new Response(rejection, { status: 400, headers: { 'content-type': 'application/json' } }))
-      .mockResolvedValue(new Response(JSON.stringify(ok), { status: 200, headers: { 'content-type': 'application/json' } }));
+      .mockImplementation(async () => new Response(JSON.stringify(ok), { status: 200, headers: { 'content-type': 'application/json' } }));
     const provider = new XaiProvider({ kind: 'byok', apiKey: 'k' });
 
     const first = await provider.complete(req);
