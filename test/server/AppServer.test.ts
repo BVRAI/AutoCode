@@ -96,7 +96,14 @@ beforeAll(() => {
     JSON.stringify({
       delayMs: 0,
       turns: [
-        { thinking: 'Reading the readme first.', tools: [{ name: 'read_file', input: { path: 'README.md' } }] },
+        {
+          thinking: 'Reading the readme first.',
+          tools: [
+            { name: 'read_file', input: { path: 'README.md' } },
+            { name: 'todo_write', input: { action: 'set', items: [{ id: 't1', text: 'read the readme', status: 'completed' }, { id: 't2', text: 'answer', status: 'in_progress' }] } },
+            { name: 'write_file', input: { path: 'NOTES.md', content: 'notes from the server test\n' } },
+          ],
+        },
         { text: 'Hello from the server test.', usage: { inputTokens: 500, outputTokens: 20 } },
         { tools: [{ name: 'run_shell', input: { command: 'git push --force origin main' } }] },
         { text: 'Second turn done.' },
@@ -148,7 +155,18 @@ describe('AppServer over stdio (Phase 5.1)', () => {
     expect(caps['streaming']).toBe(true);
     expect(caps['items']).toContain('tool_call');
 
-    const created = await client.call('session.new', { projectRoot: project, mode: 'autocode', provider: 'xai', model: 'grok-code-fast-1' });
+    const created = await client.call('session.new', {
+      projectRoot: project,
+      mode: 'autocode',
+      provider: 'xai',
+      model: 'grok-code-fast-1',
+      // Host-supplied policy: a verify command that always passes, a cost
+      // ceiling and a briefing for the system prompt.
+      autoVerify: true,
+      verifyCommand: 'node -e "process.exit(0)"',
+      maxCostUsd: 1,
+      systemAppendix: 'This session is driven by the AppServer test.',
+    });
     expect(created.error).toBeUndefined();
     expect(typeof created.result?.['sessionId']).toBe('string');
     expect(created.result?.['mode']).toBe('autocode');
@@ -170,6 +188,17 @@ describe('AppServer over stdio (Phase 5.1)', () => {
     expect(String(reasoning?.['text'])).toContain('Reading the readme first.');
     const message = items.find((i) => i['type'] === 'agent_message');
     expect(String(message?.['text'])).toContain('Hello from the server test.');
+    // The checklist and the verify run reach the host as their own items.
+    const todo = items.find((i) => i['type'] === 'todo');
+    expect(todo?.['items']).toEqual([
+      { id: 't1', text: 'read the readme', status: 'completed' },
+      { id: 't2', text: 'answer', status: 'in_progress' },
+    ]);
+    const verification = items.find((i) => i['type'] === 'verification');
+    expect(verification?.['passed']).toBe(true);
+    expect(String(verification?.['command'])).toContain('process.exit(0)');
+    const change = items.find((i) => i['type'] === 'file_change');
+    expect(String(change?.['path'])).toContain('NOTES.md');
     expect(client.notifications('item.updated').some((m) => (m.params?.['item'] as Record<string, unknown>)['type'] === 'agent_message')).toBe(true);
     expect(client.notifications('usage').length).toBeGreaterThan(0);
 

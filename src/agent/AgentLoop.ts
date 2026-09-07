@@ -15,7 +15,7 @@ import { contextWindowFor, defaultMaxOutputTokens, shouldAutoCompact, shouldMask
 import { classifyCommand } from '../safety/SafetyPolicy.js';
 import type { SubagentFactory } from '../tools/types.js';
 import type { ApproveDetail, ApproveVerdict } from '../repl/Prompter.js';
-import { resolveVerifyPlanForFiles, runVerification } from './Verify.js';
+import { resolveVerifyPlanForFiles, runVerification, type VerifyResult } from './Verify.js';
 import { adoptIndexIfReady, invalidateRepoMap, refreshRepoMapIfStale } from './RepoMap.js';
 import { indexEnabled, peekIndex, startIndex } from '../index/IndexManager.js';
 import { trace, traced, tracedSync } from '../util/trace.js';
@@ -134,6 +134,14 @@ export interface AgentDeps {
 }
 
 export class AgentLoop {
+  // Every verification run (check stages, focused and full test runs) also
+  // reaches the host as a `verification` event.
+  private async verifyAndEmit(command: string, root: string, cancelled: () => boolean): Promise<VerifyResult> {
+    const r = await runVerification(command, root, cancelled);
+    this.deps.emitter.emit('verification', { command, passed: r.ok, exitCode: r.code, output: r.output.slice(-4_000) });
+    return r;
+  }
+
   private cancelled = false;
   // Abort handle for the in-flight LLM request — cancel() aborts it so Esc
   // stops generation immediately instead of waiting for the stream to finish.
@@ -578,7 +586,7 @@ export class AgentLoop {
         let stageFailed = false;
         for (const stage of stages) {
           this.deps.renderer.spinner.start(`verifying — ${stage.label}: $ ${stage.command}`);
-          const s = await runVerification(stage.command, ctx.projectRoot, () => this.cancelled);
+          const s = await this.verifyAndEmit(stage.command, ctx.projectRoot, () => this.cancelled);
           this.deps.renderer.spinner.stop();
           if (this.cancelled) break;
           if (s.ok || /not recognized|command not found|ENOENT|npm ERR! could not determine executable|Cannot find module/i.test(s.output.slice(0, 400)) && s.code !== 1) {
@@ -611,7 +619,7 @@ export class AgentLoop {
         }
 
         this.deps.renderer.spinner.start(`verifying — $ ${plan.command}`);
-        let v = await runVerification(plan.command, ctx.projectRoot, () => this.cancelled);
+        let v = await this.verifyAndEmit(plan.command, ctx.projectRoot, () => this.cancelled);
         this.deps.renderer.spinner.stop();
         if (this.cancelled) break;
 
@@ -620,7 +628,7 @@ export class AgentLoop {
         // full suite for a truthful signal instead of a misleading fix loop.
         if (!v.ok && plan.fullCommand && /No test files found/i.test(v.output)) {
           this.deps.renderer.spinner.start(`verifying — $ ${plan.fullCommand}`);
-          v = await runVerification(plan.fullCommand, ctx.projectRoot, () => this.cancelled);
+          v = await this.verifyAndEmit(plan.fullCommand, ctx.projectRoot, () => this.cancelled);
           this.deps.renderer.spinner.stop();
           if (this.cancelled) break;
           plan.command = plan.fullCommand;
@@ -633,7 +641,7 @@ export class AgentLoop {
           // regression the verify loop exists to catch.
           this.deps.renderer.status(`  ✓ focused tests passed ($ ${plan.command})`);
           this.deps.renderer.spinner.start(`verifying full suite — $ ${plan.fullCommand}`);
-          const fullRun = await runVerification(plan.fullCommand, ctx.projectRoot, () => this.cancelled);
+          const fullRun = await this.verifyAndEmit(plan.fullCommand, ctx.projectRoot, () => this.cancelled);
           this.deps.renderer.spinner.stop();
           if (this.cancelled) break;
           if (fullRun.ok) {
@@ -1140,6 +1148,10 @@ export class AgentLoop {
         this.deps.renderer.spinner.stop();
         if (tu.name === 'use_skill' && !result.isError && typeof tu.input['name'] === 'string') {
           this.invokedSkills.add(tu.input['name'] as string);
+        }
+        // Hosts render the checklist from this event (the Plan card in Automax).
+        if (tu.name === 'todo_write' && !result.isError) {
+          this.deps.emitter.emit('todo', { items: currentTodos(ctx.sessionId).map((t) => ({ id: t.id, text: t.text, status: t.status })) });
         }
         this.deps.emitter.emit('tool_result', {
           name: tu.name,

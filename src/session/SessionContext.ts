@@ -48,6 +48,9 @@ export interface SessionContext {
   // Opt-in OS sandbox for `run_shell` (config `sandbox`; see safety/Sandbox.ts).
   // Absent or `enabled: false` = commands run as today.
   sandbox?: SandboxConfig;
+  // Host-supplied text appended to the system prompt's stable part (Automax
+  // passes a workspace briefing here). Absent for standalone runs.
+  systemAppendix?: string;
 }
 
 // Shift+Tab cycle order: default → autocode → planning → default.

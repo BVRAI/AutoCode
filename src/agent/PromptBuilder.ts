@@ -244,7 +244,11 @@ Nothing saved yet for this project. When you learn something worth keeping acros
     }
   }
 
-  return { system: sections.join('\n'), systemVolatile: volatileParts.filter(Boolean).join('\n') };
+  // A host's briefing (Automax passes the workspace group's context) sits at
+  // the end of the stable part: cacheable, and after the harness's own rules.
+  const appendix = ctx.systemAppendix?.trim();
+  const system = appendix ? `${sections.join('\n')}\n\n## From the host application\n${appendix}` : sections.join('\n');
+  return { system, systemVolatile: volatileParts.filter(Boolean).join('\n') };
 }
 
 /** Convenience: the full prompt as one string (stable prefix + volatile suffix

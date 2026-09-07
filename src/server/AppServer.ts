@@ -42,6 +42,16 @@ import {
 
 const MODES: AgentMode[] = ['planning', 'default', 'autocode', 'admin', 'sights'];
 
+// `session.new` apiKeys → the environment variables the providers read.
+const API_KEY_ENV: Record<string, string> = {
+  anthropic: 'ANTHROPIC_API_KEY',
+  openai: 'OPENAI_API_KEY',
+  google: 'GOOGLE_API_KEY',
+  xai: 'XAI_API_KEY',
+  openrouter: 'OPENROUTER_API_KEY',
+  brave: 'BRAVE_API_KEY',
+};
+
 class RpcError extends Error {
   constructor(
     readonly code: number,
@@ -214,6 +224,21 @@ export class AppServer {
     }
     const effortRaw = typeof p['effort'] === 'string' ? parseEffortSetting(p['effort'] as string) : null;
     const mode = MODES.includes(p['mode'] as AgentMode) ? (p['mode'] as AgentMode) : 'default';
+    // Host-supplied per-session policy: turn ceilings, sampling, a system
+    // appendix, the verify policy, and BYOK keys (exported to the process
+    // environment, which is where the providers look; never logged).
+    const num = (k: string): number | undefined => (typeof p[k] === 'number' && Number.isFinite(p[k] as number) ? (p[k] as number) : undefined);
+    const maxCostUsd = num('maxCostUsd');
+    const maxIterations = num('maxIterations');
+    const temperature = num('temperature');
+    const systemAppendix = typeof p['systemAppendix'] === 'string' && (p['systemAppendix'] as string).trim() ? (p['systemAppendix'] as string) : undefined;
+    const autoVerify = typeof p['autoVerify'] === 'boolean' ? (p['autoVerify'] as boolean) : undefined;
+    const verifyCommand = typeof p['verifyCommand'] === 'string' && (p['verifyCommand'] as string).trim() ? (p['verifyCommand'] as string) : undefined;
+    const keys = p['apiKeys'] && typeof p['apiKeys'] === 'object' ? (p['apiKeys'] as Record<string, unknown>) : {};
+    for (const [prov, key] of Object.entries(keys)) {
+      const envName = API_KEY_ENV[prov];
+      if (envName && typeof key === 'string' && key.trim()) process.env[envName] = key.trim();
+    }
     const ctx: SessionContext = {
       sessionId,
       projectRoot: root,
@@ -225,6 +250,9 @@ export class AppServer {
       locale: typeof p['locale'] === 'string' ? (p['locale'] as string) : process.env.AUTOMAX_LOCALE?.trim() || undefined,
       effort: (effortRaw ?? cfg.effort?.[`${provider}/${model}`] ?? cfg.defaultEffort ?? undefined) as EffortSetting | undefined,
       sandbox: cfg.sandbox,
+      sampling: temperature !== undefined ? { temperature } : undefined,
+      budget: maxCostUsd !== undefined || maxIterations !== undefined ? { maxCostUsd, maxIterations } : undefined,
+      systemAppendix,
     };
     const renderer = new ConsoleRenderer();
     const sink = new ServerSink((method, params) => this.notify(method, params));
@@ -239,7 +267,7 @@ export class AppServer {
       const found = trustSensitiveContent(root);
       if (found.length > 0 && (await prompter.confirm(trustPrompt(root, found)))) markTrusted(root);
     }
-    const agent = new LiveAgent(renderer, store, { checkpoints, prompter: new PrompterRef(prompter), emitter: sink, mode });
+    const agent = new LiveAgent(renderer, store, { checkpoints, prompter: new PrompterRef(prompter), emitter: sink, mode, autoVerify, verifyCommand });
     if (resumed) {
       const loaded = store.loadConversation();
       if (loaded) agent.loadState(loaded);

@@ -193,6 +193,14 @@ export class ServerSink implements RendererSink, EventEmitter {
       case 'file_edit_proposed':
         this.notify('item.completed', { item: { id: this.nextId('edit'), type: 'note', turnId: this.turnId, level: 'info', text: `${data['summary'] ?? 'edit'} ${data['path'] ?? ''}`.trim() } });
         return;
+      case 'todo':
+        this.notify('item.completed', { item: { id: this.nextId('todo'), type: 'todo', turnId: this.turnId, items: data['items'] ?? [] } });
+        return;
+      case 'verification':
+        this.notify('item.completed', {
+          item: { id: this.nextId('verify'), type: 'verification', turnId: this.turnId, command: data['command'], passed: data['passed'] === true, exitCode: data['exitCode'] ?? null, output: data['output'] ?? '' },
+        });
+        return;
       case 'completed':
         for (const o of this.openTools) this.notify('item.completed', { item: { id: o.id, type: 'tool_call', turnId: this.turnId, name: o.name, status: 'ok' } });
         this.openTools.length = 0;

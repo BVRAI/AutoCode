@@ -43,7 +43,15 @@ export class LiveAgent implements AgentHandler {
   constructor(
     private readonly renderer: ConsoleRenderer,
     store: TranscriptStore,
-    opts: { checkpoints?: CheckpointStore; prompter: Prompter; emitter?: EventEmitter; mode?: import('../session/SessionContext.js').AgentMode },
+    opts: {
+      checkpoints?: CheckpointStore;
+      prompter: Prompter;
+      emitter?: EventEmitter;
+      mode?: import('../session/SessionContext.js').AgentMode;
+      // A host's per-session verification policy (overrides config.json).
+      autoVerify?: boolean;
+      verifyCommand?: string;
+    },
   ) {
     const router = new LlmRouter();
     this.router = router;
@@ -76,8 +84,8 @@ export class LiveAgent implements AgentHandler {
       choose: (question, options, multiSelect) => opts.prompter.choose(question, options, multiSelect),
       subagentFactory: (input) => runner.run(input),
       checkpoints: this.checkpoints,
-      autoVerify: config.autoVerify !== false,
-      verifyCommand: config.verifyCommand,
+      autoVerify: opts.autoVerify ?? config.autoVerify !== false,
+      verifyCommand: opts.verifyCommand ?? config.verifyCommand,
       review: process.env.AUTOCODE_REVIEW === 'auto' ? true : process.env.AUTOCODE_REVIEW === 'off' ? false : config.review !== 'off',
       emitter: opts.emitter ?? new NullEventEmitter(),
       hooks: this.hooks,
