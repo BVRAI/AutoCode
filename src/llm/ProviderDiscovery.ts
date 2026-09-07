@@ -108,9 +108,10 @@ export function parseProviderModels(provider: DiscoverableProvider, body: unknow
       // (grok-4.6: 20000 → $2). Every entry also lists its aliases. The row
       // shows the name people know: a bundled-known alias that heads the
       // pinned id ("grok-4.20" for "grok-4.20-0309-reasoning"), else the
-      // undated alias ("grok-4.20-non-reasoning"), else the id itself. A
-      // bundled-known alias of a differently named model (grok-code-fast-1
-      // → grok-build-0.1) gets its own row so old configs still find it.
+      // undated alias ("grok-4.20-non-reasoning"), else the id itself. Aliases
+      // of a differently named model (grok-code-fast-1 → grok-build-0.1) are
+      // not rows: the real name is listed and xAI still honours the old one
+      // when typed.
       for (const e of asArray(obj['models'] ?? obj['data'])) {
         const id = str(e['id']);
         if (!id) continue;
@@ -125,9 +126,6 @@ export function parseProviderModels(provider: DiscoverableProvider, body: unknow
         const known = aliases.filter((alias) => alias in (RATES['xai'] ?? {}));
         const display = known.find((alias) => id.startsWith(alias)) ?? undatedAlias(id, aliases);
         push({ id: display, ...price, vision, aliasOf: display === id ? undefined : id });
-        for (const alias of known) {
-          if (alias !== display) push({ id: alias, ...price, vision, aliasOf: id });
-        }
       }
       break;
     }

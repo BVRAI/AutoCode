@@ -65,18 +65,18 @@ const OPENROUTER = {
 const NOW = Date.parse('2026-09-07T00:00:00Z');
 
 describe('parseProviderModels', () => {
-  it('xai: prices in 1/10,000 USD per million, known aliases as the rows, renamed aliases as extra rows', () => {
+  it('xai: prices in 1/10,000 USD per million, known aliases name the rows, renamed aliases are not rows', () => {
     const models = parseProviderModels('xai', XAI);
-    expect(models.map((m) => m.id)).toEqual(['grok-4.6', 'grok-4.20', 'grok-build-0.1', 'grok-code-fast-1']);
+    expect(models.map((m) => m.id)).toEqual(['grok-4.6', 'grok-4.20', 'grok-build-0.1']);
     expect(models[0]).toMatchObject({ inputPerM: 2, outputPerM: 6, cacheReadPerM: 0.5, vision: true });
     expect(models[1]).toMatchObject({ aliasOf: 'grok-4.20-0309-reasoning', inputPerM: 1.25 });
+    expect(models[2]).toMatchObject({ inputPerM: 1, outputPerM: 2, cacheReadPerM: 0.2 });
     // Without a bundled-known alias the undated alias names the row.
     const nonReasoning = parseProviderModels('xai', {
       models: [{ id: 'grok-4.20-0309-non-reasoning', prompt_text_token_price: 12500, completion_text_token_price: 25000, aliases: ['grok-4.20-non-reasoning', 'grok-4.20-non-reasoning-latest'] }],
     });
     expect(nonReasoning.map((m) => m.id)).toEqual(['grok-4.20-non-reasoning']);
     expect(models[2]!.aliasOf).toBeUndefined();
-    expect(models[3]).toMatchObject({ aliasOf: 'grok-build-0.1', inputPerM: 1, outputPerM: 2, cacheReadPerM: 0.2 });
   });
 
   it('openai: drops non-chat ids, dated twins and models past their shutdown date', () => {
@@ -140,7 +140,7 @@ describe('toModelInfos', () => {
     expect(xai.infos[0]).toMatchObject({ model: 'grok-4.6', label: 'Grok 4.6', inputPerM: 2, outputPerM: 6, notes: 'frontier' });
     expect(xai.infos[1]).toMatchObject({ model: 'grok-4.20', label: 'Grok 4.20', notes: 'mid-tier · alias of grok-4.20-0309-reasoning' });
     expect(xai.infos[2]).toMatchObject({ model: 'grok-build-0.1', label: 'Grok Build 0.1' });
-    expect(xai.infos[3]).toMatchObject({ model: 'grok-code-fast-1', label: 'Grok Code Fast 1', notes: 'alias of grok-build-0.1 (current default)' });
+    expect(xai.infos).toHaveLength(3);
     expect(xai.rates['grok-4.20-0309-reasoning']?.inputPerM).toBe(1.25);
     expect(xai.unpriced).toEqual([]);
 
@@ -206,7 +206,7 @@ describe('discoverModels', () => {
     expect(report.providers.map((p) => `${p.provider}:${p.source}:${p.count}`)).toEqual([
       'anthropic:no-key:0',
       'openai:fresh:5',
-      'xai:fresh:4',
+      'xai:fresh:3',
       'google:no-key:0',
       'openrouter:no-key:0',
     ]);
@@ -224,11 +224,11 @@ describe('discoverModels', () => {
     const known = getKnownModels();
     const providersInOrder = [...new Set(known.map((m) => m.provider))];
     expect(providersInOrder).toEqual(['anthropic', 'xai', 'openai', 'openrouter']);
-    expect(known.filter((m) => m.provider === 'xai').map((m) => m.model)).toEqual(['grok-4.6', 'grok-4.20', 'grok-code-fast-1', 'grok-build-0.1']);
+    expect(known.filter((m) => m.provider === 'xai').map((m) => m.model)).toEqual(['grok-4.6', 'grok-4.20', 'grok-build-0.1']);
     expect(known.find((m) => m.provider === 'anthropic')!.label).toBe('Claude Fable 5.1');
     expect(known.filter((m) => m.provider === 'openai')[0]!.model).toBe('gpt-9-nova');
 
-    expect(rateFor('xai', 'grok-code-fast-1')).toMatchObject({ inputPerM: 1, outputPerM: 2 });
+    expect(rateFor('xai', 'grok-build-0.1')).toMatchObject({ inputPerM: 1, outputPerM: 2 });
     expect(rateFor('xai', 'grok-4.20-0309-reasoning')?.inputPerM).toBe(1.25);
     expect(rateFor('openai', 'gpt-9-nova')).toMatchObject({ inputPerM: 7, outputPerM: 21 });
 
@@ -242,8 +242,8 @@ describe('discoverModels', () => {
     const log: Array<{ url: string; headers: Record<string, string> }> = [];
     await discoverModels({ keyFor, fetchImpl: fakeFetch(BODIES, log) });
     const report = await discoverModels({ keyFor, force: true, fetchImpl: fakeFetch({}, log) });
-    expect(report.providers.find((p) => p.provider === 'xai')).toMatchObject({ source: 'cache', count: 4 });
-    expect(getKnownModels().filter((m) => m.provider === 'xai')).toHaveLength(4);
+    expect(report.providers.find((p) => p.provider === 'xai')).toMatchObject({ source: 'cache', count: 3 });
+    expect(getKnownModels().filter((m) => m.provider === 'xai')).toHaveLength(3);
   });
 
   it('with no cache and no network the bundled rows stay', async () => {

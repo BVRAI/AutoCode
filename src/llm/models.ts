@@ -74,8 +74,8 @@ const EXTRA_METADATA: Record<string, ModelMeta> = {
 
   // xai — grok reasoning models reason unconditionally; there is no request
   // param to arm (they return reasoning_content on their own).
-  'grok-build':       { label: 'Grok Build',        notes: 'coding-tuned' },
-  'grok-code-fast-1': { label: 'Grok Code Fast 1',  notes: 'alias of grok-build-0.1 (current default)' },
+  'grok-build':       { label: 'Grok Build',        notes: 'coding-tuned (current default)' },
+  'grok-code-fast-1': { label: 'Grok Code Fast 1',  notes: 'old name · alias of grok-build-0.1' },
   'grok-4.6':         { label: 'Grok 4.6',          notes: 'frontier' },
   'grok-4.5':         { label: 'Grok 4.5',          notes: 'frontier' },
   'grok-4.3':         { label: 'Grok 4.3',          notes: 'mid-tier' },
@@ -273,7 +273,7 @@ export function modelBadges(m: ModelInfo): string[] {
 const CHEAP_SUMMARIZER: Record<string, string> = {
   anthropic: 'claude-haiku-4-5',
   openai: 'gpt-4.1',
-  xai: 'grok-code-fast-1',
+  xai: 'grok-build-0.1',
 };
 
 export function summarizerModelFor(provider: string, sessionModel: string): string {
@@ -298,7 +298,7 @@ function hardcodedDefaultModelFor(provider: string): string {
     case 'anthropic':
       return 'claude-opus-4-7';
     case 'xai':
-      return 'grok-code-fast-1';
+      return 'grok-build-0.1';
     case 'openai':
       return 'gpt-5.1';
     case 'google':
