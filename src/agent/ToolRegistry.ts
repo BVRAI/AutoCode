@@ -20,6 +20,7 @@ import { TaskTool } from '../tools/task.js';
 import { UseSkillTool } from '../tools/useSkill.js';
 import { FindSymbolTool } from '../tools/findSymbol.js';
 import { FileDepsTool } from '../tools/fileDeps.js';
+import { SearchCommitsTool, ShowCommitTool } from '../tools/gitHistory.js';
 import { SearchEntityTool } from '../tools/searchEntity.js';
 import { TraverseGraphTool } from '../tools/traverseGraph.js';
 import { RetrieveEntityTool } from '../tools/retrieveEntity.js';
@@ -66,7 +67,17 @@ export class ToolRegistry {
     this.register(new FileDepsTool());
     this.registerIndexTools();
     this.register(new SaveMemoryTool());
+    this.registerGitHistoryTools();
     this.syncOptionalTools();
+  }
+
+  // Git-history tools ("where was this last changed"). Optional: they defer
+  // behind tool_search once the registry is large, and are absent where
+  // there is no repository to ask (AUTOCODE_NO_GIT_TOOLS=1 hides them).
+  private registerGitHistoryTools(): void {
+    if (process.env.AUTOCODE_NO_GIT_TOOLS === '1') return;
+    this.registerOptional(new SearchCommitsTool());
+    this.registerOptional(new ShowCommitTool());
   }
 
   // The tree-sitter code index tools (Phase 3). AUTOCODE_NO_INDEX=1 keeps
@@ -109,6 +120,7 @@ export class ToolRegistry {
         r.register(new FindSymbolTool());
         r.register(new FileDepsTool());
         r.registerIndexTools();
+        r.registerGitHistoryTools();
         if (webToolsEnabled() && !benchMode()) {
           r.register(new WebFetchTool());
           r.register(new WebSearchTool());
@@ -123,6 +135,7 @@ export class ToolRegistry {
         r.register(new FindSymbolTool());
         r.register(new FileDepsTool());
         r.registerIndexTools();
+        r.registerGitHistoryTools();
         break;
       case 'Review':
         // Read-only, graph-aware: the reviewer verifies claims in the code

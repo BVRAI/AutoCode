@@ -110,7 +110,7 @@ plus `/<skill-name> …` for any installed skill. `@path` attaches a file, folde
 
 File and search: `read_file` (line-based), `edit_file`, `write_file`, `create_directory`,
 `delete_path`, `list_directory`, `glob`, `grep`. Code navigation: `find_symbol`, `file_deps`,
-`search_entity`, `traverse_graph`, `retrieve_entity`. Work: `run_shell`, `task` (Explore,
+`search_entity`, `traverse_graph`, `retrieve_entity`, `search_commits`, `show_commit`. Work: `run_shell`, `task` (Explore,
 Localize, Review and ComputerUse subagents), `todo_write`, `ask_user`, `use_skill`, `save_memory`,
 `tool_search` (loads optional tools on demand past 30 registered tools). Web: `web_fetch`,
 `web_search`, `open_in_browser`. Computer use: `capture_screenshot`, `computer_use_task` and the

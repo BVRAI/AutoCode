@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { afterAll, beforeAll, describe, it, expect } from 'vitest';
 import { DEFER_THRESHOLD, ToolRegistry } from '../../src/agent/ToolRegistry.js';
 import { ToolSearchTool } from '../../src/tools/toolSearch.js';
 import type { Tool } from '../../src/tools/types.js';
@@ -9,6 +9,18 @@ function fakeTool(name: string, description: string): Tool {
     execute: async () => ({ summary: 'ok', content: 'ok' }),
   };
 }
+
+// The built-in optional tools (git history) would shift the counts below;
+// this file is about the deferral mechanics, so keep the registry to the
+// eager core plus the fakes it registers.
+const savedGitTools = process.env.AUTOCODE_NO_GIT_TOOLS;
+beforeAll(() => {
+  process.env.AUTOCODE_NO_GIT_TOOLS = '1';
+});
+afterAll(() => {
+  if (savedGitTools === undefined) delete process.env.AUTOCODE_NO_GIT_TOOLS;
+  else process.env.AUTOCODE_NO_GIT_TOOLS = savedGitTools;
+});
 
 describe('deferred tools', () => {
   it('keeps a small optional set eager and defers past the threshold with a tool_search tool', () => {

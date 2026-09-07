@@ -55,6 +55,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transcript and tool log on disk, in the `<<AMX>>` event stream and in
   app-server notifications; the conversation the model sees is untouched
   (`AUTOCODE_NO_REDACT=1` disables).
+- Git-history tools `search_commits` (messages, or diffs with `in_diff`,
+  optionally under a path) and `show_commit` (message, stat and capped diff)
+  in the main, Explore and Localize registries — "where was this last
+  changed" as a localization signal (`AUTOCODE_NO_GIT_TOOLS=1` hides them).
 - Symbol `@`-mentions: `@renderDiff` (or `@src/app.ts#App`, `@App.render`)
   inlines that definition's source from the code index as a `<symbol>` block,
   the way `@path` inlines a file; an ambiguous bare name inlines the candidate
