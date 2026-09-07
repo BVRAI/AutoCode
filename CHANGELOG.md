@@ -55,6 +55,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transcript and tool log on disk, in the `<<AMX>>` event stream and in
   app-server notifications; the conversation the model sees is untouched
   (`AUTOCODE_NO_REDACT=1` disables).
+- `lsp` tool: definition, references, hover, diagnostics and a file's symbol
+  outline through the project's language server (TypeScript/JavaScript via
+  `typescript-language-server`, Python via pyright or pylsp, C# via
+  csharp-ls, Go via gopls, Rust via rust-analyzer), discovered in the project
+  and on PATH or pinned with `AUTOCODE_LSP_<LANGUAGE>="<command>"`; one server
+  per language per session, stopped at exit. The precision layer over the
+  tree-sitter index for re-exports, overloads, generics and path aliases
+  (`AUTOCODE_NO_LSP=1` hides it).
 - Git-history tools `search_commits` (messages, or diffs with `in_diff`,
   optionally under a path) and `show_commit` (message, stat and capped diff)
   in the main, Explore and Localize registries — "where was this last

@@ -22,6 +22,7 @@ import { mergeRules, normalizeRules, readProjectRules, type PermissionRules } fr
 import type { EventEmitter } from '../repl/EventEmitter.js';
 import { NullEventEmitter } from '../repl/EventEmitter.js';
 import { judgePrompt, parseJudgement, type Judgement } from './AutoApprover.js';
+import { shutdownLsp } from '../lsp/LspManager.js';
 import { benchMode } from './toolAvailability.js';
 import type { AutocodeConfig } from '../auth/ConfigStore.js';
 
@@ -186,6 +187,7 @@ export class LiveAgent implements AgentHandler {
 
   async shutdown(): Promise<void> {
     await this.mcp.closeAll();
+    await shutdownLsp(this.projectRoot);
   }
 
   // Forward to AgentLoop — used by the Ink Bridge UI to install its own

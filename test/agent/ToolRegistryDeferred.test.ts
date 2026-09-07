@@ -14,12 +14,16 @@ function fakeTool(name: string, description: string): Tool {
 // this file is about the deferral mechanics, so keep the registry to the
 // eager core plus the fakes it registers.
 const savedGitTools = process.env.AUTOCODE_NO_GIT_TOOLS;
+const savedLsp = process.env.AUTOCODE_NO_LSP;
 beforeAll(() => {
   process.env.AUTOCODE_NO_GIT_TOOLS = '1';
+  process.env.AUTOCODE_NO_LSP = '1';
 });
 afterAll(() => {
   if (savedGitTools === undefined) delete process.env.AUTOCODE_NO_GIT_TOOLS;
   else process.env.AUTOCODE_NO_GIT_TOOLS = savedGitTools;
+  if (savedLsp === undefined) delete process.env.AUTOCODE_NO_LSP;
+  else process.env.AUTOCODE_NO_LSP = savedLsp;
 });
 
 describe('deferred tools', () => {

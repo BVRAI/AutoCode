@@ -21,6 +21,8 @@ import { UseSkillTool } from '../tools/useSkill.js';
 import { FindSymbolTool } from '../tools/findSymbol.js';
 import { FileDepsTool } from '../tools/fileDeps.js';
 import { SearchCommitsTool, ShowCommitTool } from '../tools/gitHistory.js';
+import { LspTool } from '../tools/lsp.js';
+import { lspDisabled } from '../lsp/LspManager.js';
 import { SearchEntityTool } from '../tools/searchEntity.js';
 import { TraverseGraphTool } from '../tools/traverseGraph.js';
 import { RetrieveEntityTool } from '../tools/retrieveEntity.js';
@@ -68,6 +70,7 @@ export class ToolRegistry {
     this.registerIndexTools();
     this.register(new SaveMemoryTool());
     this.registerGitHistoryTools();
+    this.registerLspTool();
     this.syncOptionalTools();
   }
 
@@ -78,6 +81,13 @@ export class ToolRegistry {
     if (process.env.AUTOCODE_NO_GIT_TOOLS === '1') return;
     this.registerOptional(new SearchCommitsTool());
     this.registerOptional(new ShowCommitTool());
+  }
+
+  // The language-server tool (precision layer over the index). Optional
+  // like the git tools; AUTOCODE_NO_LSP=1 hides it.
+  private registerLspTool(): void {
+    if (lspDisabled()) return;
+    this.registerOptional(new LspTool());
   }
 
   // The tree-sitter code index tools (Phase 3). AUTOCODE_NO_INDEX=1 keeps
@@ -121,6 +131,7 @@ export class ToolRegistry {
         r.register(new FileDepsTool());
         r.registerIndexTools();
         r.registerGitHistoryTools();
+        r.registerLspTool();
         if (webToolsEnabled() && !benchMode()) {
           r.register(new WebFetchTool());
           r.register(new WebSearchTool());
@@ -136,6 +147,7 @@ export class ToolRegistry {
         r.register(new FileDepsTool());
         r.registerIndexTools();
         r.registerGitHistoryTools();
+        r.registerLspTool();
         break;
       case 'Review':
         // Read-only, graph-aware: the reviewer verifies claims in the code
@@ -147,6 +159,7 @@ export class ToolRegistry {
         r.register(new FindSymbolTool());
         r.register(new FileDepsTool());
         r.registerIndexTools();
+        r.registerLspTool();
         break;
       case 'ComputerUse':
         r.register(new ListDirectoryTool());
