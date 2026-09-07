@@ -412,6 +412,12 @@ export function thinkingFor(
       return undefined;
     }
     case 'xai':
+      // xAI accepts `reasoning_effort` on the grok-3-mini family; the other
+      // Groks reason on their own and answer 400 to the parameter whatever a
+      // catalog says (grok-build-0.1 is flagged thinking-capable upstream).
+      // XaiProvider still retries without the parameter if a model rejects it.
+      if (!/^grok-3-mini/.test(model)) return undefined;
+      return { mode: 'effort', effort: level ?? 'medium' };
     case 'openrouter':
       if (!m?.supportsThinking) return undefined;
       return { mode: 'effort', effort: level ?? 'medium' };
