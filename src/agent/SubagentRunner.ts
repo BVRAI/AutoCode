@@ -9,6 +9,7 @@ import { defaultMaxOutputTokens } from '../util/contextWindow.js';
 import { thinkingFor } from '../llm/models.js';
 
 const MAX_EXPLORE_ITERATIONS = 16;
+const MAX_LOCALIZE_ITERATIONS = 20;
 const MAX_COMPUTER_USE_ITERATIONS = 10;
 const LOOP_DETECT_WINDOW = 10;
 const LOOP_DETECT_THRESHOLD = 3;
@@ -30,6 +31,8 @@ export interface SubagentRunResult {
     cacheWriteTokens?: number;
   };
   iterations: number;
+  /** Tool calls the subagent made (the transcript's "N tool uses"). */
+  toolCalls: number;
   error?: string;
 }
 
@@ -47,7 +50,8 @@ export class SubagentRunner {
     const registry = ToolRegistry.forSubagent(input.type);
     const systemPrompt = buildSubagentSystemPrompt(input.type, input.parent);
     const messages: Message[] = [{ role: 'user', content: input.prompt }];
-    const maxIterations = input.type === 'ComputerUse' ? MAX_COMPUTER_USE_ITERATIONS : MAX_EXPLORE_ITERATIONS;
+    const maxIterations =
+      input.type === 'ComputerUse' ? MAX_COMPUTER_USE_ITERATIONS : input.type === 'Localize' ? MAX_LOCALIZE_ITERATIONS : MAX_EXPLORE_ITERATIONS;
 
     const totalUsage = {
       inputTokens: 0,
@@ -56,6 +60,7 @@ export class SubagentRunner {
       cacheWriteTokens: 0,
     };
     let lastText = '';
+    let toolCalls = 0;
     const recentSigs: string[] = [];
 
     for (let iter = 0; iter < maxIterations; iter++) {
@@ -88,13 +93,14 @@ export class SubagentRunner {
 
       const toolUses = response.content.filter((b) => b.type === 'tool_use');
       if (toolUses.length === 0 || response.stopReason === 'end_turn') {
-        return { text: lastText, usage: totalUsage, iterations: iter + 1 };
+        return { text: lastText, usage: totalUsage, iterations: iter + 1, toolCalls };
       }
 
       const results: ContentBlock[] = [];
       const images: ContentBlock[] = [];
       for (const tu of toolUses) {
         if (tu.type !== 'tool_use') continue;
+        toolCalls += 1;
         const sig = `${tu.name}:${stableStringify(tu.input)}`;
         recentSigs.push(sig);
         if (recentSigs.length > LOOP_DETECT_WINDOW) recentSigs.shift();
@@ -159,6 +165,7 @@ export class SubagentRunner {
       text: lastText || '(subagent did not produce a final answer within iteration cap)',
       usage: totalUsage,
       iterations: maxIterations,
+      toolCalls,
       error: 'iteration cap reached',
     };
   }

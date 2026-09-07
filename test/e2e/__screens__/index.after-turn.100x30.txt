@@ -1,0 +1,30 @@
+
+╭────────────────────────────────────────────────────────────────────────────╮
+│  ▄▀█ █░█ ▀█▀ █▀█ █▀▀ █▀█ █▀▄ █▀▀                                           │
+│  █▀█ █▄█ ░█░ █▄█ █▄▄ █▄█ █▄▀ ██▄                                           │
+│                                                                            │
+│ ✻ AutoCode v0.2.0                                                          │
+│   xai/grok-code-fast-1 · project                                           │
+│   /help for commands · shift+tab cycles mode · ctrl+o expands results      │
+╰────────────────────────────────────────────────────────────────────────────╯
+
+ > where does the mode flag get parsed? who calls it?                                               
+
+✻ Thought for #DUR
+⏺ Localize(Find where the mode flag is parsed)
+  ⎿  Done (2 tool uses · 4.2k tokens · #DUR)
+⏺ Graph(src/util.ts#parseArgs)
+  ⎿  1 root(s), 2 entities, 1 edges (ctrl+o to expand)
+
+⏺ The --mode flag is parsed by parseArgs in src/util.ts (lines 6–15), which turns every --key=value 
+  argument into the Args map. Its only caller is src/cli.ts, which reads args.mode on line 4 and    
+  falls back to default.
+
+✻ Cooked for #DUR · done #CLOCK
+
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ >                                                                                                │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+⏵⏵ auto mode on  ·  ? for shortcuts  ·  shift+tab to cycle
+xai/grok-code-fast-1  ·  1% context                                                            $#COST
+

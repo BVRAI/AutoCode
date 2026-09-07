@@ -1,3 +1,4 @@
+import { parseLocalizeResult, renderLocalizeResult } from '../agent/Localize.js';
 import {
   requireString,
   type SubagentType,
@@ -7,7 +8,7 @@ import {
   type ToolResult,
 } from './types.js';
 
-const SUBAGENT_TYPES: readonly SubagentType[] = ['Explore'] as const;
+const SUBAGENT_TYPES: readonly SubagentType[] = ['Explore', 'Localize'] as const;
 
 const DEFINITION: ToolDefinition = {
   name: 'task',
@@ -24,8 +25,15 @@ const DEFINITION: ToolDefinition = {
     'For multi-part research (e.g. localizing a bug that could live in several ' +
     'subsystems), issue SEVERAL task calls in one message — they run in parallel, ' +
     'so N focused subagents finish in the time of the slowest one.\n\n' +
-    'The Explore subagent type has access to list_directory, read_file, glob, grep, ' +
-    'find_symbol, file_deps, web_fetch, and web_search — no edit/write/shell.',
+    'Subagent types:\n' +
+    '- "Explore": open-ended read-only research; returns prose. Tools: list_directory, read_file, ' +
+    'glob, grep, find_symbol, file_deps, search_entity, traverse_graph, retrieve_entity, web_fetch, web_search.\n' +
+    '- "Localize": answers "which code does this request mean?" on a large codebase. Walks the code ' +
+    'index (search_entity → traverse_graph → retrieve_entity) and returns a ranked list of ' +
+    'path:line spans with symbols, reasoning and confidence, plus an ambiguity note when two ' +
+    'readings of the request lead to different places. Use it before editing when the user names ' +
+    'a feature loosely ("the export button", "where tasks get materialized"). Give it the user\'s ' +
+    'words verbatim plus any hints you have.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -36,7 +44,7 @@ const DEFINITION: ToolDefinition = {
       subagent_type: {
         type: 'string',
         enum: [...SUBAGENT_TYPES],
-        description: 'Which subagent role to use. v0.1 supports only "Explore" (read-only research).',
+        description: '"Explore" for open-ended research (prose answer); "Localize" to find the code a request refers to (ranked path:line spans).',
       },
       prompt: {
         type: 'string',
@@ -94,16 +102,27 @@ export class TaskTool implements Tool {
     });
     const dt = Date.now() - t0;
 
+    // Localize returns a JSON contract; hand the parent the compact rendering
+    // and keep the structured result in metadata for hosts and tests.
+    let content = result.text;
+    let localized: ReturnType<typeof parseLocalizeResult> = null;
+    if (subagentType === 'Localize') {
+      localized = parseLocalizeResult(result.text);
+      if (localized) content = renderLocalizeResult(localized);
+    }
+
     return {
       summary: `${description} (${result.iterations} iter, ${dt}ms${result.error ? ', ' + result.error : ''})`,
-      content: result.text,
+      content,
       isError: Boolean(result.error),
       metadata: {
         subagentType,
         iterations: result.iterations,
+        toolUses: result.toolCalls ?? result.iterations,
         durationMs: dt,
         usage: result.usage,
         error: result.error,
+        ...(localized ? { locations: localized.locations, ambiguity: localized.ambiguity } : {}),
       },
     };
   }

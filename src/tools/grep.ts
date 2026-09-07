@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { glob } from 'tinyglobby';
 import { resolveInsideRoot, toRelative } from '../util/pathSafety.js';
+import { normalizePatterns } from './globPatterns.js';
 import {
   optionalBoolean,
   optionalNumber,
@@ -59,7 +60,7 @@ export class GrepTool implements Tool {
       };
     }
 
-    const files = await glob(filterGlob ?? '**/*', {
+    const files = await glob(filterGlob ? normalizePatterns(filterGlob, ctx.session.projectRoot) : '**/*', {
       cwd: searchRoot,
       onlyFiles: true,
       ignore: [

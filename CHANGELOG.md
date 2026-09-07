@@ -21,6 +21,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   composer draft survives), instead of leaving stale rows behind.
 
 ### Added
+- A tree-sitter code index (`src/index/`): every source file with a bundled
+  grammar (TypeScript, TSX, JavaScript, Python, Go, Rust, Java, C#, C, C++,
+  Ruby, PHP) becomes a graph of directories, files, text files and definitions
+  with `contains`, `imports`, `invokes` and `inherits` edges, a name table,
+  BM25 over identifier/path/signature tokens and PageRank over the file graph.
+  Built in the background at session start, cached per project under the data
+  dir and refreshed by a stat pass at each turn boundary. Vendored, minified
+  and generated files are indexed as files only; name-only call resolution
+  never points into tests and never feeds ranking. `AUTOCODE_NO_INDEX=1`
+  turns it all off.
+- Three navigation tools on the index: `search_entity` (ranked entities by
+  name, path fragment or keywords, fold/preview/full views), `traverse_graph`
+  (callers, importers, subclasses, calls, imports, members; 1–3 hops, bounded)
+  and `retrieve_entity` (a symbol's exact numbered span, or a file's outline).
+  Every listing is capped so small models never overflow.
+- A `Localize` subagent type for `task`: answers "which code does this request
+  mean?" through the search → graph → retrieve funnel and returns ranked
+  `path:line` spans with symbols, reasoning, confidence and an ambiguity note
+  the main agent turns into an `ask_user` question. Subagent rows now count
+  real tool uses, and the `task` row is labelled `Localize(…)` for that type.
+- Repo map v2: once the index is built the map comes from it (nested symbols,
+  docs and config included, PageRank over imports and calls) with a budget
+  scaled to the model's context window (~2%, 1.5k–8k tokens) instead of the
+  fixed 6 KB; a query-aware slice ("Likely relevant to this request", from
+  personalized PageRank seeded by the paths and identifiers in the prompt)
+  rides in the volatile suffix of the system prompt, so it never busts the
+  cached prefix. Subagents receive the map too. `/refresh` rebuilds both.
+- The large-codebase protocol in the system prompt now walks
+  `search_entity → traverse_graph → retrieve_entity`, delegates loose requests
+  to a `Localize` task, and asks the user (`ask_user`) when the top candidates
+  are close instead of guessing.
 - Thinking effort: `/effort low|medium|high|max|off|auto` (also `--effort`,
   `AUTOMAX_EFFORT`, remembered per model in config). Resolved per provider:
   Anthropic adaptive thinking + `output_config.effort` on Opus 4.7+/Sonnet 5/Opus 5

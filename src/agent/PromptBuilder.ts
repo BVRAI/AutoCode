@@ -6,16 +6,24 @@ import { getRepoMap, repoFileCount, LARGE_REPO_FILE_THRESHOLD } from './RepoMap.
 import { getSkills, renderSkillsSection } from './Skills.js';
 import { getGitWorkingState, renderSessionStateSection } from './SessionState.js';
 import { benchMode, computerUseEnabled } from './toolAvailability.js';
+import { buildQuerySlice } from './QuerySlice.js';
+import { indexEnabled, peekIndex } from '../index/IndexManager.js';
 
 export interface SystemPromptParts {
   /** Stable across a session — safe to send as a cached prefix. */
   system: string;
-  /** Volatile (refreshed every turn): the live git working-state block. Kept
-   *  out of the cached prefix so a file change doesn't bust the cache. */
+  /** Volatile (refreshed every turn): the live git working-state block and
+   *  the request's query slice of the repo map. Kept out of the cached
+   *  prefix so a file change or a new request doesn't bust the cache. */
   systemVolatile: string;
 }
 
-export function buildSystemPromptParts(ctx: SessionContext): SystemPromptParts {
+export interface SystemPromptOptions {
+  /** The current turn's user text — seeds the query-aware repo map slice. */
+  query?: string;
+}
+
+export function buildSystemPromptParts(ctx: SessionContext, opts: SystemPromptOptions = {}): SystemPromptParts {
   const os = `${platform()} ${release()}`;
   const project = detectProjectContext(ctx.projectRoot);
   const projectLine = formatContextLine(project);
@@ -63,6 +71,9 @@ You have these tools (the exact schemas are provided separately). Pick the small
 - \`grep\` — find lines by content (regex, ripgrep-style)
 - \`find_symbol\` — locate where a named identifier is *declared* and/or *used* across the project. Language-aware (knows TS/JS/Python/Go/Rust declaration patterns), faster + more precise than \`grep\` for symbol lookups. Use when you want "where is X defined" or "where is X used" rather than a generic text search.
 - \`file_deps\` — a file's position in the import graph: which files import it (the blast radius of a change) and which files it imports. Use before editing a shared file, or to trace where behavior comes from.
+- \`search_entity\` — find entities (files, classes, functions, methods, …) in the code index by name, path fragment or keywords; returns a ranked path:line list with signatures. The first step when a request names something loosely.
+- \`traverse_graph\` — walk the code graph from an entity: its callers/importers/subclasses (direction "in" — the blast radius) or what it calls/imports (direction "out").
+- \`retrieve_entity\` — read an entity's exact source span, or a file's outline (every definition with its line) to pick the symbol to read next.
 - \`read_file\` — read text with line numbers
 - \`edit_file\` — exact-match string replacement
 - \`write_file\` — create or rewrite a file
@@ -112,12 +123,13 @@ ${repoMap}`,
       `\n# Navigating a large codebase
 
 This project is large, so localize before you act — don't grep the whole tree or read files at random:
-1. Start from the Repository map above to pick the few candidate files.
-2. Narrow within them: use \`find_symbol\` to jump to where a name is defined or used, \`file_deps\` to see which files import a candidate (its blast radius) and what it depends on, and \`grep\` scoped to those files/dirs — not the whole repo.
-3. \`read_file\` only the relevant slices (use offset/length) once you know what to open.
+1. Start from the Repository map above (and the "Likely relevant to this request" list when one is present) to pick candidate files.
+2. Narrow with the code index: \`search_entity\` turns the user's words into ranked path:line candidates; \`traverse_graph\` shows who calls or imports a candidate (its blast radius) and what it depends on; \`retrieve_entity\` gives a file's outline or a symbol's exact span. Keep \`grep\` for literal strings and error messages, scoped to the candidate directories — not the whole repo.
+3. \`read_file\` only the relevant slices (offset = first line, limit = number of lines) once you know what to open.
 4. Work file → symbol → line: confirm the exact location before editing.
-5. For a bug fix, write a small reproduction script or failing test BEFORE editing — on a large codebase it doubles as proof you localized correctly.
-6. For a change spanning several files, delegate context-gathering to a \`task\` subagent so your own window stays focused.`,
+5. When the request names something loosely ("the export button", "where tasks get materialized"), delegate to a \`task\` subagent of type "Localize" with the user's words verbatim; it returns ranked spans with confidence. If its top candidates are close, or it reports an ambiguity, ask the user with \`ask_user\` — one question with the candidates as options — instead of guessing.
+6. For a bug fix, write a small reproduction script or failing test BEFORE editing — on a large codebase it doubles as proof you localized correctly.
+7. For a change spanning several files, delegate context-gathering to an "Explore" \`task\` so your own window stays focused.`,
     );
   }
 
@@ -180,9 +192,21 @@ The user has enabled computer use. When command-line tests are not enough for a 
   // support cache breakpoints (Anthropic) place the marker before this block,
   // keeping the large static prefix (role, repo map, instructions, skills)
   // cached across turns. Providers without breakpoints just concatenate it.
-  const systemVolatile = renderSessionStateSection(getGitWorkingState(ctx.projectRoot));
+  const volatileParts = [renderSessionStateSection(getGitWorkingState(ctx.projectRoot))];
 
-  return { system: sections.join('\n'), systemVolatile };
+  // Query-aware repo map slice (Phase 3): the files this request's words
+  // connect to, from the code index. Large repos only (same gate as the
+  // localization protocol) and only once the index is built.
+  const query = opts.query?.trim();
+  if (query && indexEnabled() && repoFileCount(ctx.projectRoot) >= LARGE_REPO_FILE_THRESHOLD) {
+    const index = peekIndex(ctx.projectRoot);
+    if (index) {
+      const slice = buildQuerySlice(index, query);
+      if (slice) volatileParts.push(slice);
+    }
+  }
+
+  return { system: sections.join('\n'), systemVolatile: volatileParts.filter(Boolean).join('\n') };
 }
 
 /** Convenience: the full prompt as one string (stable prefix + volatile suffix

@@ -1,5 +1,6 @@
 import { glob } from 'tinyglobby';
 import { toRelative } from '../util/pathSafety.js';
+import { normalizePatterns } from './globPatterns.js';
 import {
   optionalNumber,
   optionalString,
@@ -38,23 +39,19 @@ export class GlobTool implements Tool {
     const cwd = optionalString(args, 'cwd');
     const limit = optionalNumber(args, 'limit') ?? DEFAULT_LIMIT;
 
-    const patterns = pattern.includes(',') ? pattern.split(',').map((p) => p.trim()) : [pattern];
+    // Commas inside `{ts,tsx}` are brace alternatives, and `[locale]` route
+    // directories are literal names — see globPatterns.ts.
+    const patterns = normalizePatterns(pattern, ctx.session.projectRoot);
     const searchRoot = cwd
       ? // Resolve via path utility for safety
         (await import('../util/pathSafety.js')).resolveInsideRoot(ctx.session.projectRoot, cwd)
       : ctx.session.projectRoot;
+    const ignore = ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**', '**/.next/**', '**/coverage/**'];
 
     const matches = await glob(patterns, {
       cwd: searchRoot,
       onlyFiles: true,
-      ignore: [
-        '**/node_modules/**',
-        '**/.git/**',
-        '**/dist/**',
-        '**/build/**',
-        '**/.next/**',
-        '**/coverage/**',
-      ],
+      ignore,
       absolute: false,
       dot: false,
     });
@@ -62,17 +59,28 @@ export class GlobTool implements Tool {
     const sorted = matches.sort();
     const truncated = sorted.length > limit;
     const shown = truncated ? sorted.slice(0, limit) : sorted;
-    const displayPaths = shown.map((p) => {
+    const rel = (p: string): string => {
       if (cwd) {
         const abs = `${searchRoot}/${p}`.replace(/\\/g, '/');
         return toRelative(ctx.session.projectRoot, abs);
       }
       return p.split('\\').join('/');
-    });
-    const content =
+    };
+    const displayPaths = shown.map(rel);
+    let content =
       displayPaths.length === 0
         ? '(no matches)'
         : displayPaths.join('\n') + (truncated ? `\n… ${sorted.length - limit} more` : '');
+    if (sorted.length === 0) {
+      // A pattern like `src/app/**/signup*` usually means the directory; say
+      // so instead of a bare "no matches" so the next call can be right.
+      const dirs = (await glob(patterns, { cwd: searchRoot, onlyDirectories: true, ignore, absolute: false, dot: false })).sort();
+      if (dirs.length > 0) {
+        content =
+          `(no files match, but ${dirs.length} director${dirs.length === 1 ? 'y does' : 'ies do'}: ` +
+          `${dirs.slice(0, 10).map((d) => `${rel(d).replace(/\/$/, '')}/`).join(', ')}${dirs.length > 10 ? ', …' : ''} — add /** to list their files)`;
+      }
+    }
     return {
       summary: `${sorted.length} match${sorted.length === 1 ? '' : 'es'} for ${pattern}${truncated ? ' (truncated)' : ''}`,
       content,

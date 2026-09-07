@@ -2,6 +2,9 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { extname, join, relative, sep } from 'node:path';
 import { NOISE_DIRS } from '../tools/listDirectory.js';
 import { buildImportGraph, type ImportGraph } from './ImportGraph.js';
+import { peekIndex } from '../index/IndexManager.js';
+import type { CodeIndex } from '../index/CodeIndex.js';
+import { contextWindowFor } from '../util/contextWindow.js';
 
 const MAX_DIGEST_BYTES = 6000;
 const MAX_FILES = 400;
@@ -28,6 +31,10 @@ interface RepoMapInfo {
   digest: string;
   fileCount: number;
   graph: ImportGraph;
+  // Set when the digest came from the tree-sitter index (Phase 3): the
+  // index build it reflects and the byte budget it was packed into.
+  indexBuiltAt?: number;
+  budget?: number;
 }
 
 const mapCache = new Map<string, RepoMapInfo>();
@@ -63,6 +70,58 @@ export function refreshRepoMapIfStale(projectRoot: string): boolean {
 export function forceRefreshRepoMap(projectRoot: string): void {
   dirtyRoots.delete(projectRoot);
   mapCache.set(projectRoot, buildRepoMapInfo(projectRoot));
+}
+
+// Phase 3: once the tree-sitter index is ready, the digest comes from it —
+// every file with a grammar plus docs/config, symbols with nesting, PageRank
+// over imports AND calls, and a budget scaled to the model's context window
+// instead of the fixed 6 KB. Called at TURN boundaries only (AgentLoop.submit,
+// after the index's stat pass) so the digest — part of the cached
+// system-prompt prefix — never changes mid-turn. Returns true on a rebuild.
+export function adoptIndexIfReady(projectRoot: string, model?: { provider: string; model: string }): boolean {
+  const index = peekIndex(projectRoot);
+  if (!index || index.builtAt === 0) return false;
+  const budget = model ? repoMapBudgetBytes(model.provider, model.model) : MAX_DIGEST_BYTES;
+  const cached = mapCache.get(projectRoot);
+  if (cached && cached.indexBuiltAt === index.builtAt && cached.budget === budget) return false;
+  const base = cached ?? buildRepoMapInfo(projectRoot);
+  mapCache.set(projectRoot, { ...base, digest: indexDigest(index, budget), indexBuiltAt: index.builtAt, budget });
+  return true;
+}
+
+// Aider's rule of thumb scaled: ~2% of the window, between 1.5k and 8k
+// tokens (≈4 bytes per token of path-heavy text). A 200k model gets ~16 KB.
+export function repoMapBudgetBytes(provider: string, model: string): number {
+  const window = contextWindowFor(provider, model);
+  const tokens = Math.max(1500, Math.min(8000, Math.floor(window * 0.02)));
+  return tokens * 4;
+}
+
+// True when the current digest is index-backed (tests, /refresh output).
+export function repoMapIsIndexBacked(projectRoot: string): boolean {
+  return mapCache.get(projectRoot)?.indexBuiltAt !== undefined;
+}
+
+function indexDigest(index: CodeIndex, budget: number): string {
+  const files = index.filePaths();
+  const ranks = index.fileRanks();
+  const inDeg = (rel: string): number => index.edgesTo(rel, ['imports']).length;
+  const score = (rel: string): number => (ranks.get(rel) ?? 0) * (1 + inDeg(rel));
+  const ordered = [...files].sort((a, b) => {
+    if (score(b) !== score(a)) return score(b) - score(a);
+    if (inDeg(b) !== inDeg(a)) return inDeg(b) - inDeg(a);
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
+  const symbolsOf = (rel: string): string[] => {
+    const out: string[] = [];
+    for (const n of index.outline(rel)) {
+      if (n.parent) continue;
+      if (!out.includes(n.name)) out.push(n.name);
+      if (out.length >= MAX_SYMBOLS_PER_FILE) break;
+    }
+    return out;
+  };
+  return packDigest(ordered, symbolsOf, inDeg, budget);
 }
 
 // Number of source files scanned for the repo map (capped at MAX_FILES). A
@@ -129,14 +188,28 @@ function buildRepoMapInfo(projectRoot: string): RepoMapInfo {
     return a < b ? -1 : a > b ? 1 : 0;
   });
 
-  // Phase 1 — ranked symbol lines within the phase budget.
+  const digest = packDigest(ordered, (rel) => symbolsByRel.get(rel) ?? [], inDeg, MAX_DIGEST_BYTES);
+  return { digest, fileCount, graph };
+}
+
+// Pack ranked files into a digest: symbol lines first (phase 1, most of the
+// budget), then the leftover files as comma-packed bare paths so the tree
+// stays visible when detail doesn't fit (Aider's detail + coverage mix).
+// Shared by the regex map and the index-backed map so the model sees one
+// format either way.
+function packDigest(
+  ordered: readonly string[],
+  symbolsOf: (rel: string) => string[],
+  inDeg: (rel: string) => number,
+  maxBytes: number,
+): string {
   const lines: string[] = [];
   let bytes = 0;
-  const phase1Budget = Math.floor(MAX_DIGEST_BYTES * PHASE1_BUDGET_FRACTION);
+  const phase1Budget = Math.floor(maxBytes * PHASE1_BUDGET_FRACTION);
   let idx = 0;
   for (; idx < ordered.length; idx++) {
     const rel = ordered[idx]!;
-    const symbols = symbolsByRel.get(rel) ?? [];
+    const symbols = symbolsOf(rel);
     const n = inDeg(rel);
     const line =
       (symbols.length > 0 ? `${rel}  ·  ${symbols.join(', ')}` : rel) +
@@ -158,7 +231,7 @@ function buildRepoMapInfo(projectRoot: string): RepoMapInfo {
     for (const rel of rest) {
       const candidate = current === '' ? rel : `${current}, ${rel}`;
       if (candidate.length > 100 && current !== '') {
-        if (bytes + current.length + 1 > MAX_DIGEST_BYTES) {
+        if (bytes + current.length + 1 > maxBytes) {
           truncated = true;
           current = '';
           break;
@@ -171,7 +244,7 @@ function buildRepoMapInfo(projectRoot: string): RepoMapInfo {
       }
     }
     if (current !== '') {
-      if (bytes + current.length + 1 > MAX_DIGEST_BYTES) truncated = true;
+      if (bytes + current.length + 1 > maxBytes) truncated = true;
       else lines.push(current);
     }
     if (rest.length > 0 && idx < ordered.length && lines[lines.length - 1] === header && truncated === false) {
@@ -181,9 +254,7 @@ function buildRepoMapInfo(projectRoot: string): RepoMapInfo {
     }
   }
 
-  const digest =
-    lines.length === 0 ? '' : lines.join('\n') + (truncated ? '\n… (repo map truncated)' : '');
-  return { digest, fileCount, graph };
+  return lines.length === 0 ? '' : lines.join('\n') + (truncated ? '\n… (repo map truncated)' : '');
 }
 
 function collect(dir: string, out: string[], depth: number): void {

@@ -1,0 +1,16 @@
+{
+  "cols": 100,
+  "rows": 30,
+  "theme": "dark",
+  "mode": "autocode",
+  "fake": "./index.fake.json",
+  "project": "../fixtures/project",
+  "steps": [
+    { "waitFor": "/help for commands", "timeoutMs": 30000 },
+    { "type": "where does the mode flag get parsed? who calls it?" },
+    { "key": "enter" },
+    { "waitFor": "TURN_END", "timeoutMs": 60000 },
+    { "waitIdle": 600 },
+    { "snapshot": "after-turn" }
+  ]
+}

@@ -20,6 +20,9 @@ import { TaskTool } from '../tools/task.js';
 import { UseSkillTool } from '../tools/useSkill.js';
 import { FindSymbolTool } from '../tools/findSymbol.js';
 import { FileDepsTool } from '../tools/fileDeps.js';
+import { SearchEntityTool } from '../tools/searchEntity.js';
+import { TraverseGraphTool } from '../tools/traverseGraph.js';
+import { RetrieveEntityTool } from '../tools/retrieveEntity.js';
 import { ComputerUseTaskTool } from '../tools/computerUseTask.js';
 import { ComputerUseHostTool } from '../tools/computerUseHost.js';
 import { benchMode, computerUseEnabled, guiToolsEnabled, webToolsEnabled } from './toolAvailability.js';
@@ -55,7 +58,18 @@ export class ToolRegistry {
     this.register(new UseSkillTool());
     this.register(new FindSymbolTool());
     this.register(new FileDepsTool());
+    this.registerIndexTools();
     this.syncOptionalTools();
+  }
+
+  // The tree-sitter code index tools (Phase 3). AUTOCODE_NO_INDEX=1 keeps
+  // them out of the schema list entirely so a disabled index never tempts
+  // the model into calls that can only fail.
+  private registerIndexTools(): void {
+    if (process.env.AUTOCODE_NO_INDEX === '1') return;
+    this.register(new SearchEntityTool());
+    this.register(new TraverseGraphTool());
+    this.register(new RetrieveEntityTool());
   }
 
   // Factory for the `sights` mode registry (Automax V6's locked-down static
@@ -87,10 +101,21 @@ export class ToolRegistry {
         r.register(new GrepTool());
         r.register(new FindSymbolTool());
         r.register(new FileDepsTool());
+        r.registerIndexTools();
         if (webToolsEnabled() && !benchMode()) {
           r.register(new WebFetchTool());
           r.register(new WebSearchTool());
         }
+        break;
+      case 'Localize':
+        // Read-only, index-first: the "which code does the user mean" funnel.
+        r.register(new ListDirectoryTool());
+        r.register(new ReadFileTool());
+        r.register(new GlobTool());
+        r.register(new GrepTool());
+        r.register(new FindSymbolTool());
+        r.register(new FileDepsTool());
+        r.registerIndexTools();
         break;
       case 'ComputerUse':
         r.register(new ListDirectoryTool());

@@ -9,6 +9,7 @@ import type { Message, ContentBlock } from '../llm/types.js';
 import type { SubmitExtras } from './ink/composerText.js';
 import { readFileSync } from 'node:fs';
 import { buildAgentInput } from '../util/attachments.js';
+import { trace } from '../util/trace.js';
 import { estimateCost, formatUsd } from '../util/pricing.js';
 import { ConsoleRenderer } from './ConsoleRenderer.js';
 import { parse, type ParsedInput, type LocalCommandName } from './CommandParser.js';
@@ -71,6 +72,14 @@ export interface AgentHandler {
 // The legacy pinned-bar TUI (raw ANSI scroll regions + Screen/BottomBar/
 // LineEditor) was removed in Phase 36 — Bridge supersedes it cleanly,
 // and `runPlain` handles every environment where Bridge can't render.
+
+// Resize diagnostics for hosted terminals (ConPTY delivers resizes late or
+// not at all to idle processes): AUTOCODE_TRACE_LOG=<file> gets one line per
+// event, poll detection, remount and event-loop stall (see util/trace.ts).
+function resizeTrace(line: string): void {
+  trace(`resize: ${line}`);
+}
+
 export class TerminalMode {
   private exiting = false;
   private busy = false;
@@ -246,18 +255,54 @@ export class TerminalMode {
     // itself.
     let resizeTimer: NodeJS.Timeout | null = null;
     const onResize = (): void => {
+      resizeTrace(`event ${process.stdout.columns}x${process.stdout.rows} ui=${uiMode} exiting=${this.exiting}`);
       if (uiMode !== 'inline' || this.exiting) return;
       if (resizeTimer) clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
         resizeTimer = null;
+        resizeTrace(`remount ${process.stdout.columns}x${process.stdout.rows}`);
         void this.remountInk(mount);
       }, 200);
     };
     process.stdout.on('resize', onResize);
 
+    // ConPTY (Automax's terminal, Windows Terminal, node-pty) only tells an
+    // idle Node process about a resize on its next write, so a session
+    // sitting at the composer would never rebuild. Poll the real window size
+    // and raise the event ourselves when it changed; a later native event
+    // for the same size is coalesced by the debounce above.
+    const readSize = (): [number, number] | null => {
+      try {
+        const fn = (process.stdout as { getWindowSize?: () => [number, number] }).getWindowSize;
+        const size = fn ? fn.call(process.stdout) : null;
+        return size && size[0] > 0 && size[1] > 0 ? size : null;
+      } catch {
+        return null;
+      }
+    };
+    let lastSize = readSize();
+    let lastTick = Date.now();
+    const sizeTimer = setInterval(() => {
+      // Event-loop stalls delay every resize signal; make them visible.
+      const tick = Date.now();
+      if (tick - lastTick > 600) resizeTrace(`loop stalled ${tick - lastTick}ms`);
+      lastTick = tick;
+      const now = readSize();
+      if (!now || !lastSize) return;
+      if (now[0] === lastSize[0] && now[1] === lastSize[1]) return;
+      lastSize = now;
+      resizeTrace(`poll ${now[0]}x${now[1]} prop ${process.stdout.columns}x${process.stdout.rows}`);
+      if (process.stdout.columns !== now[0] || process.stdout.rows !== now[1]) {
+        (process.stdout as { columns: number }).columns = now[0];
+        (process.stdout as { rows: number }).rows = now[1];
+        process.stdout.emit('resize');
+      }
+    }, 250);
+
     return new Promise<number>((resolve) => {
       this.resolveExit = (code) => {
         process.stdout.off('resize', onResize);
+        clearInterval(sizeTimer);
         if (resizeTimer) clearTimeout(resizeTimer);
         clearInterval(mcpTimer);
         clearInterval(usageTimer);
@@ -344,6 +389,7 @@ export class TerminalMode {
     } catch (e) {
       this.renderer.error(e instanceof Error ? e.message : String(e));
     }
+    trace('terminal: turn finished');
     this.busy = false;
     const next = this.queue.shift();
     if (next && !this.exiting) void this.runTurn(next.text, next.extras);
@@ -507,9 +553,22 @@ export class TerminalMode {
         this.handleMcp();
         return;
       case 'refresh': {
-        const { forceRefreshRepoMap } = await import('../agent/RepoMap.js');
+        const { forceRefreshRepoMap, adoptIndexIfReady } = await import('../agent/RepoMap.js');
+        const { indexEnabled, resetIndex, startIndex } = await import('../index/IndexManager.js');
         forceRefreshRepoMap(this.ctx.projectRoot);
-        this.renderer.info('Repo map rebuilt from the current file tree.');
+        if (indexEnabled()) {
+          resetIndex(this.ctx.projectRoot);
+          try {
+            const index = await startIndex(this.ctx.projectRoot);
+            adoptIndexIfReady(this.ctx.projectRoot, this.ctx.model);
+            const s = index.stats();
+            this.renderer.info(`Repo map and code index rebuilt: ${s.files} files, ${s.symbols} symbols, ${s.edges} edges.`);
+          } catch (e) {
+            this.renderer.warn(`Repo map rebuilt; code index failed: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        } else {
+          this.renderer.info('Repo map rebuilt from the current file tree.');
+        }
         return;
       }
       case 'update':

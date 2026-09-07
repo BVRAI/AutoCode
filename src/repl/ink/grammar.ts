@@ -62,6 +62,11 @@ function firstStringArg(args: Record<string, unknown>): string {
   return typeof first === 'string' ? first : '';
 }
 
+function idList(v: unknown): string {
+  if (Array.isArray(v)) return v.map(str).filter(Boolean).slice(0, 4).join(', ') + (v.length > 4 ? ', …' : '');
+  return str(v);
+}
+
 export function describeCall(name: string, args: Record<string, unknown>): CallDescription {
   const path = str(args['path']) || str(args['file']) || str(args['file_path']);
   switch (name) {
@@ -88,10 +93,23 @@ export function describeCall(name: string, args: Record<string, unknown>): CallD
       return { label: 'Search', arg: `symbol: "${str(args['name']) || str(args['symbol'])}"`, group: 'search', activity: 'Searching' };
     case 'file_deps':
       return { label: 'Deps', arg: path, group: null, activity: 'Tracing' };
+    case 'search_entity':
+      return { label: 'Search', arg: `entity: "${str(args['query'])}"`, group: 'search', activity: 'Searching' };
+    case 'traverse_graph':
+      return { label: 'Graph', arg: idList(args['ids']), group: null, activity: 'Tracing' };
+    case 'retrieve_entity':
+      return { label: 'Retrieve', arg: idList(args['ids']), group: null, activity: 'Reading' };
     case 'list_directory':
       return { label: 'List', arg: path || '.', group: 'list', activity: 'Listing' };
-    case 'task':
-      return { label: 'Explore', arg: str(args['description']), group: null, activity: 'Exploring' };
+    case 'task': {
+      const localize = str(args['subagent_type']) === 'Localize';
+      return {
+        label: localize ? 'Localize' : 'Explore',
+        arg: str(args['description']),
+        group: null,
+        activity: localize ? 'Localizing' : 'Exploring',
+      };
+    }
     case 'todo_write':
       return { label: 'Update Todos', arg: '', group: null, activity: 'Planning' };
     case 'web_fetch':
@@ -175,7 +193,13 @@ export function describeResult(
 
   switch (name) {
     case 'read_file': {
-      const summary = `Read ${plural(lines, 'line')}${expandHint(opts.verbose)}`;
+      // The tool reports the slice it returned; the content may carry a
+      // "… N more lines" tail that is not a file line.
+      const md = result.metadata ?? {};
+      const start = md['startLine'];
+      const end = md['endLine'];
+      const n = typeof start === 'number' && typeof end === 'number' && end >= start ? end - start + 1 : lines;
+      const summary = `Read ${plural(n, 'line')}${expandHint(opts.verbose)}`;
       return opts.verbose ? { summary, lines, ...take(content, 40) } : { summary, lines };
     }
     case 'write_file': {
@@ -196,10 +220,17 @@ export function describeResult(
       return { summary: `Found ${plural(n, 'file')}${expandHint(opts.verbose)}`, lines };
     }
     case 'grep':
-    case 'find_symbol': {
+    case 'find_symbol':
+    case 'search_entity': {
       const n = leadingCount(result.summary) ?? lines;
       return { summary: `Found ${plural(n, 'match', 'matches')}${expandHint(opts.verbose)}`, lines };
     }
+    case 'retrieve_entity': {
+      const n = leadingCount(result.summary) ?? lines;
+      return { summary: `Retrieved ${plural(n, 'entity', 'entities')}${expandHint(opts.verbose)}`, lines };
+    }
+    case 'traverse_graph':
+      return { summary: `${result.summary || 'Done'}${expandHint(opts.verbose)}`, lines };
     case 'list_directory': {
       const n = leadingCount(result.summary) ?? lines;
       return { summary: `Listed ${plural(n, 'entry', 'entries')}${expandHint(opts.verbose)}`, lines };
@@ -207,11 +238,12 @@ export function describeResult(
     case 'task': {
       const md = result.metadata ?? {};
       const iterations = typeof md['iterations'] === 'number' ? (md['iterations'] as number) : null;
+      const toolUses = typeof md['toolUses'] === 'number' ? (md['toolUses'] as number) : iterations;
       const usage = (md['usage'] as { inputTokens?: number; outputTokens?: number } | undefined) ?? {};
       const tokens = (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0);
       const ms = typeof md['durationMs'] === 'number' ? (md['durationMs'] as number) : null;
       const parts: string[] = [];
-      if (iterations !== null) parts.push(plural(iterations, 'tool use'));
+      if (toolUses !== null) parts.push(plural(toolUses, 'tool use'));
       if (tokens > 0) parts.push(`${formatTokens(tokens)} tokens`);
       if (ms !== null) parts.push(formatDuration(ms));
       return { summary: parts.length > 0 ? `Done (${parts.join(' · ')})` : 'Done', lines };

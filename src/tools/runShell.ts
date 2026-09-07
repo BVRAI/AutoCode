@@ -56,7 +56,9 @@ const DEFINITION: ToolDefinition = {
     'a few seconds of startup output, and leaves it running (killed when the session ends). ' +
     'stdout and stderr are captured with separate budgets and middle-truncated to ~30,000 characters ' +
     'total — the beginning and end are kept and an omission marker shows how much was cut (failure ' +
-    'summaries at the end of test/build output survive). Full byte counts are in metadata.',
+    'summaries at the end of test/build output survive). Full byte counts are in metadata. ' +
+    'On Windows the shell is cmd.exe: quote with double quotes (single quotes are literal characters), ' +
+    'keep commands on one line, and write anything longer than a one-liner to a file first with write_file.',
   inputSchema: {
     type: 'object',
     properties: {

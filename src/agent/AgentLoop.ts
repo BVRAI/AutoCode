@@ -16,7 +16,9 @@ import { classifyCommand } from '../safety/SafetyPolicy.js';
 import type { SubagentFactory } from '../tools/types.js';
 import type { ApproveDetail, ApproveVerdict } from '../repl/Prompter.js';
 import { resolveVerifyPlanForFiles, runVerification } from './Verify.js';
-import { invalidateRepoMap, refreshRepoMapIfStale } from './RepoMap.js';
+import { adoptIndexIfReady, invalidateRepoMap, refreshRepoMapIfStale } from './RepoMap.js';
+import { indexEnabled, peekIndex, startIndex } from '../index/IndexManager.js';
+import { trace, traced, tracedSync } from '../util/trace.js';
 import { loadProjectInstructions } from './ProjectInstructions.js';
 import type { EventEmitter } from '../repl/EventEmitter.js';
 import { runSessionReflection, type Proposal, type SessionSnapshot } from './SessionReflection.js';
@@ -131,6 +133,11 @@ export class AgentLoop {
   // submit(); this Set is the union across all turns in the session.
   private readonly sessionFilesChanged = new Set<string>();
   private sessionToolCalls = 0;
+  // The current turn's user text — personalizes the repo map's query slice.
+  // Fixed for the whole turn so the prompt stays byte-stable across
+  // iterations (the slice lives in the volatile suffix, after the cache
+  // breakpoint, so a new turn's slice never busts the prefix).
+  private turnQuery = '';
 
   constructor(private readonly deps: AgentDeps) {}
 
@@ -318,7 +325,24 @@ export class AgentLoop {
     // (not per-edit) so the system prompt stays byte-stable within a turn —
     // the digest is part of the cached prefix.
     refreshRepoMapIfStale(ctx.projectRoot);
+    // The code index (Phase 3): started here as well so headless runs get it,
+    // brought up to date with a stat pass at the same turn boundary, and only
+    // then adopted as the repo map's source — never mid-turn.
+    if (indexEnabled()) {
+      startIndex(ctx.projectRoot).catch(() => undefined);
+      const index = peekIndex(ctx.projectRoot);
+      if (index) {
+        try {
+          await traced('index.refresh', () => index.refresh({ force: true }));
+        } catch {
+          /* a failed stat pass keeps the previous graph */
+        }
+      }
+      tracedSync('adoptIndexIfReady', () => adoptIndexIfReady(ctx.projectRoot, ctx.model));
+    }
     const userText = typeof input === 'string' ? input : textOf(input);
+    this.turnQuery = userText;
+    trace('turn: start');
     this.deps.store.appendTranscript({ role: 'user', text: userText });
     this.conversation.push({ role: 'user', content: input });
 
@@ -516,14 +540,15 @@ export class AgentLoop {
           filesChanged: [...filesChanged],
         });
       }
-      this.emitTurnEnd(turnStartedAt, totals, ctx);
+      tracedSync('emitTurnEnd', () => this.emitTurnEnd(turnStartedAt, totals, ctx), 50);
+      trace('turn: end');
     } catch (e) {
       this.deps.emitter.emit('failed', { error: e instanceof Error ? e.message : String(e) });
       throw e;
     } finally {
       // Persist the conversation after every turn — natural end, iteration
       // cap, cancel, or exception — so the session is always resumable.
-      this.persist();
+      tracedSync('persist', () => this.persist(), 50);
     }
   }
 
@@ -604,7 +629,7 @@ export class AgentLoop {
       const abort = new AbortController();
       this.inflightAbort = abort;
       try {
-        const { system, systemVolatile } = buildSystemPromptParts(ctx);
+        const { system, systemVolatile } = buildSystemPromptParts(ctx, { query: this.turnQuery });
         const stream = this.deps.router.completeStream(
           ctx.model.provider as ProviderName,
           {

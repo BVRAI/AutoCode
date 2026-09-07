@@ -5,7 +5,7 @@
 //                (ConPTY on Windows), the same substrate Automax's terminal
 //                sits on. Default when node-pty loads.
 //   'emulated' — plain pipes plus AUTOCODE_TTY_EMULATE (see util/ttyEmulation.ts);
-//                no native module; resizes are a private OSC on stdin.
+//                no native module; resizes are a plain-text marker on stdin.
 // Either way the byte stream feeds a headless xterm, and the test reads the
 // screen the user would see: rows of text, cells with colors, the cursor.
 //
@@ -14,7 +14,7 @@
 // can edit files freely and run identically every time.
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -227,6 +227,16 @@ export class TtySession {
   private feed(data: string): void {
     this.lastOutputAt = Date.now();
     this.outputVersion += 1;
+    // AUTOCODE_TTY_RAWLOG=<file>: every byte the harness (or ConPTY) sent,
+    // with control characters made visible — for resize/repaint forensics.
+    const raw = process.env.AUTOCODE_TTY_RAWLOG;
+    if (raw) {
+      try {
+        appendFileSync(raw, `\n--- ${new Date().toISOString()} (${data.length}) ---\n${data.replace(/\x1b/g, '⎋').replace(/\r/g, '⏎')}`);
+      } catch {
+        /* diagnostics only */
+      }
+    }
     this.pending = this.pending.then(() => new Promise<void>((r) => this.term.write(data, r)));
   }
 
@@ -236,6 +246,14 @@ export class TtySession {
   }
 
   write(data: string): void {
+    const log = process.env.AUTOCODE_TRACE_LOG;
+    if (log) {
+      try {
+        appendFileSync(log, `${new Date().toISOString()} driver: write ${JSON.stringify(data).slice(0, 40)}\n`);
+      } catch {
+        /* diagnostics only */
+      }
+    }
     if (this.pty) this.pty.write(data);
     else this.child?.stdin.write(data);
   }
@@ -266,8 +284,13 @@ export class TtySession {
     this.cols = cols;
     this.rows = rows;
     this.term.resize(cols, rows);
+    // ConPTY tells an idle Node process about the resize late or never, and
+    // drops escape sequences written to its input, so the size also travels
+    // as a plain-text marker the harness strips from stdin (Automax's
+    // terminal sends the same marker after its resize).
+    const mark = `[[amx:resize:${cols}x${rows}]]`;
     if (this.pty) this.pty.resize(cols, rows);
-    else this.child?.stdin.write(`\x1b]7777;resize;${cols}x${rows}\x07`);
+    this.write(mark);
   }
 
   size(): { cols: number; rows: number } {
@@ -350,11 +373,19 @@ export class TtySession {
   }
 
   /** Resolve once no output has arrived for `quietMs`. */
+  /**
+   * Wait until the harness has been silent for `quietMs`, counted from this
+   * call at the earliest — so a step right after a key or a resize always
+   * gives the harness at least `quietMs` to react (the old form returned at
+   * once when the last output was already old, and snapshots raced the
+   * rebuild that followed a resize).
+   */
   async waitIdle(quietMs = 500, timeoutMs = 20_000): Promise<void> {
     const started = Date.now();
     for (;;) {
       await this.flush();
-      if (Date.now() - this.lastOutputAt >= quietMs) return;
+      const since = Math.max(this.lastOutputAt, started);
+      if (Date.now() - since >= quietMs) return;
       if (Date.now() - started > timeoutMs) throw new Error(`waitIdle timed out after ${timeoutMs}ms`);
       await sleep(50);
     }

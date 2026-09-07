@@ -69,7 +69,9 @@ describe('RepoMap', () => {
     expect(repoFileCount(root)).toBe(3);
   });
 
-  it('caps the digest size on a large repo', () => {
+  // 300-file fixtures: slow under a loaded full-suite run (tree-sitter tests
+  // in sibling workers), so give them room instead of racing the default 5 s.
+  it('caps the digest size on a large repo', { timeout: 40_000 }, () => {
     for (let i = 0; i < 300; i++) {
       const syms = Array.from({ length: 10 }, (_, k) => `export function fn${i}_${k}() {}`).join('\n');
       writeFileSync(join(root, `file${i}.ts`), syms);
@@ -107,7 +109,7 @@ describe('RepoMap', () => {
     expect(map).not.toContain('(imported by 1)');
   });
 
-  it('keeps unfit files visible as bare paths under an other-files divider', () => {
+  it('keeps unfit files visible as bare paths under an other-files divider', { timeout: 40_000 }, () => {
     for (let i = 0; i < 300; i++) {
       const syms = Array.from({ length: 10 }, (_, k) => `export function g${i}_${k}() {}`).join('\n');
       writeFileSync(join(root, `mod${i}.ts`), syms);

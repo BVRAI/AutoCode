@@ -19,6 +19,7 @@ import { findLatestSession, loadSessionMeta } from './session/SessionResume.js';
 import { AuthResolver } from './auth/AuthResolver.js';
 import { ConfigStore } from './auth/ConfigStore.js';
 import { dataDir, projectRootDefault, sessionsDir } from './util/paths.js';
+import { indexEnabled, startIndex } from './index/IndexManager.js';
 import { loadDotEnv } from './util/dotenv.js';
 import { loadCatalogForStartup, refreshCatalogInBackground } from './llm/CatalogClient.js';
 import { setProxyCatalog, findModel, getKnownModels, parseEffortSetting, type EffortSetting } from './llm/models.js';
@@ -238,6 +239,11 @@ program
       locale: process.env.AUTOMAX_LOCALE?.trim() || undefined,
       effort: resolveEffortSetting(opts.effort, startupCfg, provider, model),
     };
+
+    // Build the code index in the background so the navigation tools and the
+    // index-backed repo map are ready by the first prompt (cached on disk per
+    // project; later sessions only re-parse what changed).
+    if (indexEnabled()) startIndex(root).catch(() => undefined);
 
     const renderer = new ConsoleRenderer();
     // Update pipeline: auto-update is opt-out — autocode is young and
