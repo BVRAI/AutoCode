@@ -90,6 +90,25 @@ describe('LlmRouter watchdog', () => {
     await expect(router.complete('xai', REQ)).rejects.toThrow(/xai timeout: no response/);
   }, 15_000);
 
+  it('retries a stream cut before its first event ("terminated", socket hang up)', async () => {
+    let calls = 0;
+    const provider: LlmProvider = {
+      name: 'xai',
+      complete: async () => RESPONSE,
+      completeStream: async function* (): AsyncGenerator<StreamEvent> {
+        calls += 1;
+        if (calls === 1) throw new TypeError('terminated');
+        if (calls === 2) throw new Error('socket hang up');
+        yield { type: 'message_stop', response: RESPONSE };
+      },
+    } as unknown as LlmProvider;
+    const router = await routerWith(provider);
+    const events: StreamEvent[] = [];
+    for await (const evt of router.completeStream('xai', REQ)) events.push(evt);
+    expect(calls).toBe(3);
+    expect(events.map((e) => e.type)).toEqual(['message_stop']);
+  }, 15_000);
+
   it('leaves a healthy stream alone', async () => {
     const provider: LlmProvider = {
       name: 'xai',

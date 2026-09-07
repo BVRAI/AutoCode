@@ -4,7 +4,11 @@ import type { SessionContext, AgentMode } from '../session/SessionContext.js';
 import type { CheckpointStore } from '../session/CheckpointStore.js';
 import type { ToolExecutionContext } from '../tools/types.js';
 import type { ContentBlock, ImageBlock, Message, StreamEvent } from '../llm/types.js';
-import { LlmRouter, type ProviderName } from '../llm/Router.js';
+import { LlmRouter, isRetryableLlmError, type ProviderName } from '../llm/Router.js';
+
+// Connection-level retries of one model request within a turn (beyond the
+// router's own pre-first-event retries).
+const MAX_STREAM_RETRIES = 3;
 import { summarizerModelFor, thinkingFor } from '../llm/models.js';
 import { ToolRegistry } from './ToolRegistry.js';
 import { buildSystemPromptParts } from './PromptBuilder.js';
@@ -780,6 +784,7 @@ export class AgentLoop {
     // wants this as a loose runaway guard.
     const maxIterations = ctx.budget?.maxIterations ?? MAX_ITERATIONS;
 
+    let streamRetries = 0;
     for (let iter = 0; iter < maxIterations; iter++) {
       if (this.cancelled) {
         this.deps.renderer.spinner.stop();
@@ -913,6 +918,19 @@ export class AgentLoop {
         // the abort error and loop — the cancellation check at the top of the
         // next iteration performs the normal cleanup + exit.
         if (this.cancelled && isAbortError(e)) continue;
+        // A connection cut before the message completed (undici's bare
+        // "terminated", ECONNRESET, a 5xx mid-stream): nothing of this
+        // iteration has reached the conversation, so run it again — Claude
+        // Code's "API Error · Retrying" — up to a small per-turn budget.
+        if (!response && !this.cancelled && isRetryableLlmError(e) && streamRetries < MAX_STREAM_RETRIES) {
+          streamRetries += 1;
+          const msg = e instanceof Error ? e.message : String(e);
+          this.deps.renderer.warn(`  API error (${msg.slice(0, 120)}) · retrying (attempt ${streamRetries}/${MAX_STREAM_RETRIES})`);
+          trace(`iter ${iter}: stream error, retry ${streamRetries}: ${msg.slice(0, 120)}`);
+          await new Promise((r) => setTimeout(r, 1_500 * streamRetries));
+          iter -= 1;
+          continue;
+        }
         throw e;
       } finally {
         this.inflightAbort = null;

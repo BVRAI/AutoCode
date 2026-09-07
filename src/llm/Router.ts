@@ -152,19 +152,38 @@ function construct(name: ProviderName, auth: ReturnType<AuthResolver['resolve']>
   }
 }
 
-function isRetryable(err: unknown): boolean {
+/**
+ * Errors worth another attempt: overload / rate limit / 5xx answers, and
+ * the connection-level failures a dropped socket produces — undici reports a
+ * stream cut by the peer as a bare "terminated" (the Phase 5 Aider battery
+ * lost tasks to exactly that message from xAI), Node as ECONNRESET,
+ * "socket hang up", "fetch failed" or "other side closed".
+ */
+export function isRetryableLlmError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const msg = err.message.toLowerCase();
   if (
     msg.includes('overloaded') ||
     msg.includes('rate limit') ||
     msg.includes('timeout') ||
-    msg.includes('econnreset')
+    msg.includes('econnreset') ||
+    msg.includes('econnrefused') ||
+    msg.includes('etimedout') ||
+    msg.includes('eai_again') ||
+    msg.includes('socket hang up') ||
+    msg.includes('fetch failed') ||
+    msg.includes('other side closed') ||
+    msg === 'terminated' ||
+    msg.endsWith(': terminated')
   ) {
     return true;
   }
   // Match "<provider> 5xx" or "<provider> 429" for any provider name
   return /^[a-z]+ (5\d\d|429)\b/.test(msg);
+}
+
+function isRetryable(err: unknown): boolean {
+  return isRetryableLlmError(err);
 }
 
 function sleep(ms: number): Promise<void> {

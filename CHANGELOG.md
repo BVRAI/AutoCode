@@ -229,6 +229,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   planning turn on a large repo estimated ~4× its real spend and tripped the
   cost cap. `inputTokens` now excludes cached tokens on every provider and
   the auto-compaction threshold counts the cached prefix it used to ignore.
+- A connection dropped by the provider mid-request (undici's bare
+  "terminated", `ECONNRESET`, "socket hang up", "fetch failed") ended the turn
+  with an error. The router now treats these as retryable before the first
+  event, and the agent loop re-runs the request up to three times per turn
+  when the message had not completed ("API error (…) · retrying").
 - A timed-out `run_shell` (or verification run) could wait forever on Windows:
   killing `cmd.exe` left the program it started alive holding the pipes. The
   whole process tree is killed now and the call settles two seconds later.
