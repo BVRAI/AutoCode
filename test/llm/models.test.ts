@@ -123,11 +123,13 @@ describe('model registry — proxy overlay', () => {
     setProxyCatalog(sampleCatalog());
     expect(modelCatalogSource()).toBe('proxy');
     const models = getKnownModels();
-    // anthropic.claude-opus-4-7-20260525 (active) +
-    // xai.grok-5 (pricing_pending) — deprecated + model_not_verified dropped.
-    expect(models).toHaveLength(2);
+    // anthropic.claude-opus-4-7-20260525 (active) + anthropic.claude-zeta-1
+    // (model_not_verified but priced — offerable, like Automax's chat picker) +
+    // xai.grok-5 (pricing_pending) — deprecated dropped.
+    expect(models).toHaveLength(3);
     expect(models.map((m) => m.model).sort()).toEqual([
       'claude-opus-4-7-20260525',
+      'claude-zeta-1',
       'grok-5',
     ]);
   });

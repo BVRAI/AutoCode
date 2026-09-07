@@ -168,7 +168,13 @@ export function setProxyCatalog(catalog: FullCatalog | null, opts: { source?: 'f
   const out: ModelInfo[] = [];
   for (const [provider, providerCatalog] of Object.entries(catalog.providers)) {
     for (const entry of providerCatalog.models) {
-      if (entry.status === 'deprecated' || entry.status === 'model_not_verified') continue;
+      // Same rule as Automax's chat picker (ModelPickability): deprecated is
+      // out, and so is anything with no price — a $0 row would cost turns at
+      // nothing. An unverified entry with a real price stays offerable: the
+      // proxy's probe fails for reasons that say nothing about the model
+      // (its key out of credit, throttling).
+      if (entry.status === 'deprecated') continue;
+      if (!(entry.input_price_per_million > 0 || entry.output_price_per_million > 0)) continue;
       const meta = labelFor(entry.id);
       const inputPerM = entry.input_price_per_million;
       const outputPerM = entry.output_price_per_million;
@@ -180,7 +186,7 @@ export function setProxyCatalog(catalog: FullCatalog | null, opts: { source?: 'f
         provider,
         model: entry.id,
         label: meta.label,
-        notes: meta.notes,
+        notes: entry.status === 'model_not_verified' ? [meta.notes, 'unverified by the proxy'].filter(Boolean).join(' · ') : meta.notes,
         inputPerM,
         outputPerM,
         cacheReadPerM,
