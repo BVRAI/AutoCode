@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- The host can switch the theme of a running session: `[[amx:theme:light|dark]]` on stdin
+  (plain text, like the resize notice) swaps the palette and rebuilds the transcript; Automax
+  sends it from its theme toggle. The light palette is now black text with dark red / dark
+  blue / dark green accents and a yellow band behind the user's turn; the pickers and the
+  slash menu follow the live theme.
 - `/model` in a session without an Automax catalog (your own keys) now lists what the
   providers publish — Anthropic, OpenAI, xAI and Google model lists, OpenRouter's public
   list — instead of the bundled table, fetched in the background at startup and cached a day
