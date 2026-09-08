@@ -5,9 +5,13 @@
 //
 // Methods (client → server, get a response):
 //   initialize            → { protocolVersion, version, capabilities }
-//   session.new           { projectRoot?, provider?, model?, mode?, effort?, locale? } → { sessionId, model, mode }
+//   session.new           { projectRoot?, provider?, model?, mode?, effort?, locale?, forkFrom? } → { sessionId, model, mode }
+//                         forkFrom: a session id whose conversation seeds this NEW session (a branch:
+//                         history files copied under a fresh id; the source is never touched)
 //   session.resume        { sessionId } → same as session.new
 //   turn.submit           { text, images?: [{ mediaType, data }] } → { turnId }   (the turn streams as notifications)
+//                         images: png/jpeg/gif/webp, bare base64, ≤ 5 MB each, ≤ 8 per turn; text is required
+//                         (a host sending a picture alone captions it); a bad entry is an invalid-params error
 //   turn.cancel           {} → { cancelled }
 //   respond               { requestId, ...answer } → {}   (answers request.* notifications)
 //   session.setMode       { mode } → { mode }

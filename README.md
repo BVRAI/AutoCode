@@ -98,7 +98,8 @@ autocode --server                         # JSON-RPC 2.0 over stdio for a host a
 ### The app-server protocol
 
 `autocode --server` reads JSON-RPC requests line by line on stdin and writes responses and
-notifications on stdout. Methods: `initialize`, `session.new`, `session.resume`, `session.info`,
+notifications on stdout. Methods: `initialize`, `session.new` (`forkFrom` branches an existing
+session's conversation into a new one), `session.resume`, `session.info`,
 `session.setMode`, `session.command` (clear, compact, undo, effort, model, refresh, memory,
 status), `turn.submit`, `turn.cancel`, `respond`, `shutdown`. Notifications: `server.ready`,
 `session.ready`, `turn.started|completed|failed|cancelled`, `item.started|updated|completed`

@@ -5,7 +5,7 @@
 // terminal uses, so the two front ends cannot drift.
 
 import { createInterface } from 'node:readline';
-import { existsSync } from 'node:fs';
+import { copyFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { ConsoleRenderer } from '../repl/ConsoleRenderer.js';
 import { PrompterRef } from '../repl/Prompter.js';
@@ -204,6 +204,14 @@ export class AppServer {
   }
 
   private async newSession(p: Record<string, unknown>, resume = false): Promise<unknown> {
+    // Branch: `forkFrom` names a session whose conversation seeds this NEW one. Validated
+    // before the live session is dropped, so a bad id costs the host nothing.
+    const forkFrom = !resume && typeof p['forkFrom'] === 'string' && p['forkFrom'] ? (p['forkFrom'] as string) : null;
+    const forkDir = forkFrom ? join(sessionsDir(), forkFrom) : null;
+    const forkMeta = forkDir ? loadSessionMeta(forkDir) : null;
+    if (forkDir && (!forkMeta || !existsSync(join(forkDir, 'conversation.json')))) {
+      throw new RpcError(ERR_INVALID_PARAMS, `no forkable session ${forkFrom}`);
+    }
     if (this.session) await this.dispose();
     const cfg = new ConfigStore().load();
     let sessionId = newSessionId();
@@ -220,6 +228,13 @@ export class AppServer {
       root = meta.projectRoot;
       provider = meta.provider;
       model = meta.model;
+      resumed = { messages: [] };
+    } else if (forkMeta) {
+      // A fresh id (the source is never resumed or written to); the source's root and
+      // model unless the host says otherwise; loaded below exactly as a resume is.
+      if (typeof p['projectRoot'] !== 'string' || !p['projectRoot']) root = forkMeta.projectRoot;
+      if (typeof p['provider'] !== 'string' || !p['provider']) provider = forkMeta.provider;
+      if (typeof p['model'] !== 'string' || !p['model']) model = forkMeta.model;
       resumed = { messages: [] };
     }
     const effortRaw = typeof p['effort'] === 'string' ? parseEffortSetting(p['effort'] as string) : null;
@@ -259,6 +274,15 @@ export class AppServer {
     renderer.setSink(sink);
     await initSecretStore(renderer);
     const store = new TranscriptStore(ctx);
+    if (forkDir) {
+      // The branch starts from the source's files: the full-fidelity conversation the
+      // model sees, the text transcript a host reads back, and the tool log. state.json is
+      // NOT copied — the store just wrote the new id's own.
+      for (const name of ['conversation.json', 'transcript.jsonl', 'tool_log.jsonl']) {
+        const src = join(forkDir, name);
+        if (existsSync(src)) copyFileSync(src, join(ctx.sessionDir, name));
+      }
+    }
     const checkpoints = new CheckpointStore(ctx.sessionDir);
     checkpoints.sweep();
     const prompter = new ServerPrompter((method, params) => this.notify(method, params));
@@ -272,7 +296,7 @@ export class AppServer {
       const loaded = store.loadConversation();
       if (loaded) agent.loadState(loaded);
     }
-    store.appendTranscript({ role: 'system', text: `session started for ${root} (server)` });
+    store.appendTranscript({ role: 'system', text: forkFrom ? `session branched from ${forkFrom} for ${root} (server)` : `session started for ${root} (server)` });
     this.session = { ctx, agent, store, renderer, sink, prompter, busy: false, turnSeq: 0 };
     if (indexEnabled()) startIndex(root).catch(() => undefined);
     try {
@@ -281,7 +305,7 @@ export class AppServer {
       this.notify('log', { level: 'warn', text: `mcp init failed: ${e instanceof Error ? e.message : String(e)}` });
     }
     await agent.hooks.fire('SessionStart', { trigger: 'auto' });
-    const result = { sessionId, projectRoot: root, model: ctx.model, mode: ctx.mode, effort: ctx.effort ?? 'auto', resumed: resume };
+    const result = { sessionId, projectRoot: root, model: ctx.model, mode: ctx.mode, effort: ctx.effort ?? 'auto', resumed: resume, forkedFrom: forkFrom ?? undefined };
     this.notify('session.ready', result);
     return result;
   }
@@ -310,12 +334,22 @@ export class AppServer {
     const { input, missing, notes } = buildAgentInput(text, s.ctx.projectRoot, { provider: s.ctx.model.provider });
     for (const ref of missing) this.notify('log', { level: 'warn', text: `could not read @${ref}` });
     for (const note of notes) this.notify('log', { level: 'info', text: note });
+    // Pictures from the host (a pasted screenshot in Automax): validated here so a bad entry
+    // is an invalid-params error the host can show, not a provider 400 mid-turn. Bare base64
+    // only — a data: URL would be sent to the provider verbatim and fail there.
+    const imageMediaTypes = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+    const maxTurnImages = 8;
+    const maxImageBytes = 5 * 1024 * 1024;
     const images = Array.isArray(p['images']) ? (p['images'] as Array<Record<string, unknown>>) : [];
+    if (images.length > maxTurnImages) throw new RpcError(ERR_INVALID_PARAMS, `at most ${maxTurnImages} images per turn`);
     const blocks: ContentBlock[] = [];
     for (const img of images) {
-      if (typeof img['data'] === 'string' && typeof img['mediaType'] === 'string') {
-        blocks.push({ type: 'image', mediaType: img['mediaType'] as ContentBlock extends { mediaType: infer M } ? M : never, data: img['data'] as string } as ContentBlock);
-      }
+      const mediaType = typeof img['mediaType'] === 'string' ? (img['mediaType'] as string) : '';
+      const data = typeof img['data'] === 'string' ? (img['data'] as string) : '';
+      if (!imageMediaTypes.has(mediaType)) throw new RpcError(ERR_INVALID_PARAMS, `unsupported image mediaType ${mediaType || '(missing)'}`);
+      if (!data || data.startsWith('data:')) throw new RpcError(ERR_INVALID_PARAMS, 'image data must be bare base64');
+      if (Math.floor((data.length * 3) / 4) > maxImageBytes) throw new RpcError(ERR_INVALID_PARAMS, `image over ${maxImageBytes / (1024 * 1024)} MB`);
+      blocks.push({ type: 'image', mediaType, data } as ContentBlock);
     }
     const withImages: string | ContentBlock[] =
       blocks.length === 0 ? input : typeof input === 'string' ? [{ type: 'text', text: input }, ...blocks] : [...input, ...blocks];

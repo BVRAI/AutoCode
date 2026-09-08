@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- The app server's `session.new` takes `forkFrom`: a session id whose conversation seeds a
+  NEW session under a fresh id — its `conversation.json`, transcript and tool log are copied
+  and the source is never resumed or written to. Automax's "Branch conversation" uses it.
+- `turn.submit` validates its `images`: png/jpeg/gif/webp, bare base64, at most 5 MB each and
+  8 per turn — a bad entry is an invalid-params error the host can show instead of a provider
+  400 mid-turn. Automax's picture tray sends screenshots this way.
+
 ### Changed
 - The host can switch the theme of a running session: `[[amx:theme:light|dark]]` on stdin
   (plain text, like the resize notice) swaps the palette and rebuilds the transcript; Automax

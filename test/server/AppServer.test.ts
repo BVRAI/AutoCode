@@ -234,4 +234,5 @@ describe('AppServer over stdio (Phase 5.1)', () => {
     expect(down.error).toBeUndefined();
     expect(await exit).toBe(0);
   }, 60_000);
+
 });
