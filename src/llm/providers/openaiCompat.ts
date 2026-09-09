@@ -279,6 +279,7 @@ export function parseResponse(json: OpenAiChatResponse): CompletionResponse {
     model: json.model,
     stopReason: normalizeStopReason(choice.finish_reason),
     content,
+    usageAvailable: typeof json.usage?.prompt_tokens === 'number' && typeof json.usage?.completion_tokens === 'number',
     usage: {
       // prompt_tokens includes the cached portion; the harness reports fresh input
       // and cached reads separately (see estimateCost).
@@ -317,6 +318,9 @@ export async function* streamOpenAiCompat(
   let reasoningBuf = '';
   let stopReason: CompletionResponse['stopReason'] = 'end_turn';
   const usage: CompletionResponse['usage'] = { inputTokens: 0, outputTokens: 0 };
+  let usageAvailable = false;
+  let terminalReceived = false;
+  let resolvedModel = model;
 
   // Track in-flight tool calls by index (OpenAI numbers them).
   type Pending = { id: string; name: string; args: string; emittedStart: boolean };
@@ -351,6 +355,7 @@ export async function* streamOpenAiCompat(
     } catch {
       continue;
     }
+    if (typeof parsed.model === 'string') resolvedModel = parsed.model;
     const choices = parsed.choices as Array<{
       index?: number;
       finish_reason?: string | null;
@@ -404,11 +409,13 @@ export async function* streamOpenAiCompat(
         }
       }
       if (choice.finish_reason) {
+        terminalReceived = true;
         stopReason = normalizeStopReason(choice.finish_reason);
       }
     }
     const u = parsed.usage as { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } } | undefined;
     if (u) {
+      usageAvailable = typeof u.prompt_tokens === 'number' && typeof u.completion_tokens === 'number';
       const cached = u.prompt_tokens_details?.cached_tokens;
       if (u.prompt_tokens !== undefined) usage.inputTokens = Math.max(0, u.prompt_tokens - (cached ?? 0));
       if (u.completion_tokens !== undefined) usage.outputTokens = u.completion_tokens;
@@ -441,6 +448,7 @@ export async function* streamOpenAiCompat(
 
   yield {
     type: 'message_stop',
-    response: { model, stopReason, content: finalContent, usage },
+    response: { model, stopReason, content: finalContent, usage,
+      usageAvailable, accountingComplete: terminalReceived, accountingModel: resolvedModel },
   };
 }

@@ -317,6 +317,8 @@ function fromGeminiResponse(r: GeminiResponse, requestedModel: string): Completi
     stopReason: cand?.finishReason ? mapFinishReason(cand.finishReason) : 'end_turn',
     content: acc.blocks(),
     usage: mapUsage(r.usageMetadata),
+    usageAvailable: hasBillingUsage(r.usageMetadata),
+    accountingUsage: billingUsage(r.usageMetadata),
   };
 }
 
@@ -347,6 +349,9 @@ export async function* streamGemini(res: Response, requestedModel: string): Asyn
       stopReason: finish ? mapFinishReason(finish) : 'end_turn',
       content: acc.blocks(),
       usage: mapUsage(usage),
+      usageAvailable: hasBillingUsage(usage),
+      accountingComplete: !!finish,
+      accountingUsage: billingUsage(usage),
     },
   };
 }
@@ -371,6 +376,20 @@ function mapFinishReason(g: string): CompletionResponse['stopReason'] {
       // stopReason. Map unknowns to 'end_turn' so the loop doesn't bail.
       return 'end_turn';
   }
+}
+
+function hasBillingUsage(u: GeminiUsage | undefined): boolean {
+  return typeof u?.promptTokenCount === 'number' && typeof u?.candidatesTokenCount === 'number';
+}
+
+// Keep legacy budget/context counters unchanged. Billing excludes cached input
+// from fresh input and includes Gemini's separately reported thinking tokens.
+function billingUsage(u: GeminiUsage | undefined): CompletionResponse['usage'] {
+  return {
+    inputTokens: Math.max(0, (u?.promptTokenCount ?? 0) - (u?.cachedContentTokenCount ?? 0)),
+    outputTokens: (u?.candidatesTokenCount ?? 0) + (u?.thoughtsTokenCount ?? 0),
+    cacheReadTokens: u?.cachedContentTokenCount,
+  };
 }
 
 function mapUsage(u: GeminiUsage | undefined): CompletionResponse['usage'] {
@@ -440,4 +459,5 @@ interface GeminiUsage {
   promptTokenCount?: number;
   candidatesTokenCount?: number;
   cachedContentTokenCount?: number;
+  thoughtsTokenCount?: number;
 }

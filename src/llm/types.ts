@@ -129,6 +129,12 @@ export interface CompletionResponse {
     cacheReadTokens?: number;
     cacheWriteTokens?: number;
   };
+  /** Accounting-only provenance. Omitted fields preserve older providers. */
+  usageAvailable?: boolean;
+  accountingComplete?: boolean;
+  accountingModel?: string;
+  /** Normalized billing usage where legacy agent counters use another convention. */
+  accountingUsage?: CompletionResponse['usage'];
 }
 
 export interface LlmProvider {

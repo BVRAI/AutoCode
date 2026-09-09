@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import type { SessionContext } from './SessionContext.js';
 import type { Message } from '../llm/types.js';
 import { redactSecrets, redactionDisabled } from '../util/redact.js';
+import { currentSubmissionId } from '../llm/SubmissionAccounting.js';
 
 function redactLine(json: string): string {
   return redactionDisabled() ? json : redactSecrets(json);
@@ -32,6 +33,8 @@ export interface TranscriptEntry {
   text?: string;
   toolName?: string;
   toolCallId?: string;
+  /** Presentation correlation only; never copied into conversation.json. */
+  submissionId?: string;
 }
 
 export interface ToolLogEntry {
@@ -91,7 +94,8 @@ export class TranscriptStore {
   // util/redact.ts); conversation.json — what a resumed session replays to
   // the model — is written as-is.
   appendTranscript(entry: Omit<TranscriptEntry, 'timestamp'>): void {
-    const line: TranscriptEntry = { timestamp: new Date().toISOString(), ...entry };
+    const submissionId = currentSubmissionId();
+    const line: TranscriptEntry = { timestamp: new Date().toISOString(), ...(submissionId ? { submissionId } : {}), ...entry };
     appendFileSync(this.transcriptPath, redactLine(JSON.stringify(line)) + '\n', 'utf8');
   }
 

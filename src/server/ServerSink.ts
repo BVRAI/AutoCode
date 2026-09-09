@@ -7,6 +7,7 @@ import type { RendererSink, TurnEndInfo } from '../repl/ConsoleRenderer.js';
 import type { EventEmitter } from '../repl/EventEmitter.js';
 import { unifiedDiff } from '../util/diff.js';
 import { activityVerb } from '../repl/ink/bridge.js';
+import { markAccountingIncomplete } from '../llm/SubmissionAccounting.js';
 
 export type Notify = (method: string, params: Record<string, unknown>) => void;
 
@@ -40,9 +41,10 @@ export class ServerSink implements RendererSink, EventEmitter {
     this.terminal = null;
   }
 
-  releaseTerminal(failure?: { turnId: string; error: string }): void {
+  releaseTerminal(failure?: { turnId: string; error: string }, cancelledTurnId?: string): void {
     this.holding = false;
-    const pending = failure ? { method: 'turn.failed', params: failure } : this.terminal;
+    const pending = cancelledTurnId ? { method: 'turn.cancelled', params: { turnId: cancelledTurnId } }
+      : failure ? { method: 'turn.failed', params: failure } : this.terminal;
     this.terminal = null;
     if (pending) this.notify(pending.method, pending.params);
   }
@@ -209,6 +211,7 @@ export class ServerSink implements RendererSink, EventEmitter {
       case 'failed':
         for (const o of this.openTools) this.notify('item.completed', { item: { id: o.id, type: 'tool_call', turnId: this.turnId, name: o.name, status: 'error' } });
         this.openTools.length = 0;
+        markAccountingIncomplete();
         this.terminalNotify('turn.failed', { turnId: this.turnId, error: data['error'] });
         return;
       case 'picker_opened':

@@ -208,6 +208,7 @@ export function parseResponsesOutput(json: ResponsesResult): CompletionResponse 
     model: json.model,
     stopReason,
     content,
+    usageAvailable: typeof json.usage?.input_tokens === 'number' && typeof json.usage?.output_tokens === 'number',
     usage: {
       // OpenAI's input_tokens INCLUDES the cached portion; the harness's contract
       // (Anthropic's) is that inputTokens excludes it and cacheReadTokens carries it.
@@ -275,7 +276,8 @@ export async function* streamResponses(res: Response, model: string): AsyncItera
   if (!finished) {
     yield {
       type: 'message_stop',
-      response: { model, stopReason: 'error', content: [], usage: { inputTokens: 0, outputTokens: 0 } },
+      response: { model, stopReason: 'error', content: [], usage: { inputTokens: 0, outputTokens: 0 },
+        usageAvailable: false, accountingComplete: false },
     };
   }
 }

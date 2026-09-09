@@ -6,6 +6,7 @@ import { OpenRouterProvider } from './providers/OpenRouterProvider.js';
 import { GeminiProvider } from './providers/GeminiProvider.js';
 import { FakeProvider } from './providers/FakeProvider.js';
 import { AuthResolver } from '../auth/AuthResolver.js';
+import { beginAccountingCall } from './SubmissionAccounting.js';
 
 export type ProviderName = 'anthropic' | 'openai' | 'google' | 'xai' | 'openrouter';
 
@@ -69,10 +70,14 @@ export class LlmRouter {
     let lastErr: unknown;
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       const dog = new Watchdog(req.signal);
+      const record = beginAccountingCall(provider, req.model);
       try {
         dog.arm(COMPLETE_TIMEOUT_MS);
-        return await p.complete({ ...req, signal: dog.signal });
+        const response = await p.complete({ ...req, signal: dog.signal });
+        record(response, true);
+        return response;
       } catch (raw) {
+        record();
         const e = dog.explain(provider, raw, 'response');
         lastErr = e;
         if (req.signal?.aborted === true || !isRetryable(e) || attempt === MAX_RETRIES - 1) throw e;
@@ -96,13 +101,18 @@ export class LlmRouter {
     for (let attempt = 0; ; attempt++) {
       let yielded = false;
       const dog = new Watchdog(req.signal);
+      const record = beginAccountingCall(provider, req.model);
+      let response: CompletionResponse | undefined;
+      let finished = false;
       try {
         dog.arm(FIRST_EVENT_TIMEOUT_MS);
         for await (const evt of p.completeStream({ ...req, signal: dog.signal })) {
           dog.arm(IDLE_TIMEOUT_MS);
           yielded = true;
+          if (evt.type === 'message_stop' && !response) response = evt.response;
           yield evt;
         }
+        finished = response !== undefined;
         return;
       } catch (raw) {
         const e = dog.explain(provider, raw, yielded ? 'stream data' : 'response');
@@ -117,6 +127,7 @@ export class LlmRouter {
         await sleep(BACKOFF_BASE_MS * 2 ** attempt);
       } finally {
         dog.disarm();
+        record(response, finished);
       }
     }
   }

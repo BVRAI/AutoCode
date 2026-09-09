@@ -25,6 +25,7 @@ import { isTrusted, markTrusted, trustPrompt, trustSensitiveContent } from '../a
 import { readOwnPackage } from '../update/UpdateChecker.js';
 import { redactSecrets, redactionDisabled } from '../util/redact.js';
 import type { ContentBlock } from '../llm/types.js';
+import { SubmissionAccounting } from '../llm/SubmissionAccounting.js';
 import { ServerSink } from './ServerSink.js';
 import { ServerPrompter } from './ServerPrompter.js';
 import {
@@ -71,6 +72,8 @@ interface LiveSession {
   prompter: ServerPrompter;
   busy: boolean;
   turnSeq: number;
+  accounting?: SubmissionAccounting;
+  accountingCancelled?: boolean;
 }
 
 export class AppServer {
@@ -152,6 +155,7 @@ export class AppServer {
           protocolVersion: PROTOCOL_VERSION,
           version: readOwnPackage().version,
           capabilities: {
+            accountingVersion: 1,
             streaming: true,
             reasoning: true,
             approvals: true,
@@ -184,7 +188,10 @@ export class AppServer {
         const was = s.busy;
         s.agent.stop();
         s.prompter.cancelAll();
-        if (was) this.notify('turn.cancelled', { turnId: s.sink.currentTurn() });
+        if (was && s.accounting) {
+          s.accounting.markIncomplete();
+          s.accountingCancelled = true;
+        } else if (was) this.notify('turn.cancelled', { turnId: s.sink.currentTurn() });
         return { cancelled: was };
       }
       case 'respond': {
@@ -331,6 +338,11 @@ export class AppServer {
     if (s.busy) throw new RpcError(ERR_BUSY, 'a turn is already running — turn.cancel first');
     const text = typeof p['text'] === 'string' ? (p['text'] as string) : '';
     if (!text.trim()) throw new RpcError(ERR_INVALID_PARAMS, 'text is required');
+    const submissionId = p['submissionId'];
+    if (submissionId !== undefined && (typeof submissionId !== 'string' ||
+      !/^[A-Za-z0-9_-]{1,128}$/.test(submissionId))) {
+      throw new RpcError(ERR_INVALID_PARAMS, 'submissionId must be an identifier of 1–128 letters, digits, underscores or hyphens');
+    }
     const { input, missing, notes } = buildAgentInput(text, s.ctx.projectRoot, { provider: s.ctx.model.provider });
     for (const ref of missing) this.notify('log', { level: 'warn', text: `could not read @${ref}` });
     for (const note of notes) this.notify('log', { level: 'info', text: note });
@@ -361,17 +373,23 @@ export class AppServer {
     // notification back until the promise settles so a host that reads
     // `busy` (or submits the next turn) right after turn.completed is safe.
     s.sink.holdTerminal();
-    void s.agent
-      .submit(withImages, s.ctx)
+    s.accounting = typeof submissionId === 'string'
+      ? new SubmissionAccounting(submissionId, (method, params) => this.notify(method, params)) : undefined;
+    s.accountingCancelled = false;
+    const submitted = s.accounting
+      ? s.accounting.run(() => s.agent.submit(withImages, s.ctx)) : s.agent.submit(withImages, s.ctx);
+    void submitted
       .then(
         () => {
           s.busy = false;
           s.prompter.cancelAll();
-          s.sink.releaseTerminal();
+          s.accounting = undefined;
+          s.sink.releaseTerminal(undefined, s.accountingCancelled ? turnId : undefined);
         },
         (e: unknown) => {
           s.busy = false;
           s.prompter.cancelAll();
+          s.accounting = undefined;
           s.sink.releaseTerminal({ turnId, error: e instanceof Error ? e.message : String(e) });
         },
       );

@@ -5,7 +5,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PassThrough } from 'node:stream';
 import { createInterface } from 'node:readline';
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -107,6 +107,7 @@ beforeAll(() => {
         { text: 'Hello from the server test.', usage: { inputTokens: 500, outputTokens: 20 } },
         { tools: [{ name: 'run_shell', input: { command: 'git push --force origin main' } }] },
         { text: 'Second turn done.' },
+        { tools: [{ name: 'run_shell', input: { command: 'git push --force origin another' } }] },
       ],
     }),
   );
@@ -153,6 +154,7 @@ describe('AppServer over stdio (Phase 5.1)', () => {
     expect(init.result?.['protocolVersion']).toBe(1);
     const caps = init.result?.['capabilities'] as Record<string, unknown>;
     expect(caps['streaming']).toBe(true);
+    expect(caps['accountingVersion']).toBe(1);
     expect(caps['items']).toContain('tool_call');
 
     const created = await client.call('session.new', {
@@ -173,7 +175,7 @@ describe('AppServer over stdio (Phase 5.1)', () => {
     expect(client.notifications('session.ready')).toHaveLength(1);
 
     // Turn 1: a read_file tool call, then a streamed answer.
-    const submitted = await client.call('turn.submit', { text: 'summarize the readme' });
+    const submitted = await client.call('turn.submit', { text: 'summarize the readme', submissionId: 'submission-one' });
     const turnId = submitted.result?.['turnId'];
     expect(turnId).toBe('turn_1');
     await client.waitFor((m) => m.method === 'turn.completed' && m.params?.['turnId'] === turnId);
@@ -201,6 +203,16 @@ describe('AppServer over stdio (Phase 5.1)', () => {
     expect(String(change?.['path'])).toContain('NOTES.md');
     expect(client.notifications('item.updated').some((m) => (m.params?.['item'] as Record<string, unknown>)['type'] === 'agent_message')).toBe(true);
     expect(client.notifications('usage').length).toBeGreaterThan(0);
+    const receipts = client.notifications('accounting.receipt');
+    expect(receipts).toHaveLength(2);
+    expect(receipts.every(m => m.params?.submissionId === 'submission-one' && m.params?.complete === true)).toBe(true);
+    expect(new Set(receipts.map(m => m.params?.callId)).size).toBe(2);
+    const accountingEnd = client.notifications('accounting.completed')[0]!;
+    expect(accountingEnd.params?.complete).toBe(true);
+    expect(client.messages.indexOf(accountingEnd)).toBeLessThan(client.messages.findIndex(m => m.method === 'turn.completed'));
+    const transcriptPath = join(home, 'data', 'sessions', String(created.result?.sessionId), 'transcript.jsonl');
+    const transcript = readFileSync(transcriptPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    expect(transcript.filter(r => r.role === 'user' || r.role === 'assistant').every(r => r.submissionId === 'submission-one')).toBe(true);
 
     const info = await client.call('session.info');
     expect(info.result?.['busy']).toBe(false);
@@ -229,6 +241,19 @@ describe('AppServer over stdio (Phase 5.1)', () => {
       .find((i) => i['type'] === 'tool_call' && i['name'] === 'run_shell');
     expect(shell?.['status']).toBe('error');
     expect(String(shell?.['summary'])).toMatch(/declined/);
+    // A legacy client omitting submissionId still works and does not receive
+    // accounting attributed to the previous request.
+    expect(client.notifications('accounting.started')).toHaveLength(1);
+    expect(client.notifications('accounting.receipt')).toHaveLength(2);
+
+    await client.call('turn.submit', { text: 'cancel this push', submissionId: 'submission-cancelled' });
+    await client.waitFor(m => m.method === 'request.confirm' && m.params?.requestId !== req.params?.requestId);
+    await client.call('turn.cancel');
+    const cancelled = await client.waitFor(m => m.method === 'turn.cancelled' && m.params?.turnId === 'turn_3');
+    const cancelledEnd = client.notifications('accounting.completed').find(m => m.params?.submissionId === 'submission-cancelled')!;
+    expect(cancelledEnd.params?.complete).toBe(false);
+    expect(client.messages.indexOf(cancelledEnd)).toBeLessThan(client.messages.indexOf(cancelled));
+    expect(client.notifications('accounting.receipt').filter(m => m.params?.submissionId === 'submission-cancelled')).toHaveLength(1);
 
     const down = await client.call('shutdown');
     expect(down.error).toBeUndefined();

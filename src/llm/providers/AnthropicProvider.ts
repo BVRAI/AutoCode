@@ -178,6 +178,10 @@ export class AnthropicProvider implements LlmProvider {
     // Accumulate full response as we go, for the final message_stop event.
     const content: ContentBlock[] = [];
     let stopReason: CompletionResponse['stopReason'] = 'end_turn';
+    let inputUsageReceived = false;
+    let outputUsageReceived = false;
+    let terminalReceived = false;
+    let resolvedModel = req.model;
     const usage: CompletionResponse['usage'] = {
       inputTokens: 0,
       outputTokens: 0,
@@ -199,8 +203,10 @@ export class AnthropicProvider implements LlmProvider {
       }
       switch (evt.event) {
         case 'message_start': {
-          const m = parsed.message as { usage?: { input_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } } | undefined;
+          const m = parsed.message as { model?: string; usage?: { input_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } } | undefined;
+          resolvedModel = m?.model || resolvedModel;
           if (m?.usage) {
+            inputUsageReceived = typeof m.usage.input_tokens === 'number';
             usage.inputTokens = m.usage.input_tokens ?? 0;
             usage.cacheReadTokens = m.usage.cache_read_input_tokens ?? 0;
             usage.cacheWriteTokens = m.usage.cache_creation_input_tokens ?? 0;
@@ -274,10 +280,12 @@ export class AnthropicProvider implements LlmProvider {
           const delta = parsed.delta as { stop_reason?: string } | undefined;
           const u = parsed.usage as { output_tokens?: number } | undefined;
           if (u?.output_tokens !== undefined) usage.outputTokens = u.output_tokens;
+          if (typeof u?.output_tokens === 'number') outputUsageReceived = true;
           if (delta?.stop_reason) stopReason = normalizeStopReason(delta.stop_reason);
           break;
         }
         case 'message_stop':
+          terminalReceived = true;
           // Final event; we'll emit our own below.
           break;
         default:
@@ -287,7 +295,9 @@ export class AnthropicProvider implements LlmProvider {
 
     yield {
       type: 'message_stop',
-      response: { model: req.model, stopReason, content, usage },
+      response: { model: req.model, stopReason, content, usage,
+        usageAvailable: inputUsageReceived && outputUsageReceived,
+        accountingComplete: terminalReceived, accountingModel: resolvedModel },
     };
   }
 }
@@ -456,6 +466,7 @@ function fromAnthropicResponse(r: AnthropicResponse): CompletionResponse {
     model: r.model,
     stopReason,
     content,
+    usageAvailable: typeof r.usage?.input_tokens === 'number' && typeof r.usage?.output_tokens === 'number',
     usage: {
       inputTokens: r.usage.input_tokens,
       outputTokens: r.usage.output_tokens,

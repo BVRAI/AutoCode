@@ -8,6 +8,7 @@ import type { CheckpointStore } from '../session/CheckpointStore.js';
 import { AgentLoop } from './AgentLoop.js';
 import { ToolRegistry } from './ToolRegistry.js';
 import { LlmRouter, type ProviderName } from '../llm/Router.js';
+import { markAccountingIncomplete } from '../llm/SubmissionAccounting.js';
 import { summarizerModelFor } from '../llm/models.js';
 import type { ContentBlock } from '../llm/types.js';
 import { SubagentRunner } from './SubagentRunner.js';
@@ -212,6 +213,7 @@ export class LiveAgent implements AgentHandler {
     try {
       await this.loop.submit(input, ctx);
     } catch (e) {
+      markAccountingIncomplete();
       this.renderer.error(e instanceof Error ? e.message : String(e));
     }
   }

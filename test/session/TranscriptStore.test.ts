@@ -6,6 +6,7 @@ import { writeFileSync } from 'node:fs';
 import { TranscriptStore } from '../../src/session/TranscriptStore.js';
 import type { SessionContext } from '../../src/session/SessionContext.js';
 import type { Message } from '../../src/llm/types.js';
+import { SubmissionAccounting } from '../../src/llm/SubmissionAccounting.js';
 
 describe('TranscriptStore', () => {
   let tmp: string;
@@ -43,6 +44,26 @@ describe('TranscriptStore', () => {
     expect(lines).toHaveLength(2);
     expect(JSON.parse(lines[0]!).role).toBe('user');
     expect(JSON.parse(lines[1]!).text).toBe('hi back');
+  });
+
+  it('stores submission identity only in scoped presentation records, never model context', async () => {
+    const store = new TranscriptStore(ctx);
+    const messages: Message[] = [{ role: 'user', content: 'same text' }];
+    const usage = { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    store.appendTranscript({ role: 'user', text: 'legacy' });
+    for (const id of ['first-submission', 'second-submission']) {
+      await new SubmissionAccounting(id, () => {}).run(async () => {
+        store.appendTranscript({ role: 'user', text: 'same text' });
+        await Promise.resolve();
+        store.appendTranscript({ role: 'assistant', text: 'same answer' });
+        store.saveConversation(messages, usage);
+      });
+    }
+    const records = readFileSync(store.paths().transcript, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    expect(records.map(x => x.submissionId)).toEqual([undefined, 'first-submission', 'first-submission', 'second-submission', 'second-submission']);
+    expect(records.every(x => Number.isFinite(Date.parse(x.timestamp)))).toBe(true);
+    expect(readFileSync(store.paths().conversation, 'utf8')).not.toContain('submissionId');
+    expect(store.loadConversation()).toEqual({ messages, usage });
   });
 
   it('appends tool log entries with status', () => {
