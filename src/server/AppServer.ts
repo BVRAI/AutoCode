@@ -26,6 +26,7 @@ import { readOwnPackage } from '../update/UpdateChecker.js';
 import { redactSecrets, redactionDisabled } from '../util/redact.js';
 import type { ContentBlock } from '../llm/types.js';
 import { SubmissionAccounting } from '../llm/SubmissionAccounting.js';
+import { inspectLiveSession, type InspectionVerification } from '../inspection/Inspection.js';
 import { ServerSink } from './ServerSink.js';
 import { ServerPrompter } from './ServerPrompter.js';
 import {
@@ -72,6 +73,7 @@ interface LiveSession {
   prompter: ServerPrompter;
   busy: boolean;
   turnSeq: number;
+  verification: InspectionVerification;
   accounting?: SubmissionAccounting;
   accountingCancelled?: boolean;
 }
@@ -156,6 +158,7 @@ export class AppServer {
           version: readOwnPackage().version,
           capabilities: {
             accountingVersion: 1,
+            inspectionVersion: 1,
             streaming: true,
             reasoning: true,
             approvals: true,
@@ -172,6 +175,10 @@ export class AppServer {
         return this.newSession(p, true);
       case 'session.info':
         return this.info();
+      case 'session.inspect': {
+        const s = this.need();
+        return inspectLiveSession(s.ctx, s.agent.registry, s.verification);
+      }
       case 'session.setMode': {
         const s = this.need();
         const mode = String(p['mode'] ?? '');
@@ -304,7 +311,8 @@ export class AppServer {
       if (loaded) agent.loadState(loaded);
     }
     store.appendTranscript({ role: 'system', text: forkFrom ? `session branched from ${forkFrom} for ${root} (server)` : `session started for ${root} (server)` });
-    this.session = { ctx, agent, store, renderer, sink, prompter, busy: false, turnSeq: 0 };
+    this.session = { ctx, agent, store, renderer, sink, prompter, busy: false, turnSeq: 0,
+      verification: { autoVerify: autoVerify ?? cfg.autoVerify !== false, verifyCommand: verifyCommand ?? cfg.verifyCommand } };
     if (indexEnabled()) startIndex(root).catch(() => undefined);
     try {
       await agent.initializeMcp(cfg.mcpServers);

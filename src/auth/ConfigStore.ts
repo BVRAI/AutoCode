@@ -137,7 +137,7 @@ export class ConfigStore {
   private readonly path: string;
 
   constructor() {
-    mkdirSync(configDir(), { recursive: true });
+    if (process.env.AUTOCODE_INSPECTION !== '1') mkdirSync(configDir(), { recursive: true });
     this.path = join(configDir(), 'config.json');
   }
 

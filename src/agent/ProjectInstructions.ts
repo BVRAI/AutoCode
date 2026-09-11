@@ -50,7 +50,7 @@ export interface ProjectInstructions {
 // ASC, then within a directory by the CANDIDATES priority above. The agent
 // reads top-to-bottom in the system prompt, so the deeper entries (more
 // specific) come later and override.
-export function loadProjectInstructions(root: string): ProjectInstructions[] {
+export function loadProjectInstructions(root: string, diagnostics?: string[]): ProjectInstructions[] {
   const found = findInstructionFiles(root);
   found.sort((a, b) => {
     if (a.depth !== b.depth) return a.depth - b.depth;
@@ -70,12 +70,14 @@ export function loadProjectInstructions(root: string): ProjectInstructions[] {
     try {
       stat = statSync(f.path);
     } catch {
+      diagnostics?.push(`Instruction source could not be inspected: ${f.path}`);
       continue;
     }
     let raw: string;
     try {
       raw = readFileSync(f.path, 'utf8');
     } catch {
+      diagnostics?.push(`Instruction source could not be read: ${f.path}`);
       continue;
     }
     // Strip optional `---`-delimited frontmatter (carrying directives like
@@ -83,6 +85,7 @@ export function loadProjectInstructions(root: string): ProjectInstructions[] {
     // should not see the directive as an instruction.
     const fm = parseFrontmatter(raw);
     const stripped = resolveImports(fm.hasFrontmatter ? fm.body : raw, f.path);
+    if (!stripped.trim()) diagnostics?.push(`Instruction source has an empty body: ${f.path}`);
     const remaining = Math.max(0, TOTAL_BYTE_CAP - totalBytes);
     const truncated = stripped.length > remaining;
     const content = truncated ? stripped.slice(0, remaining) + '\n[…truncated]' : stripped;

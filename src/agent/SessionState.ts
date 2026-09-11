@@ -5,6 +5,7 @@
 // burn tool calls re-running `git status`.
 
 import { execSync } from 'node:child_process';
+import { inspectGit } from '../inspection/git.js';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -95,7 +96,9 @@ export function resolveGitBranch(root: string): { branch: string; isDetachedHead
 
 function tryGit(command: string, cwd: string): string | null {
   try {
-    const out = execSync(command, { cwd, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+    const out = (process.env.AUTOCODE_INSPECTION === '1'
+      ? inspectGit(command, cwd)
+      : execSync(command, { cwd, stdio: ['ignore', 'pipe', 'ignore'] }).toString()).trim();
     return out.length > 0 ? out : null;
   } catch {
     return null;
@@ -125,7 +128,9 @@ function readStatus(cwd: string): PorcelainStatus {
   const out: PorcelainStatus = { modifiedFiles: [], stagedFiles: [], deletedFiles: [], untrackedCount: 0 };
   let raw: string;
   try {
-    raw = execSync('git status --porcelain=v1', {
+    raw = process.env.AUTOCODE_INSPECTION === '1'
+      ? inspectGit('git status --porcelain=v1', cwd)
+      : execSync('git status --porcelain=v1', {
       cwd,
       stdio: ['ignore', 'pipe', 'ignore'],
     }).toString();
@@ -165,7 +170,9 @@ function readStatus(cwd: string): PorcelainStatus {
 function readRecentCommits(cwd: string): RecentCommit[] {
   let raw: string;
   try {
-    raw = execSync(`git log -${RECENT_COMMITS} --format=%h%x1f%s%x1f%ar`, {
+    raw = process.env.AUTOCODE_INSPECTION === '1'
+      ? inspectGit(`git log -${RECENT_COMMITS} --format=%h%x1f%s%x1f%ar`, cwd)
+      : execSync(`git log -${RECENT_COMMITS} --format=%h%x1f%s%x1f%ar`, {
       cwd,
       stdio: ['ignore', 'pipe', 'ignore'],
     }).toString();

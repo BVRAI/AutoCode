@@ -2,6 +2,7 @@ import { execSync } from 'node:child_process';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveGitBranch } from './SessionState.js';
+import { inspectGit } from '../inspection/git.js';
 
 export interface ProjectContext {
   root: string;
@@ -61,7 +62,9 @@ function detectGit(root: string): GitInfo | null {
     : '(unknown)';
   let dirty = 0;
   try {
-    const out = execSync('git status --porcelain', {
+    const out = process.env.AUTOCODE_INSPECTION === '1'
+      ? inspectGit('git status --porcelain', root)
+      : execSync('git status --porcelain', {
       cwd: root,
       stdio: ['ignore', 'pipe', 'ignore'],
     }).toString();

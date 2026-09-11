@@ -49,13 +49,14 @@ export class MemoryStore {
     this.dir = dir ?? memoryDir(projectRoot);
   }
 
-  list(): MemoryEntry[] {
+  list(diagnostics?: string[]): MemoryEntry[] {
     if (!existsSync(this.dir)) return [];
     const out: MemoryEntry[] = [];
     let names: string[];
     try {
       names = readdirSync(this.dir);
     } catch {
+      diagnostics?.push(`Memory directory could not be read: ${this.dir}`);
       return [];
     }
     for (const file of names) {
@@ -67,10 +68,14 @@ export class MemoryStore {
         raw = readFileSync(path, 'utf8');
         mtime = statSync(path).mtime.toISOString();
       } catch {
+        diagnostics?.push(`Memory entry could not be read: ${path}`);
         continue;
       }
       const fm = parseFrontmatter(raw);
-      if (!fm.hasFrontmatter) continue;
+      if (!fm.hasFrontmatter) {
+        diagnostics?.push(`Memory entry has invalid or missing metadata: ${path}`);
+        continue;
+      }
       const meta = fm.meta as Record<string, string | undefined>;
       const kind = MEMORY_KINDS.includes(meta['type'] as MemoryKind) ? (meta['type'] as MemoryKind) : 'project';
       out.push({
