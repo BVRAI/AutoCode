@@ -64,6 +64,7 @@ export interface ItemBase {
   id: string;
   type: ItemType;
   turnId: string;
+  presentation?: import('../repl/PresentationRun.js').PresentationIdentity;
 }
 
 export interface AgentMessageItem extends ItemBase {
@@ -94,6 +95,8 @@ export interface FileChangeItem extends ItemBase {
   diff: string;
   added: number;
   removed: number;
+  availability?: 'available' | 'simplified' | 'too_large' | 'unavailable';
+  changeKind?: 'created' | 'modified';
 }
 
 export interface NoteItem extends ItemBase {

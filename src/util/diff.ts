@@ -1,13 +1,10 @@
-// Minimal unified-diff renderer for line-level changes.
-//
-// Inspired by the diff format Aider uses to encourage robust edits
-// (https://aider.chat/docs/unified-diffs.html) and the inline rendering style
-// of OpenCode and Claude Code. No external dependency — implementation is a
-// straightforward LCS via Myers-style dynamic programming over line arrays.
+// Line-level unified diffs with bounded LCS work. Large, unrelated middles are
+// rendered as complete replacements so a preview never silently drops changes.
 
 export interface DiffHunk {
   header: string;
   lines: DiffLine[];
+  simplified?: boolean;
 }
 
 export interface DiffLine {
@@ -15,14 +12,17 @@ export interface DiffLine {
   text: string;
   oldLine?: number;
   newLine?: number;
+  // An empty ending means this is the file's final, unterminated line.
+  oldLineEnding?: '\n' | '\r\n' | '';
+  newLineEnding?: '\n' | '\r\n' | '';
 }
 
 const CONTEXT = 3;
+const MAX_LCS_CELLS = 4_000_000;
 
 export function unifiedDiff(before: string, after: string): DiffHunk[] {
-  const a = before.split(/\r?\n/);
-  const b = after.split(/\r?\n/);
-  const ops = lcsDiff(a, b);
+  if (before === after) return [];
+  const ops = lcsDiff(splitLines(before), splitLines(after));
   return groupHunks(ops, CONTEXT);
 }
 
@@ -37,9 +37,13 @@ export function renderUnifiedDiff(
   const out: string[] = [];
   for (const h of shown) {
     out.push(h.header);
+    if (h.simplified) out.push('\\ Large change shown as a simplified replacement');
     for (const line of h.lines) {
       const prefix = line.kind === 'add' ? '+' : line.kind === 'remove' ? '-' : ' ';
       out.push(`${prefix} ${line.text}`);
+      if (line.oldLineEnding === '' || line.newLineEnding === '') {
+        out.push('\\ No newline at end of file');
+      }
     }
   }
   if (hunks.length > maxHunks) {
@@ -48,94 +52,159 @@ export function renderUnifiedDiff(
   return out.join('\n');
 }
 
-type Op = { kind: 'context' | 'add' | 'remove'; oldIdx: number; newIdx: number; text: string };
+interface SourceLine {
+  text: string;
+  ending: '\n' | '\r\n' | '';
+}
 
-function lcsDiff(a: string[], b: string[]): Op[] {
-  const m = a.length;
-  const n = b.length;
-  const dp: Uint32Array = new Uint32Array((m + 1) * (n + 1));
-  const w = n + 1;
-  for (let i = m - 1; i >= 0; i--) {
-    for (let j = n - 1; j >= 0; j--) {
-      if (a[i] === b[j]) {
-        dp[i * w + j] = dp[(i + 1) * w + j + 1] + 1;
-      } else {
-        const down = dp[(i + 1) * w + j];
-        const right = dp[i * w + j + 1];
-        dp[i * w + j] = down !== undefined && right !== undefined ? Math.max(down, right) : 0;
+interface Op {
+  kind: 'context' | 'add' | 'remove';
+  oldIdx: number;
+  newIdx: number;
+  text: string;
+  oldLineEnding?: SourceLine['ending'];
+  newLineEnding?: SourceLine['ending'];
+  simplified?: boolean;
+}
+
+function splitLines(text: string): SourceLine[] {
+  const lines: SourceLine[] = [];
+  let start = 0;
+  while (start < text.length) {
+    const newline = text.indexOf('\n', start);
+    if (newline === -1) {
+      lines.push({ text: text.slice(start), ending: '' });
+      break;
+    }
+    const hasCarriageReturn = newline > start && text[newline - 1] === '\r';
+    lines.push({
+      text: text.slice(start, hasCarriageReturn ? newline - 1 : newline),
+      ending: hasCarriageReturn ? '\r\n' : '\n',
+    });
+    start = newline + 1;
+  }
+  return lines;
+}
+
+function sameLine(a: SourceLine, b: SourceLine): boolean {
+  return a.text === b.text && a.ending === b.ending;
+}
+
+function lcsDiff(a: SourceLine[], b: SourceLine[]): Op[] {
+  // Most edits touch a small middle even in very large files. Strip identical
+  // ends before deciding whether an exact LCS fits the fixed memory budget.
+  let prefix = 0;
+  while (prefix < a.length && prefix < b.length && sameLine(a[prefix]!, b[prefix]!)) prefix++;
+  let oldEnd = a.length;
+  let newEnd = b.length;
+  while (oldEnd > prefix && newEnd > prefix && sameLine(a[oldEnd - 1]!, b[newEnd - 1]!)) {
+    oldEnd--;
+    newEnd--;
+  }
+
+  const m = oldEnd - prefix;
+  const n = newEnd - prefix;
+  const simplified = m > 0 && n > 0 && m + 1 > MAX_LCS_CELLS / (n + 1);
+  const width = n + 1;
+  // Pure creates/deletes need no matrix, regardless of their size.
+  const dp = m > 0 && n > 0 && !simplified
+    ? new Uint32Array((m + 1) * width)
+    : undefined;
+  if (dp) {
+    for (let i = m - 1; i >= 0; i--) {
+      for (let j = n - 1; j >= 0; j--) {
+        dp[i * width + j] = sameLine(a[prefix + i]!, b[prefix + j]!)
+          ? dp[(i + 1) * width + j + 1]! + 1
+          : Math.max(dp[(i + 1) * width + j]!, dp[i * width + j + 1]!);
       }
     }
   }
+
   const ops: Op[] = [];
   let i = 0;
   let j = 0;
-  while (i < m && j < n) {
-    if (a[i] === b[j]) {
-      ops.push({ kind: 'context', oldIdx: i, newIdx: j, text: a[i]! });
-      i++;
-      j++;
-    } else {
-      const down = dp[(i + 1) * w + j] ?? 0;
-      const right = dp[i * w + j + 1] ?? 0;
-      if (down >= right) {
-        ops.push({ kind: 'remove', oldIdx: i, newIdx: j, text: a[i]! });
-        i++;
+  const context = () => {
+    ops.push({
+      kind: 'context', oldIdx: i, newIdx: j, text: a[i]!.text,
+      oldLineEnding: a[i]!.ending, newLineEnding: b[j]!.ending,
+    });
+    i++;
+    j++;
+  };
+  const remove = () => {
+    ops.push({
+      kind: 'remove', oldIdx: i, newIdx: j, text: a[i]!.text,
+      oldLineEnding: a[i]!.ending, ...(simplified ? { simplified: true } : {}),
+    });
+    i++;
+  };
+  const add = () => {
+    ops.push({
+      kind: 'add', oldIdx: i, newIdx: j, text: b[j]!.text,
+      newLineEnding: b[j]!.ending, ...(simplified ? { simplified: true } : {}),
+    });
+    j++;
+  };
+
+  while (i < prefix) context();
+  if (dp) {
+    while (i < oldEnd && j < newEnd) {
+      if (sameLine(a[i]!, b[j]!)) {
+        context();
       } else {
-        ops.push({ kind: 'add', oldIdx: i, newIdx: j, text: b[j]! });
-        j++;
+        const down = dp[(i - prefix + 1) * width + j - prefix]!;
+        const right = dp[(i - prefix) * width + j - prefix + 1]!;
+        // Prefer removal when paths tie, making repeated text deterministic.
+        if (down >= right) remove();
+        else add();
       }
     }
   }
-  while (i < m) {
-    ops.push({ kind: 'remove', oldIdx: i, newIdx: j, text: a[i]! });
-    i++;
-  }
-  while (j < n) {
-    ops.push({ kind: 'add', oldIdx: i, newIdx: j, text: b[j]! });
-    j++;
-  }
+  // Above the budget, include the entire changed middle as delete/add rows.
+  while (i < oldEnd) remove();
+  while (j < newEnd) add();
+  while (i < a.length) context();
   return ops;
 }
 
 function groupHunks(ops: Op[], context: number): DiffHunk[] {
-  const changedIdxs: number[] = [];
-  for (let i = 0; i < ops.length; i++) {
-    if (ops[i]!.kind !== 'context') changedIdxs.push(i);
-  }
-  if (changedIdxs.length === 0) return [];
-
-  // Build [start, end] ranges by expanding ±context around each change and merging overlaps.
+  // Expand changes by the requested context and merge touching ranges.
   const ranges: Array<[number, number]> = [];
-  for (const idx of changedIdxs) {
-    const s = Math.max(0, idx - context);
-    const e = Math.min(ops.length - 1, idx + context);
-    if (ranges.length > 0 && ranges[ranges.length - 1]![1] >= s - 1) {
-      ranges[ranges.length - 1]![1] = Math.max(ranges[ranges.length - 1]![1], e);
-    } else {
-      ranges.push([s, e]);
-    }
+  for (let i = 0; i < ops.length; i++) {
+    if (ops[i]!.kind === 'context') continue;
+    const start = Math.max(0, i - context);
+    const end = Math.min(ops.length - 1, i + context);
+    const previous = ranges[ranges.length - 1];
+    if (previous && previous[1] >= start - 1) previous[1] = end;
+    else ranges.push([start, end]);
   }
 
   const hunks: DiffHunk[] = [];
-  for (const [s, e] of ranges) {
-    const first = ops[s]!;
-    const last = ops[e]!;
-    const oldStart = first.oldIdx + 1;
-    const newStart = first.newIdx + 1;
-    const oldCount = last.oldIdx - first.oldIdx + (last.kind === 'add' ? 0 : 1);
-    const newCount = last.newIdx - first.newIdx + (last.kind === 'remove' ? 0 : 1);
-    const header = `@@ -${oldStart},${Math.max(1, oldCount)} +${newStart},${Math.max(1, newCount)} @@`;
+  for (const [start, end] of ranges) {
+    const first = ops[start]!;
     const lines: DiffLine[] = [];
-    for (let k = s; k <= e; k++) {
+    let oldCount = 0;
+    let newCount = 0;
+    let simplified = false;
+    for (let k = start; k <= end; k++) {
       const op = ops[k]!;
+      if (op.kind !== 'add') oldCount++;
+      if (op.kind !== 'remove') newCount++;
+      if (op.simplified) simplified = true;
       lines.push({
         kind: op.kind,
         text: op.text,
         oldLine: op.kind === 'add' ? undefined : op.oldIdx + 1,
         newLine: op.kind === 'remove' ? undefined : op.newIdx + 1,
+        oldLineEnding: op.oldLineEnding,
+        newLineEnding: op.newLineEnding,
       });
     }
-    hunks.push({ header, lines });
+    // Empty sides use the preceding line position, including 0 for an empty file.
+    const oldStart = first.oldIdx + (oldCount > 0 ? 1 : 0);
+    const newStart = first.newIdx + (newCount > 0 ? 1 : 0);
+    const header = `@@ -${oldStart},${oldCount} +${newStart},${newCount} @@`;
+    hunks.push({ header, lines, ...(simplified ? { simplified: true } : {}) });
   }
   return hunks;
 }

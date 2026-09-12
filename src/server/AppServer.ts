@@ -28,6 +28,7 @@ import type { ContentBlock } from '../llm/types.js';
 import { SubmissionAccounting } from '../llm/SubmissionAccounting.js';
 import { inspectLiveSession, type InspectionVerification } from '../inspection/Inspection.js';
 import { ServerSink } from './ServerSink.js';
+import { PresentationRun } from '../repl/PresentationRun.js';
 import { ServerPrompter } from './ServerPrompter.js';
 import {
   ERR_BUSY,
@@ -81,6 +82,7 @@ interface LiveSession {
 export class AppServer {
   private session: LiveSession | null = null;
   private stopped = false;
+  private compactFileMetadata = false;
   private readonly out: NodeJS.WritableStream;
 
   constructor(private readonly io: { input: NodeJS.ReadableStream; output: NodeJS.WritableStream }) {
@@ -153,11 +155,13 @@ export class AppServer {
     const p = this.params(req);
     switch (req.method) {
       case 'initialize':
+        this.compactFileMetadata = p['presentationVersion'] === 1;
         return {
           protocolVersion: PROTOCOL_VERSION,
           version: readOwnPackage().version,
           capabilities: {
             accountingVersion: 1,
+            presentationVersion: 1,
             inspectionVersion: 1,
             streaming: true,
             reasoning: true,
@@ -284,7 +288,7 @@ export class AppServer {
       systemAppendix,
     };
     const renderer = new ConsoleRenderer();
-    const sink = new ServerSink((method, params) => this.notify(method, params));
+    const sink = new ServerSink((method, params) => this.notify(method, params), this.compactFileMetadata);
     renderer.setSink(sink);
     await initSecretStore(renderer);
     const store = new TranscriptStore(ctx);
@@ -384,8 +388,10 @@ export class AppServer {
     s.accounting = typeof submissionId === 'string'
       ? new SubmissionAccounting(submissionId, (method, params) => this.notify(method, params)) : undefined;
     s.accountingCancelled = false;
-    const submitted = s.accounting
-      ? s.accounting.run(() => s.agent.submit(withImages, s.ctx)) : s.agent.submit(withImages, s.ctx);
+    const presentation = new PresentationRun(typeof submissionId === 'string' ? submissionId : undefined);
+    const accounting = s.accounting;
+    const submitted = presentation.run(() => accounting
+      ? accounting.run(() => s.agent.submit(withImages, s.ctx)) : s.agent.submit(withImages, s.ctx));
     void submitted
       .then(
         () => {

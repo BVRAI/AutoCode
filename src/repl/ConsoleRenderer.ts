@@ -7,6 +7,7 @@ import { Spinner } from './Spinner.js';
 import { renderUnifiedDiff } from '../util/diff.js';
 import { renderMarkdown, looksLikeMarkdown } from './MarkdownRenderer.js';
 import { getRepoMap } from '../agent/RepoMap.js';
+import type { PresentationIdentity } from './PresentationRun.js';
 
 // Optional output sink. When set, ConsoleRenderer routes all writes to
 // this interface instead of stdout/stderr — used by the Ink Bridge UI to
@@ -14,12 +15,13 @@ import { getRepoMap } from '../agent/RepoMap.js';
 export interface RendererSink {
   info(text: string): void;
   assistant(text: string): void;
+  assistantCommitted?(text: string, presentation: PresentationIdentity): void;
   dim(text: string): void;
   warn(text: string): void;
   error(text: string): void;
   status(text: string): void;
   rule(): void;
-  diff(label: string, before: string, after: string): void;
+  diff(label: string, before: string, after: string, provenance?: { toolCallId: string; changeKind: 'created' | 'modified' }): void;
   user(text: string): void;
   // Structured channels the Ink transcript renders (optional: the plain
   // stdout path has no use for them). Text streams as it arrives; thinking is
@@ -245,10 +247,16 @@ export class ConsoleRenderer {
     process.stdout.write('\n');
   }
 
+  // The server publishes the actual persisted text record after streaming finishes.
+  // Terminal sinks continue their existing stream rendering unchanged.
+  assistantCommitted(text: string, presentation: PresentationIdentity | undefined): void {
+    if (presentation) this.sink?.assistantCommitted?.(text, presentation);
+  }
+
   // Render a colored inline unified diff. Truncates extremely long diffs.
-  diff(label: string, before: string, after: string): void {
+  diff(label: string, before: string, after: string, provenance?: { toolCallId: string; changeKind: 'created' | 'modified' }): void {
     if (before === after) return;
-    if (this.sink) { this.sink.diff(label, before, after); return; }
+    if (this.sink) { this.sink.diff(label, before, after, provenance); return; }
     const out = renderUnifiedDiff(before, after);
     if (out === '(no textual change)') return;
     process.stdout.write(pc.dim(`  ${label}`) + '\n');

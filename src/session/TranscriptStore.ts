@@ -4,6 +4,8 @@ import type { SessionContext } from './SessionContext.js';
 import type { Message } from '../llm/types.js';
 import { redactSecrets, redactionDisabled } from '../util/redact.js';
 import { currentSubmissionId } from '../llm/SubmissionAccounting.js';
+import { randomUUID } from 'node:crypto';
+import { nextPresentation, type PresentationIdentity } from '../repl/PresentationRun.js';
 
 function redactLine(json: string): string {
   return redactionDisabled() ? json : redactSecrets(json);
@@ -35,6 +37,7 @@ export interface TranscriptEntry {
   toolCallId?: string;
   /** Presentation correlation only; never copied into conversation.json. */
   submissionId?: string;
+  presentation?: PresentationIdentity;
 }
 
 export interface ToolLogEntry {
@@ -93,10 +96,14 @@ export class TranscriptStore {
   // The on-disk records are redacted (secret-shaped tokens masked, see
   // util/redact.ts); conversation.json — what a resumed session replays to
   // the model — is written as-is.
-  appendTranscript(entry: Omit<TranscriptEntry, 'timestamp'>): void {
-    const submissionId = currentSubmissionId();
-    const line: TranscriptEntry = { timestamp: new Date().toISOString(), ...(submissionId ? { submissionId } : {}), ...entry };
+  appendTranscript(entry: Omit<TranscriptEntry, 'timestamp'>): PresentationIdentity | undefined {
+    const presentation = entry.presentation ?? ((entry.role === 'user' || entry.role === 'assistant')
+      ? nextPresentation({ messageId: randomUUID() }) : undefined);
+    const submissionId = presentation?.submissionId ?? currentSubmissionId();
+    const line: TranscriptEntry = { timestamp: new Date().toISOString(), ...(submissionId ? { submissionId } : {}), ...entry,
+      ...(presentation ? { presentation } : {}) };
     appendFileSync(this.transcriptPath, redactLine(JSON.stringify(line)) + '\n', 'utf8');
+    return presentation;
   }
 
   appendToolLog(entry: Omit<ToolLogEntry, 'timestamp'>): void {

@@ -962,7 +962,8 @@ export class AgentLoop {
       const assistantTextParts: string[] = [];
       for (const b of response.content) {
         if (b.type === 'text' && b.text.trim().length > 0) {
-          this.deps.store.appendTranscript({ role: 'assistant', text: b.text });
+          const presentation = this.deps.store.appendTranscript({ role: 'assistant', text: b.text });
+          this.deps.renderer.assistantCommitted(b.text, presentation);
           assistantTextParts.push(b.text);
         }
       }
@@ -996,11 +997,12 @@ export class AgentLoop {
             recentToolSigs.push(sig);
             if (recentToolSigs.length > LOOP_DETECT_WINDOW) recentToolSigs.shift();
             this.sessionToolCalls += 1;
-            this.deps.emitter.emit('tool_call', { name: tu.name, args: tu.input });
+            this.deps.emitter.emit('tool_call', { name: tu.name, args: tu.input, toolCallId: tu.id });
             const t0 = Date.now();
             const result = await this.deps.registry.execute(tu.name, tu.input, toolExecCtx);
             const dt = Date.now() - t0;
             this.deps.emitter.emit('tool_result', {
+              toolCallId: tu.id,
               name: tu.name,
               summary: result.summary,
               content: result.content,
@@ -1047,7 +1049,7 @@ export class AgentLoop {
         // mechanical detail (name + args); file_edit_proposed is a semantic
         // shortcut so V6 can surface "autocode wants to edit X" without
         // parsing the tool args.
-        this.deps.emitter.emit('tool_call', { name: tu.name, args: tu.input });
+        this.deps.emitter.emit('tool_call', { name: tu.name, args: tu.input, toolCallId: tu.id });
         emitFileEditProposed(this.deps.emitter, tu.name, tu.input);
 
         // Permission rules first (Phase 5.4): deny refuses outright, allow
@@ -1056,7 +1058,7 @@ export class AgentLoop {
         if (perm.decision === 'deny') {
           const content = `Denied by permission rule "${perm.rule}". Choose a different approach.`;
           toolResults.push({ type: 'tool_result', toolUseId: tu.id, content, isError: true });
-          this.deps.emitter.emit('tool_result', { name: tu.name, summary: 'denied by permission rule', content, isError: true });
+          this.deps.emitter.emit('tool_result', { name: tu.name, toolCallId: tu.id, summary: 'denied by permission rule', content, isError: true });
           this.deps.renderer.warn(`  ✗ ${tu.name} denied by permission rule "${perm.rule}"`);
           consecutiveFailures.set(tu.name, (consecutiveFailures.get(tu.name) ?? 0) + 1);
           continue;
@@ -1076,6 +1078,7 @@ export class AgentLoop {
             isError: true,
           });
           this.deps.emitter.emit('tool_result', {
+            toolCallId: tu.id,
             name: tu.name,
             summary: 'blocked (planning mode)',
             content: 'Planning mode is active — file edits and commands are disabled.',
@@ -1116,6 +1119,7 @@ export class AgentLoop {
                 : 'User declined this tool call. Adapt your plan.';
             toolResults.push({ type: 'tool_result', toolUseId: tu.id, content, isError: true });
             this.deps.emitter.emit('tool_result', {
+              toolCallId: tu.id,
               name: tu.name,
               summary: verdict.decision,
               content,
@@ -1146,6 +1150,7 @@ export class AgentLoop {
             isError: true,
           });
           this.deps.emitter.emit('tool_result', {
+            toolCallId: tu.id,
             name: tu.name,
             summary: 'blocked by PreToolUse hook',
             content: blockReason,
@@ -1174,6 +1179,7 @@ export class AgentLoop {
           this.deps.emitter.emit('todo', { items: currentTodos(ctx.sessionId).map((t) => ({ id: t.id, text: t.text, status: t.status })) });
         }
         this.deps.emitter.emit('tool_result', {
+          toolCallId: tu.id,
           name: tu.name,
           summary: result.summary,
           content: result.content,
@@ -1221,9 +1227,11 @@ export class AgentLoop {
         });
         this.deps.renderer.dim(`  → ${tu.name}  ${result.summary}  (${dt}ms)`);
 
-        const md = result.metadata as { before?: string; after?: string; path?: string } | undefined;
+        const md = result.metadata as { before?: string; after?: string; path?: string; existed?: boolean } | undefined;
         if (!result.isError && md && typeof md.before === 'string' && typeof md.after === 'string') {
-          this.deps.renderer.diff(md.path ?? tu.name, md.before, md.after);
+          this.deps.renderer.diff(md.path ?? tu.name, md.before, md.after, {
+            toolCallId: tu.id, changeKind: md.existed === false ? 'created' : 'modified',
+          });
         }
 
         // Wrap web tool outputs in an explicit untrusted-content marker so

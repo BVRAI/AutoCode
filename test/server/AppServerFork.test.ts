@@ -133,10 +133,13 @@ describe('AppServer session.new with forkFrom', () => {
     expect(source.error).toBeUndefined();
     const sourceId = String(source.result?.['sessionId']);
     let mark = client.messages.length;
-    const first = await client.call('turn.submit', { text: 'summarize the readme' });
+    const first = await client.call('turn.submit', { text: 'summarize the readme', submissionId: 'same-submission' });
     expect(first.error).toBeUndefined();
     await completedAfter(mark);
     const sourceDir = join(home, 'data', 'sessions', sourceId);
+    const presentationRows = (dir: string): Array<Record<string, any>> => readFileSync(join(dir, 'transcript.jsonl'), 'utf8')
+      .trim().split('\n').map(line => JSON.parse(line)).filter(row => row.presentation);
+    const firstRows = presentationRows(sourceDir);
     const messagesOf = (dir: string): unknown[] => (JSON.parse(readFileSync(join(dir, 'conversation.json'), 'utf8')) as { messages: unknown[] }).messages;
     expect(messagesOf(sourceDir).length).toBeGreaterThan(0);
 
@@ -156,14 +159,26 @@ describe('AppServer session.new with forkFrom', () => {
     const sourceMessages = messagesOf(sourceDir);
     expect(messagesOf(branchDir)).toEqual(sourceMessages);
     expect(existsSync(join(branchDir, 'transcript.jsonl'))).toBe(true);
+    expect(presentationRows(branchDir)).toEqual(firstRows);
 
     // The branch continues on its own; the source keeps exactly the history it had.
     mark = client.messages.length;
-    const second = await client.call('turn.submit', { text: 'and now the branch' });
+    const second = await client.call('turn.submit', { text: 'and now the branch', submissionId: 'same-submission' });
     expect(second.error).toBeUndefined();
     await completedAfter(mark);
     expect(messagesOf(branchDir).length).toBeGreaterThan(sourceMessages.length);
     expect(messagesOf(sourceDir)).toEqual(sourceMessages);
+    const branchRows = presentationRows(branchDir);
+    expect(new Set(branchRows.map(row => row.presentation.runId)).size).toBe(2);
+    expect(new Set(branchRows.map(row => row.presentation.messageId)).size).toBe(branchRows.length);
+    // Resume allocates a fresh reporting run even though wire turn numbers restart.
+    await client.call('session.resume', { sessionId: sourceId });
+    mark = client.messages.length;
+    await client.call('turn.submit', { text: 'same prompt after resume', submissionId: 'same-submission' });
+    await completedAfter(mark);
+    const resumedRows = presentationRows(sourceDir);
+    expect(new Set(resumedRows.map(row => row.presentation.runId)).size).toBe(2);
+    expect(new Set(resumedRows.map(row => row.presentation.messageId)).size).toBe(resumedRows.length);
 
     const down = await client.call('shutdown');
     expect(down.error).toBeUndefined();

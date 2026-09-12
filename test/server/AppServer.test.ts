@@ -150,11 +150,12 @@ describe('AppServer over stdio (Phase 5.1)', () => {
     const unknown = await client.call('nope');
     expect(unknown.error?.code).toBe(-32601);
 
-    const init = await client.call('initialize');
+    const init = await client.call('initialize', { presentationVersion: 1 });
     expect(init.result?.['protocolVersion']).toBe(1);
     const caps = init.result?.['capabilities'] as Record<string, unknown>;
     expect(caps['streaming']).toBe(true);
     expect(caps['accountingVersion']).toBe(1);
+    expect(caps['presentationVersion']).toBe(1);
     expect(caps['items']).toContain('tool_call');
 
     const created = await client.call('session.new', {
@@ -188,7 +189,7 @@ describe('AppServer over stdio (Phase 5.1)', () => {
     expect(String(tool?.['summary'])).toMatch(/README/);
     const reasoning = items.find((i) => i['type'] === 'reasoning');
     expect(String(reasoning?.['text'])).toContain('Reading the readme first.');
-    const message = items.find((i) => i['type'] === 'agent_message');
+    const message = items.find((i) => i['type'] === 'agent_message' && i['presentation']);
     expect(String(message?.['text'])).toContain('Hello from the server test.');
     // The checklist and the verify run reach the host as their own items.
     const todo = items.find((i) => i['type'] === 'todo');
@@ -213,6 +214,10 @@ describe('AppServer over stdio (Phase 5.1)', () => {
     const transcriptPath = join(home, 'data', 'sessions', String(created.result?.sessionId), 'transcript.jsonl');
     const transcript = readFileSync(transcriptPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
     expect(transcript.filter(r => r.role === 'user' || r.role === 'assistant').every(r => r.submissionId === 'submission-one')).toBe(true);
+    const savedAnswer = transcript.find(r => r.role === 'assistant');
+    expect(message?.presentation).toEqual(savedAnswer.presentation);
+    expect((change?.presentation as Record<string, unknown>).toolCallId).toBeTruthy();
+    expect(change?.availability).toBe('available');
 
     const info = await client.call('session.info');
     expect(info.result?.['busy']).toBe(false);
